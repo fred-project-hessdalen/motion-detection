@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  lint-and-format:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        enable-cache: true
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install dev dependencies
+      run: uv sync --group dev
+
+    - name: Run ruff check
+      run: uv run ruff check .
+
+    - name: Run docformatter
+      run: uv run docformatter . --recursive --check
+
+  type-check-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        enable-cache: true
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install all dependencies
+      run: uv sync --all-groups
+
+    - name: Run mypy
+      run: uv run mypy src scripts tests
+
+    - name: Run tests
+      run: uv run pytest
