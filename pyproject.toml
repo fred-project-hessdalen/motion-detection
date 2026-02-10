@@ -1,0 +1,7 @@
+[project]
+name = "movement-detection"
+version = "0.1.0"
+description = "Movement detection for Project Hessdalen"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
