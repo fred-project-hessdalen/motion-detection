@@ -1,0 +1,6 @@
+outs:
+- md5: 603099dc4c4bff64947ea24198a90647.dir
+  size: 86621208
+  nfiles: 9
+  hash: md5
+  path: examples
