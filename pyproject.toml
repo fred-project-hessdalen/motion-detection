@@ -5,3 +5,38 @@ description = "Movement detection for Project Hessdalen"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = []
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+core = [
+    "funcy>=2.0",
+    "opencv-python>=4.13.0.92",
+    "pydantic>=2.12.5",
+]
+data = [
+    "dvc>=3.66.1",
+]
+dev = [
+    "docformatter>=1.7.7",
+    "mypy>=1.19.1",
+    "ruff>=0.15.0",
+]
+test = [
+    "pytest>=9.0.2",
+    "ruff>=0.15.0",
+]
+
+[tool.mypy]
+disable_error_code = ["import-untyped"]
+
+[tool.ruff]
+line-length = 120
