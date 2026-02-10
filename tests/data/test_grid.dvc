@@ -1,0 +1,6 @@
+outs:
+- md5: cb9e05b6fe932a111f300788650140dc.dir
+  size: 42185840
+  nfiles: 9
+  hash: md5
+  path: test_grid
