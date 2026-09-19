@@ -31,6 +31,7 @@ class BackgroundModel:
         self.settings = settings
         self._state: BackgroundState | None = None
         self._noise_floor_variance = float(settings.noise_floor) ** 2
+        self._updates = 0
 
     def deviation(self, gray_frame: np.ndarray) -> np.ndarray:
         """Return how far each pixel sits from the background, in noise
@@ -66,9 +67,21 @@ class BackgroundModel:
         freezes the background under anything that moves repeatedly, and
         swaying branches then read as movement on every frame.
         """
+        self._updates += 1
         background = (deviation <= self.settings.outlier_sigma).astype(np.uint8)
-        cv2.accumulateWeighted(residual * residual, state.variance, self.settings.variance_alpha, mask=background)
+        cv2.accumulateWeighted(residual * residual, state.variance, self._variance_alpha(), mask=background)
         cv2.accumulateWeighted(smoothed, state.mean, self.settings.mean_alpha)
+
+    def _variance_alpha(self) -> float:
+        """Weight for this frame in the noise estimate.
+
+        At the configured rate the estimate needs about a hundred frames to
+        reach the true noise of the scene, and until it does it sits too low
+        and everything reads as a deviation. Averaging the frames seen so far
+        gives the estimate its scene from the start, and the configured rate
+        takes over once it is the slower of the two.
+        """
+        return max(self.settings.variance_alpha, 1.0 / self._updates)
 
     def _smooth(self, gray_frame: np.ndarray) -> np.ndarray:
         as_float = np.asarray(gray_frame, dtype=np.float32)
