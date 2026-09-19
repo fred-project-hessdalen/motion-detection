@@ -55,17 +55,19 @@ class BackgroundModel:
     def _update(
         self, state: BackgroundState, *, smoothed: np.ndarray, residual: np.ndarray, deviation: np.ndarray
     ) -> None:
-        """Fold the frame into the background, keeping its noise estimate free of moving objects.
+        """Fold the frame into the background, keeping its noise estimate free
+        of moving objects.
 
-        A bright object raises the variance of every pixel it crosses, and
-        that pixel then needs an even brighter object to register, so an
-        object holding still for a few frames would erase itself. Pixels the
-        current frame calls foreground are therefore left out of the noise
-        estimate.
+        A bright object raises the variance of every pixel it crosses,
+        and that pixel then needs an even brighter object to register,
+        so an object holding still for a few frames would erase itself.
+        Pixels the current frame calls foreground are therefore left out
+        of the noise estimate.
 
-        The mean gets no such exemption. Holding foreground pixels out of it
-        freezes the background under anything that moves repeatedly, and
-        swaying branches then read as movement on every frame.
+        The mean gets no such exemption. Holding foreground pixels out
+        of it freezes the background under anything that moves
+        repeatedly, and swaying branches then read as movement on every
+        frame.
         """
         self._updates += 1
         background = (deviation <= self.settings.outlier_sigma).astype(np.uint8)
@@ -75,11 +77,12 @@ class BackgroundModel:
     def _variance_alpha(self) -> float:
         """Weight for this frame in the noise estimate.
 
-        At the configured rate the estimate needs about a hundred frames to
-        reach the true noise of the scene, and until it does it sits too low
-        and everything reads as a deviation. Averaging the frames seen so far
-        gives the estimate its scene from the start, and the configured rate
-        takes over once it is the slower of the two.
+        At the configured rate the estimate needs about a hundred frames
+        to reach the true noise of the scene, and until it does it sits
+        too low and everything reads as a deviation. Averaging the
+        frames seen so far gives the estimate its scene from the start,
+        and the configured rate takes over once it is the slower of the
+        two.
         """
         return max(self.settings.variance_alpha, 1.0 / self._updates)
 
