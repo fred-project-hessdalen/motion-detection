@@ -27,6 +27,23 @@ uv run python scripts/dev/detect_movement.py path/to/video.mp4 --output output_d
 Run with `--help` for all available parameters.
 
 
+## Detection
+
+Every pixel keeps a running mean and a running estimate of its own noise,
+and a pixel counts towards a detection once it departs from that mean by
+a given number of its own standard deviations. A dark sky, a moonlit
+slope and a snowy afternoon all read on that one scale, so a single set
+of settings covers them.
+
+`--detection-sigma` sets how far a blob's brightest pixel has to depart
+from the background to be reported, and it is the first parameter to
+reach for. Values between 12 and 20 all work on the example recordings.
+
+Distances are given as a ratio of the frame's larger dimension rather
+than in pixels, so `--max-movement-ratio` and its siblings hold their
+meaning at any `--target-height`.
+
+
 ## Development
 
 ```bash
