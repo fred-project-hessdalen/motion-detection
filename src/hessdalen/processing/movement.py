@@ -38,7 +38,7 @@ class TrackingSettings:
     min_consecutive_frames: int = 6
     max_movement_ratio: float = 0.02
     min_movement_ratio: float = 0.001
-    max_missed_frames: int = 2
+    max_missed_frames: int = 8
     min_trajectory_span_ratio: float = 0.02
 
 
