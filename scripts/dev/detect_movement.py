@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 
-from hessdalen.io.video import VideoStream, FileFrameSource
+from hessdalen.io.video import TIMESTAMP_MASK_COORDS, VideoStream, FileFrameSource
 from hessdalen.processing.background import BackgroundSettings
 from hessdalen.processing.debug import TwoPanelVideoDebugSink
 from hessdalen.processing.movement import (
@@ -158,12 +158,9 @@ def _export_gif(*, input_video: Path, output_gif: Path) -> None:
 
 
 def main(args: argparse.Namespace) -> None:
-    # Timestamp area in relative coords
-    mask_coords = (0.8, 0.8, 1, 1)
-
     stream = VideoStream(
         FileFrameSource(args.video),
-        mask_coords=mask_coords,
+        mask_coords=TIMESTAMP_MASK_COORDS,
         target_height=args.target_height,
     )
     height, width = stream.frame_shape

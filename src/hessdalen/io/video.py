@@ -7,6 +7,9 @@ import numpy as np
 
 from hessdalen.domain.models import VideoFile, VideoFrame
 
+TIMESTAMP_MASK_COORDS = (0.8, 0.8, 1.0, 1.0)
+"""Corner the cameras burn their timestamp into, in relative coordinates."""
+
 
 class FrameSource(Protocol):
     """Protocol for frame sources."""

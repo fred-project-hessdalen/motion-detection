@@ -44,6 +44,26 @@ than in pixels, so `--max-movement-ratio` and its siblings hold their
 meaning at any `--target-height`.
 
 
+## Dashboard
+
+A debugging dashboard lists the recordings under `data/examples`, runs the
+detector over one or all of them, and plays the result with the tracks
+drawn on it.
+
+```bash
+uv run --group dashboard streamlit run src/hessdalen/dashboard/app.py
+```
+
+Pick a recording by clicking its row, set the parameters in the sidebar
+and press Run. Each run is stored under `data/out/dashboard` under the
+settings it used, so a recording that has been run with the settings
+currently in the sidebar plays back without running again. Set
+`HESSDALEN_EXAMPLES_DIR` to list recordings from somewhere other than
+`data/examples`.
+
+Rendering the annotated video needs `ffmpeg` with `libx264` on PATH.
+
+
 ## Development
 
 ```bash

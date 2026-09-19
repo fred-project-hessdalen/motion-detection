@@ -10,6 +10,22 @@ import numpy as np
 
 from hessdalen.domain.models import MovementEvent
 
+TRACK_COLORS = (
+    (255, 0, 0),
+    (0, 255, 0),
+    (0, 0, 255),
+    (255, 255, 0),
+    (255, 0, 255),
+    (0, 255, 255),
+    (128, 0, 255),
+    (255, 128, 0),
+)
+
+
+def track_color(track_id: int) -> tuple[int, int, int]:
+    """The colour a track keeps wherever it is drawn."""
+    return TRACK_COLORS[track_id % len(TRACK_COLORS)]
+
 
 @dataclass(frozen=True, slots=True)
 class MovementDebugFrame:
@@ -121,12 +137,12 @@ class TwoPanelVideoDebugSink:
 
         for track_id, trajectory in self._trajectories.items():
             if len(trajectory) > 1:
-                color = self._get_track_color(track_id)
+                color = track_color(track_id)
                 self._draw_trajectory(filtered_bgr, trajectory, color, 2)
                 self._draw_trajectory(diff_bgr, trajectory, color, 2)
 
         for track_id, centroid in centroids.items():
-            color = self._get_track_color(track_id)
+            color = track_color(track_id)
             self.draw_bbox(diff_bgr, centroid, color, 2)
             self.draw_bbox(filtered_bgr, centroid, color, 2)
 
@@ -171,16 +187,3 @@ class TwoPanelVideoDebugSink:
             return
         points = np.array([(int(x), int(y)) for x, y in trajectory], dtype=np.int32)
         cv2.polylines(frame, [points], isClosed=False, color=color, thickness=thickness)
-
-    def _get_track_color(self, track_id: int) -> tuple[int, int, int]:
-        colors = [
-            (255, 0, 0),
-            (0, 255, 0),
-            (0, 0, 255),
-            (255, 255, 0),
-            (255, 0, 255),
-            (0, 255, 255),
-            (128, 0, 255),
-            (255, 128, 0),
-        ]
-        return colors[track_id % len(colors)]
