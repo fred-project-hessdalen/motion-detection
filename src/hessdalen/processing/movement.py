@@ -8,6 +8,7 @@ from funcy import lmapcat, mapcat, first
 
 from hessdalen.io.video import VideoStream
 from hessdalen.domain.models import DetectedMovement, MovementEvent, VideoFrame
+from hessdalen.processing.background import BackgroundModel, BackgroundSettings
 from hessdalen.processing.debug import (
     MovementDebugFrame,
     MovementDebugSink,
@@ -17,13 +18,43 @@ from hessdalen.processing.debug import (
 Centroid = tuple[float, float]
 
 
+@dataclass(frozen=True, slots=True)
+class Detection:
+    centroid: Centroid
+    pixel_count: int
+    peak_deviation: float
+
+
+@dataclass(frozen=True, slots=True)
+class DetectionSettings:
+    foreground_sigma: float = 5.0
+    detection_sigma: float = 15.0
+    min_pixels: int = 3
+    close_size: int = 5
+
+
+@dataclass(frozen=True, slots=True)
+class TrackingSettings:
+    min_consecutive_frames: int = 6
+    max_movement_ratio: float = 0.02
+    min_movement_ratio: float = 0.001
+    max_missed_frames: int = 2
+    min_trajectory_span_ratio: float = 0.02
+
+
+@dataclass(frozen=True, slots=True)
+class MovementSettings:
+    background: BackgroundSettings = field(default_factory=BackgroundSettings)
+    detection: DetectionSettings = field(default_factory=DetectionSettings)
+    tracking: TrackingSettings = field(default_factory=TrackingSettings)
+
+
 @dataclass(slots=True)
 class Track:
     track_id: int
     centroid: Centroid
     consecutive_hits: int = 1
     consecutive_misses: int = 0
-    area: float = 0.0
     confirmed: bool = False
     pending: list[tuple[int, Centroid]] = field(default_factory=list)
 
@@ -32,50 +63,28 @@ class Track:
 class FrameAnalysis:
     events: list[MovementEvent]
     centroids: dict[int, Centroid]
-    filtered: np.ndarray
-    diff: np.ndarray
+    deviation: np.ndarray
 
 
 class MovementDetector:
-    def __init__(
-        self,
-        stream: VideoStream,
-        alpha: float = 0.1,
-        adaptive_temporal_filter: bool = True,
-        adaptive_change_threshold: int = 10,
-        alpha_small_change: float | None = None,
-        alpha_large_change: float | None = None,
-        diff_threshold: int = 25,
-        min_area: int = 5,
-        kernel_size: int = 5,
-        min_consecutive_frames: int = 3,
-        max_movement_distance: float = 100.0,
-        min_movement_distance: float = 5.0,
-        max_missed_frames: int = 2,
-        min_trajectory_span_ratio: float = 0.05,
-    ):
+    def __init__(self, stream: VideoStream, settings: MovementSettings):
         self.stream = stream
-        self.alpha = alpha
-        self.adaptive_temporal_filter = bool(adaptive_temporal_filter)
-        self.adaptive_change_threshold = int(adaptive_change_threshold)
-        self.alpha_small_change = float(alpha_small_change) if alpha_small_change is not None else float(alpha)
-        default_alpha_large = float(alpha) * 0.2
-        self.alpha_large_change = (
-            float(alpha_large_change) if alpha_large_change is not None else float(default_alpha_large)
-        )
-        self.diff_threshold = diff_threshold
-        self.min_area = min_area
-        self.kernel_size = kernel_size
-        self.min_consecutive_frames = min_consecutive_frames
-        self.max_movement_distance = max_movement_distance
-        self.min_movement_distance = min_movement_distance
-        self.max_missed_frames = max_missed_frames
-        self.min_trajectory_span_ratio = min_trajectory_span_ratio
-        self.filtered_frame: np.ndarray | None = None
+        self.settings = settings
+        self.background = BackgroundModel(settings.background)
+
+        height, width = stream.frame_shape
+        frame_max_dimension = float(max(height, width))
+        tracking = settings.tracking
+        self._max_movement_distance = tracking.max_movement_ratio * frame_max_dimension
+        self._min_movement_distance = tracking.min_movement_ratio * frame_max_dimension
+        self._min_trajectory_span = tracking.min_trajectory_span_ratio * frame_max_dimension
+
+        close_size = settings.detection.close_size
+        self._close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_size, close_size))
+
         self._tracks: dict[int, Track] = {}
         self._next_track_id: int = 1
         self._debug_sink: MovementDebugSink = NULL_MOVEMENT_DEBUG_SINK
-        self._frame_max_dimension: float | None = None
 
     def detect(
         self,
@@ -96,7 +105,7 @@ class MovementDetector:
             MovementDebugFrame(
                 frame_number=frame_number,
                 filtered=frame.frame,
-                diff=analysis.diff,
+                deviation=analysis.deviation,
                 centroids=analysis.centroids,
             )
         )
@@ -109,14 +118,8 @@ class MovementDetector:
 
     def _analyze_frame(self, frame_number: int, frame: VideoFrame) -> FrameAnalysis:
         gray = self._to_grayscale(frame.frame)
-        if self._frame_max_dimension is None:
-            height, width = gray.shape
-            self._frame_max_dimension = float(max(height, width))
-        filtered = self._apply_temporal_filter(gray)
-
-        spatial_filtered = self._compute_spatial_filtered(gray, filtered)
-        detections = self._extract_detections(spatial_filtered)
-        events = self._update_tracks(frame_number, detections)
+        deviation = self.background.deviation(gray)
+        events = self._update_tracks(frame_number, self._extract_detections(deviation))
 
         active_confirmed_tracks = [
             track for track in self._tracks.values() if track.confirmed and track.consecutive_misses == 0
@@ -125,150 +128,61 @@ class MovementDetector:
         return FrameAnalysis(
             events=events,
             centroids=centroids,
-            filtered=filtered,
-            diff=spatial_filtered,
+            deviation=self._deviation_image(deviation),
         )
 
     def _to_grayscale(self, frame: np.ndarray) -> np.ndarray:
         return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    def _apply_temporal_filter(self, gray_frame: np.ndarray) -> np.ndarray:
-        if self.alpha >= 1.0 and not self.adaptive_temporal_filter:
-            return gray_frame
-        if self.filtered_frame is None:
-            self.filtered_frame = gray_frame.astype(np.float32)
-            return self.filtered_frame.astype(np.uint8)
+    def _deviation_image(self, deviation: np.ndarray) -> np.ndarray:
+        """Scale the deviation for the debug video, with the detection
+        threshold at full white."""
+        scaled = deviation * (255.0 / self.settings.detection.detection_sigma)
+        return np.clip(scaled, 0.0, 255.0).astype(np.uint8)
 
-        if not self.adaptive_temporal_filter:
-            cv2.accumulateWeighted(gray_frame, self.filtered_frame, self.alpha)
-            return self.filtered_frame.astype(np.uint8)
-
-        self._apply_adaptive_temporal_filter(gray_frame)
-        return self.filtered_frame.astype(np.uint8)
-
-    def _apply_adaptive_temporal_filter(self, gray_frame: np.ndarray) -> None:
-        if self.filtered_frame is None:
-            raise ValueError("filtered_frame must be initialized")
-
-        current_f = gray_frame.astype(np.float32)
-        diff = np.abs(current_f - self.filtered_frame)
-        small_change_mask = diff <= float(self.adaptive_change_threshold)
-        alpha_small, alpha_large = self._adaptive_alphas()
-
-        self._masked_accumulate(mask=small_change_mask, current=current_f, alpha=alpha_small)
-        self._masked_accumulate(mask=~small_change_mask, current=current_f, alpha=alpha_large)
-
-    def _adaptive_alphas(self) -> tuple[float, float]:
-        alpha_small = float(np.clip(self.alpha_small_change, 0.0, 1.0))
-        alpha_large = float(np.clip(self.alpha_large_change, 0.0, 1.0))
-        return (
-            (alpha_small, alpha_large)
-            if alpha_small >= alpha_large
-            else (
-                alpha_large,
-                alpha_small,
-            )
-        )
-
-    def _masked_accumulate(self, *, mask: np.ndarray, current: np.ndarray, alpha: float) -> None:
-        if self.filtered_frame is None:
-            raise ValueError("filtered_frame must be initialized")
-
-        if alpha >= 1.0:
-            self.filtered_frame[mask] = current[mask]
-            return
-
-        self.filtered_frame[mask] = (1.0 - alpha) * self.filtered_frame[mask] + alpha * current[mask]
-
-    def _compute_spatial_filtered(self, current: np.ndarray, filtered: np.ndarray) -> np.ndarray:
-        diff = self._compute_frame_diff(current, filtered)
-        return self._apply_spatial_filter(diff)
-
-    def _compute_frame_diff(self, current: np.ndarray, previous: np.ndarray) -> np.ndarray:
-        diff = cv2.absdiff(current, previous)
-        if self.stream.mask is not None:
-            diff = cv2.bitwise_and(diff, diff, mask=self.stream.mask)
-        return diff
-
-    def _apply_spatial_filter(self, diff_frame: np.ndarray) -> np.ndarray:
-        kernel_size = int(self.kernel_size)
-        if kernel_size <= 1:
-            return diff_frame
-
-        open_kernel_size = max(1, kernel_size // 3)
-        kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (open_kernel_size, open_kernel_size))
-        kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-
-        filtered = diff_frame
-        if open_kernel_size > 1:
-            filtered = cv2.morphologyEx(filtered, cv2.MORPH_OPEN, kernel_open)
-        filtered = cv2.morphologyEx(filtered, cv2.MORPH_CLOSE, kernel_close)
-        return cv2.dilate(filtered, kernel_close, iterations=2)
-
-    def _extract_detections(self, spatial_filtered: np.ndarray) -> list[tuple[Centroid, float]]:
-        _, thresh = cv2.threshold(spatial_filtered, self.diff_threshold, 255, cv2.THRESH_BINARY)
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours:
-            return []
-
-        min_contour_area = float(self.min_area)
+    def _extract_detections(self, deviation: np.ndarray) -> list[Detection]:
+        foreground = self._foreground_mask(deviation)
+        component_count, labels, stats, _centroids = cv2.connectedComponentsWithStats(foreground, connectivity=8)
         return [
             detection
-            for contour in contours
-            if (detection := self._contour_to_detection(contour, min_contour_area, spatial_filtered)) is not None
+            for component in range(1, component_count)
+            if (detection := self._component_to_detection(component, labels, stats, deviation)) is not None
         ]
 
-    def _contour_to_detection(
+    def _foreground_mask(self, deviation: np.ndarray) -> np.ndarray:
+        mask: np.ndarray = (deviation > self.settings.detection.foreground_sigma).astype(np.uint8) * 255
+        if self.stream.mask is not None:
+            mask = cv2.bitwise_and(mask, self.stream.mask)
+        if self.settings.detection.close_size <= 1:
+            return mask
+        return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self._close_kernel)
+
+    def _component_to_detection(
         self,
-        contour: np.ndarray,
-        min_contour_area: float,
-        spatial_filtered: np.ndarray,
-    ) -> tuple[Centroid, float] | None:
-        area = float(cv2.contourArea(contour))
-        if area < min_contour_area:
+        component: int,
+        labels: np.ndarray,
+        stats: np.ndarray,
+        deviation: np.ndarray,
+    ) -> Detection | None:
+        x, y, width, height, pixel_count = (int(value) for value in stats[component])
+        if pixel_count < self.settings.detection.min_pixels:
             return None
 
-        centroid = self._contour_peak(spatial_filtered, contour)
-        if centroid is None:
-            centroid = self._contour_centroid(contour)
-        if centroid is None:
+        window = np.where(
+            labels[y : y + height, x : x + width] == component, deviation[y : y + height, x : x + width], 0.0
+        )
+        peak_deviation = float(window.max())
+        if peak_deviation < self.settings.detection.detection_sigma:
             return None
 
-        return (centroid, area)
+        peak_y, peak_x = np.unravel_index(int(np.argmax(window)), window.shape)
+        return Detection(
+            centroid=(float(x + int(peak_x)), float(y + int(peak_y))),
+            pixel_count=pixel_count,
+            peak_deviation=peak_deviation,
+        )
 
-    def _contour_peak(self, spatial_filtered: np.ndarray, contour: np.ndarray) -> Centroid | None:
-        x, y, w, h = cv2.boundingRect(contour)
-        if w <= 0 or h <= 0:
-            return None
-
-        roi = spatial_filtered[y : y + h, x : x + w]
-        if roi.size == 0:
-            return None
-
-        local_contour = contour.copy()
-        local_contour[:, 0, 0] -= x
-        local_contour[:, 0, 1] -= y
-
-        mask = np.zeros((h, w), dtype=np.uint8)
-        cv2.drawContours(mask, [local_contour], -1, 255, -1)
-
-        _min_val, max_val, _min_loc, max_loc = cv2.minMaxLoc(roi, mask=mask)
-        if max_val <= 0:
-            return None
-
-        peak_x = float(x + int(max_loc[0]))
-        peak_y = float(y + int(max_loc[1]))
-        return (peak_x, peak_y)
-
-    def _contour_centroid(self, contour: np.ndarray) -> Centroid | None:
-        moments = cv2.moments(contour)
-        if moments["m00"] == 0:
-            return None
-        cx = moments["m10"] / moments["m00"]
-        cy = moments["m01"] / moments["m00"]
-        return (cx, cy)
-
-    def _update_tracks(self, frame_number: int, detections: list[tuple[Centroid, float]]) -> list[MovementEvent]:
+    def _update_tracks(self, frame_number: int, detections: list[Detection]) -> list[MovementEvent]:
         if not detections:
             self._mark_all_tracks_missed()
             self._delete_expired_tracks()
@@ -289,7 +203,7 @@ class MovementDetector:
             if detection_index not in assigned_detection_indexes
         )
         new_track_events = lmapcat(
-            lambda detection: self._create_track_for_detection_data(frame_number=frame_number, detection=detection),
+            lambda detection: self._create_track_for_detection(frame_number=frame_number, detection=detection),
             unassigned_detections,
         )
         return [*updated_track_events, *new_track_events]
@@ -303,15 +217,15 @@ class MovementDetector:
         track.consecutive_misses += 1
 
     def _delete_expired_tracks(self) -> None:
-        max_misses_for_deletion = int(self.max_missed_frames) * 2
+        max_misses_for_deletion = int(self.settings.tracking.max_missed_frames) * 2
         self._tracks = {
             track_id: track
             for track_id, track in self._tracks.items()
             if track.consecutive_misses <= max_misses_for_deletion
         }
 
-    def _match_tracks_to_detections(self, detections: list[tuple[Centroid, float]]) -> tuple[dict[int, int], set[int]]:
-        max_dist_sq = float(self.max_movement_distance) ** 2
+    def _match_tracks_to_detections(self, detections: list[Detection]) -> tuple[dict[int, int], set[int]]:
+        max_dist_sq = self._max_movement_distance**2
         candidate_pairs = self._candidate_track_detection_pairs(detections=detections, max_dist_sq=max_dist_sq)
         ordered_pairs = sorted(candidate_pairs, key=lambda pair: pair[0])
         matches, assigned_detection_indexes = self._greedy_assign_pairs(ordered_pairs)
@@ -320,7 +234,7 @@ class MovementDetector:
     def _candidate_track_detection_pairs(
         self,
         *,
-        detections: list[tuple[Centroid, float]],
+        detections: list[Detection],
         max_dist_sq: float,
     ) -> list[tuple[float, int, int]]:
         return lmapcat(
@@ -332,13 +246,13 @@ class MovementDetector:
         self,
         *,
         track: Track,
-        detections: list[tuple[Centroid, float]],
+        detections: list[Detection],
         max_dist_sq: float,
     ) -> list[tuple[float, int, int]]:
         return [
             (dist_sq, track.track_id, detection_index)
-            for detection_index, (centroid, _area) in enumerate(detections)
-            if (dist_sq := self._distance_sq(track.centroid, centroid)) <= max_dist_sq
+            for detection_index, detection in enumerate(detections)
+            if (dist_sq := self._distance_sq(track.centroid, detection.centroid)) <= max_dist_sq
         ]
 
     def _distance_sq(self, a: Centroid, b: Centroid) -> float:
@@ -372,7 +286,7 @@ class MovementDetector:
         self,
         *,
         frame_number: int,
-        detections: list[tuple[Centroid, float]],
+        detections: list[Detection],
         matches: dict[int, int],
         track: Track,
     ) -> list[MovementEvent]:
@@ -381,14 +295,13 @@ class MovementDetector:
             self._mark_track_missed(track)
             return []
 
-        centroid, area = detections[detection_index]
+        centroid = detections[detection_index].centroid
         distance = float(np.sqrt(self._distance_sq(track.centroid, centroid)))
-        if distance < float(self.min_movement_distance):
+        if distance < self._min_movement_distance:
             self._mark_track_missed(track)
             return []
 
         track.centroid = centroid
-        track.area = area
         track.consecutive_hits += 1
         track.consecutive_misses = 0
         return self._events_for_track_hit(frame_number=frame_number, track=track)
@@ -403,7 +316,7 @@ class MovementDetector:
             *track.pending,
             (frame_number, track.centroid),
         ]
-        if track.consecutive_hits < int(self.min_consecutive_frames):
+        if track.consecutive_hits < int(self.settings.tracking.min_consecutive_frames):
             return []
 
         if not self._validate_trajectory(track.pending):
@@ -435,22 +348,13 @@ class MovementDetector:
         x_coords = [c[0] for c in centroids]
         y_coords = [c[1] for c in centroids]
 
-        min_x, max_x = min(x_coords), max(x_coords)
-        min_y, max_y = min(y_coords), max(y_coords)
-
-        bbox_width = max_x - min_x
-        bbox_height = max_y - min_y
-        bbox_span = max(bbox_width, bbox_height)
-
-        if self._frame_max_dimension is None:
-            return True
-
-        min_span = self.min_trajectory_span_ratio * self._frame_max_dimension
-        return bbox_span >= min_span
+        bbox_width = max(x_coords) - min(x_coords)
+        bbox_height = max(y_coords) - min(y_coords)
+        return max(bbox_width, bbox_height) >= self._min_trajectory_span
 
     def _find_mergeable_track(self, first_centroid: Centroid, exclude_track_id: int) -> int | None:
-        max_dist_sq = float(self.max_movement_distance)
-        max_misses_for_merge = int(self.max_missed_frames)
+        max_dist_sq = self._max_movement_distance**2
+        max_misses_for_merge = int(self.settings.tracking.max_missed_frames)
 
         def is_mergeable(track_id: int, track: Track) -> int | None:
             if track_id == exclude_track_id:
@@ -478,23 +382,8 @@ class MovementDetector:
             del self._tracks[old_track_id]
         self._tracks[target_track_id] = track
 
-    def _create_track_for_detection_data(
-        self,
-        *,
-        frame_number: int,
-        detection: tuple[Centroid, float],
-    ) -> list[MovementEvent]:
-        centroid, area = detection
-        return self._create_track_for_detection(frame_number=frame_number, centroid=centroid, area=area)
-
-    def _create_track_for_detection(
-        self,
-        *,
-        frame_number: int,
-        centroid: Centroid,
-        area: float,
-    ) -> list[MovementEvent]:
-        track = self._new_track(centroid=centroid, area=area)
+    def _create_track_for_detection(self, *, frame_number: int, detection: Detection) -> list[MovementEvent]:
+        track = self._new_track(centroid=detection.centroid)
         self._tracks = {
             **self._tracks,
             track.track_id: track,
@@ -503,14 +392,14 @@ class MovementDetector:
             *track.pending,
             (frame_number, track.centroid),
         ]
-        if int(self.min_consecutive_frames) > 1:
+        if int(self.settings.tracking.min_consecutive_frames) > 1:
             return []
 
         track.confirmed = True
         track.pending = []
         return [self._detected_movement(frame_number=frame_number, track_id=track.track_id, centroid=track.centroid)]
 
-    def _new_track(self, *, centroid: Centroid, area: float) -> Track:
+    def _new_track(self, *, centroid: Centroid) -> Track:
         track_id = int(self._next_track_id)
         self._next_track_id += 1
-        return Track(track_id=track_id, centroid=centroid, consecutive_hits=1, consecutive_misses=0, area=area)
+        return Track(track_id=track_id, centroid=centroid, consecutive_hits=1, consecutive_misses=0)

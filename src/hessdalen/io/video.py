@@ -46,24 +46,43 @@ class VideoStream:
         self.source = source
         self.mask_coords = mask_coords
         self.target_height = target_height
-        self.mask: np.ndarray | None = None
 
         if self.target_height is not None and self.target_height <= 0:
             raise ValueError("target_height must be a positive integer")
 
-        if mask_coords is not None:
-            cap = source.open()
+        self._frame_shape: tuple[int, int] | None = None
+        self.mask: np.ndarray | None = self._build_mask(mask_coords) if mask_coords is not None else None
+
+    @property
+    def frame_shape(self) -> tuple[int, int]:
+        """Height and width of the frames this stream yields, after
+        resizing."""
+        if self._frame_shape is None:
+            self._frame_shape = self._read_frame_shape()
+        return self._frame_shape
+
+    def _read_frame_shape(self) -> tuple[int, int]:
+        cap = self.source.open()
+        try:
             ret, frame = cap.read()
+        finally:
             cap.release()
-            if ret:
-                frame = self._resize_frame(frame)
-                height, width = frame.shape[:2]
-                self.mask = np.ones((height, width), dtype=np.uint8) * 255
-                x1 = int(width * mask_coords[0])
-                y1 = int(height * mask_coords[1])
-                x2 = int(width * mask_coords[2])
-                y2 = int(height * mask_coords[3])
-                self.mask[y1:y2, x1:x2] = 0
+
+        if not ret:
+            raise ValueError("Video source yielded no frames.")
+
+        height, width = self._resize_frame(frame).shape[:2]
+        return int(height), int(width)
+
+    def _build_mask(self, mask_coords: tuple[float, float, float, float]) -> np.ndarray:
+        height, width = self.frame_shape
+        mask = np.full((height, width), 255, dtype=np.uint8)
+        x1 = int(width * mask_coords[0])
+        y1 = int(height * mask_coords[1])
+        x2 = int(width * mask_coords[2])
+        y2 = int(height * mask_coords[3])
+        mask[y1:y2, x1:x2] = 0
+        return mask
 
     def _resize_frame(self, frame: np.ndarray) -> np.ndarray:
         if self.target_height is None:

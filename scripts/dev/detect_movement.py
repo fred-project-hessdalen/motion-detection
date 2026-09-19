@@ -7,8 +7,14 @@ from pathlib import Path
 
 
 from hessdalen.io.video import VideoStream, FileFrameSource
+from hessdalen.processing.background import BackgroundSettings
 from hessdalen.processing.debug import TwoPanelVideoDebugSink
-from hessdalen.processing.movement import MovementDetector
+from hessdalen.processing.movement import (
+    DetectionSettings,
+    MovementDetector,
+    MovementSettings,
+    TrackingSettings,
+)
 
 
 def parse_args():
@@ -26,54 +32,57 @@ def parse_args():
         help="Output path (either a directory or an .mp4 filename)",
     )
     parser.add_argument(
-        "--alpha",
+        "--mean-alpha",
         type=float,
-        default=0.5,
-        help="Temporal smoothing factor (lower = more smoothing)",
+        default=BackgroundSettings.mean_alpha,
+        help="Rate at which the background mean follows the frame (lower = slower)",
     )
     parser.add_argument(
-        "--adaptive-change-threshold",
+        "--variance-alpha",
+        type=float,
+        default=BackgroundSettings.variance_alpha,
+        help="Rate at which the per-pixel noise estimate follows the frame",
+    )
+    parser.add_argument(
+        "--foreground-sigma",
+        type=float,
+        default=DetectionSettings.foreground_sigma,
+        help="Deviation in noise sigma at which a pixel joins a blob",
+    )
+    parser.add_argument(
+        "--detection-sigma",
+        type=float,
+        default=DetectionSettings.detection_sigma,
+        help="Peak deviation in noise sigma a blob needs to be reported",
+    )
+    parser.add_argument(
+        "--min-pixels",
         type=int,
-        default=10,
-        help="Per-pixel difference threshold (in grayscale intensity) for adaptive smoothing",
+        default=DetectionSettings.min_pixels,
+        help="Minimum blob size in pixels",
     )
-    parser.add_argument(
-        "--alpha-small-change",
-        type=float,
-        default=None,
-        help="Alpha for small changes (higher suppresses slow small motion like tree sway)",
-    )
-    parser.add_argument(
-        "--alpha-large-change",
-        type=float,
-        default=None,
-        help="Alpha for large changes (lower keeps fast/large motion like birds in the diff)",
-    )
-    parser.add_argument("--threshold", type=int, default=20, help="Pixel difference threshold")
-    parser.add_argument("--min-area", type=int, default=20, help="Minimum changed pixels for detection")
-    parser.add_argument("--kernel-size", type=int, default=5, help="Morphological kernel size")
     parser.add_argument(
         "--min-consecutive-frames",
         type=int,
-        default=6,
+        default=TrackingSettings.min_consecutive_frames,
         help="Minimum consecutive frames with movement",
     )
     parser.add_argument(
-        "--max-movement-distance",
+        "--max-movement-ratio",
         type=float,
-        default=10.0,
-        help="Maximum pixel distance for spatial continuity",
+        default=TrackingSettings.max_movement_ratio,
+        help="Maximum movement per frame as ratio of max frame dimension",
     )
     parser.add_argument(
-        "--min-movement-distance",
+        "--min-movement-ratio",
         type=float,
-        default=2.0,
-        help="Minimum pixel distance to reject stationary brightness changes",
+        default=TrackingSettings.min_movement_ratio,
+        help="Minimum movement per frame as ratio of max frame dimension (rejects stationary brightness changes)",
     )
     parser.add_argument(
         "--min-trajectory-span-ratio",
         type=float,
-        default=0.02,
+        default=TrackingSettings.min_trajectory_span_ratio,
         help="Minimum trajectory bounding box span as ratio of max frame dimension (filters stationary noise)",
     )
     parser.add_argument("--fps", type=int, default=30, help="Output video frame rate")
@@ -132,14 +141,7 @@ def main(args: argparse.Namespace) -> None:
         mask_coords=mask_coords,
         target_height=args.target_height,
     )
-
-    # Get frame dimensions for debug video
-    temp_stream = VideoStream(
-        FileFrameSource(args.video),
-        target_height=args.target_height,
-    )
-    first_frame = next(temp_stream.stream_frames())
-    height, width = first_frame.frame.shape[:2]
+    height, width = stream.frame_shape
 
     if args.output:
         output_is_dir = args.output.exists() and args.output.is_dir()
@@ -158,18 +160,23 @@ def main(args: argparse.Namespace) -> None:
 
     detector = MovementDetector(
         stream=stream,
-        alpha=args.alpha,
-        adaptive_temporal_filter=True,
-        adaptive_change_threshold=args.adaptive_change_threshold,
-        alpha_small_change=args.alpha_small_change,
-        alpha_large_change=args.alpha_large_change,
-        diff_threshold=args.threshold,
-        min_area=args.min_area,
-        kernel_size=args.kernel_size,
-        min_consecutive_frames=args.min_consecutive_frames,
-        max_movement_distance=args.max_movement_distance,
-        min_movement_distance=args.min_movement_distance,
-        min_trajectory_span_ratio=args.min_trajectory_span_ratio,
+        settings=MovementSettings(
+            background=BackgroundSettings(
+                mean_alpha=args.mean_alpha,
+                variance_alpha=args.variance_alpha,
+            ),
+            detection=DetectionSettings(
+                foreground_sigma=args.foreground_sigma,
+                detection_sigma=args.detection_sigma,
+                min_pixels=args.min_pixels,
+            ),
+            tracking=TrackingSettings(
+                min_consecutive_frames=args.min_consecutive_frames,
+                max_movement_ratio=args.max_movement_ratio,
+                min_movement_ratio=args.min_movement_ratio,
+                min_trajectory_span_ratio=args.min_trajectory_span_ratio,
+            ),
+        ),
     )
 
     debug_sink = TwoPanelVideoDebugSink(

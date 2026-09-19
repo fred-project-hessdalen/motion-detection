@@ -15,7 +15,7 @@ from hessdalen.domain.models import MovementEvent
 class MovementDebugFrame:
     frame_number: int
     filtered: np.ndarray
-    diff: np.ndarray
+    deviation: np.ndarray
     centroids: dict[int, tuple[float, float]]
 
 
@@ -64,14 +64,14 @@ class TwoPanelVideoDebugSink:
         self._update_trajectories(frame.centroids)
 
         if self._buffer_size <= 1:
-            self._write(frame.filtered, frame.diff, frame.centroids, frame.frame_number)
+            self._write(frame.filtered, frame.deviation, frame.centroids, frame.frame_number)
             return
 
         frame_number = int(frame.frame_number)
         self._buffer_order.append(frame_number)
         self._buffered[frame_number] = (
             frame.filtered,
-            frame.diff,
+            frame.deviation,
             frame.centroids.copy(),
         )
         self._flush_oldest_if_needed()
@@ -126,7 +126,6 @@ class TwoPanelVideoDebugSink:
                 self._draw_trajectory(diff_bgr, trajectory, color, 2)
 
         for track_id, centroid in centroids.items():
-            print(f"Frame {frame_number}: Track {track_id} at {centroid}")
             color = self._get_track_color(track_id)
             self.draw_bbox(diff_bgr, centroid, color, 2)
             self.draw_bbox(filtered_bgr, centroid, color, 2)

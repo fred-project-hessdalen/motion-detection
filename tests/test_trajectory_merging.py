@@ -4,7 +4,17 @@ import numpy as np
 import pytest
 
 from hessdalen.io.video import VideoStream
-from hessdalen.processing.movement import MovementDetector
+from hessdalen.processing.movement import MovementDetector, MovementSettings, TrackingSettings
+
+MERGING_SETTINGS = MovementSettings(
+    tracking=TrackingSettings(
+        min_consecutive_frames=3,
+        max_movement_ratio=0.25,
+        min_movement_ratio=0.01,
+        max_missed_frames=3,
+        min_trajectory_span_ratio=0.0,
+    )
+)
 
 
 class MockVideoCapture:
@@ -71,18 +81,7 @@ def test_trajectory_merging_with_gap():
     mock_source = MockFrameSource(frames)
     stream = VideoStream(mock_source, target_height=height)
 
-    detector = MovementDetector(
-        stream=stream,
-        alpha=0.3,
-        diff_threshold=25,
-        min_area=10,
-        kernel_size=3,
-        min_consecutive_frames=3,
-        max_movement_distance=50.0,
-        min_movement_distance=2.0,
-        max_missed_frames=3,
-        min_trajectory_span_ratio=0.0,
-    )
+    detector = MovementDetector(stream=stream, settings=MERGING_SETTINGS)
 
     # Collect all events
     events = [event for event in detector.detect() if event.centroid is not None]
@@ -139,18 +138,7 @@ def test_trajectory_no_merge_when_too_far():
     mock_source = MockFrameSource(frames)
     stream = VideoStream(mock_source, target_height=height)
 
-    detector = MovementDetector(
-        stream=stream,
-        alpha=0.3,
-        diff_threshold=25,
-        min_area=10,
-        kernel_size=3,
-        min_consecutive_frames=3,
-        max_movement_distance=50.0,
-        min_movement_distance=2.0,
-        max_missed_frames=3,
-        min_trajectory_span_ratio=0.0,
-    )
+    detector = MovementDetector(stream=stream, settings=MERGING_SETTINGS)
 
     events = [event for event in detector.detect() if event.centroid is not None]
     track_ids = set(event.track_id for event in events if event.track_id is not None)

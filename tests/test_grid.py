@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from hessdalen.io.video import VideoStream, FileFrameSource
-from hessdalen.processing.movement import MovementDetector
+from hessdalen.processing.movement import MovementDetector, MovementSettings, TrackingSettings
 
 
 TEST_DATA_DIR = Path("tests/data/test_grid")
@@ -30,12 +30,7 @@ def count_detections(video_path: Path) -> int:
     stream = VideoStream(FileFrameSource(video_path))
     detector = MovementDetector(
         stream=stream,
-        alpha=0.3,
-        diff_threshold=25,
-        min_area=50,
-        kernel_size=5,
-        min_consecutive_frames=3,
-        max_movement_distance=200,
+        settings=MovementSettings(tracking=TrackingSettings(min_consecutive_frames=3)),
     )
 
     detected_count = 0
