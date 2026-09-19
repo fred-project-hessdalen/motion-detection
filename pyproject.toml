@@ -22,6 +22,9 @@ core = [
     "opencv-python>=4.13.0.92",
     "pydantic>=2.12.5",
 ]
+dashboard = [
+    "streamlit>=1.64.0",
+]
 data = [
     "dvc>=3.66.1",
 ]
