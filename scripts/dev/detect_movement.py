@@ -17,6 +17,11 @@ from hessdalen.processing.movement import (
 )
 
 
+BACKGROUND_DEFAULTS = BackgroundSettings()
+DETECTION_DEFAULTS = DetectionSettings()
+TRACKING_DEFAULTS = TrackingSettings()
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Detect movement in a video")
     parser.add_argument("video", type=Path, help="Path to the video file")
@@ -34,59 +39,79 @@ def parse_args():
     parser.add_argument(
         "--mean-alpha",
         type=float,
-        default=BackgroundSettings.mean_alpha,
+        default=BACKGROUND_DEFAULTS.mean_alpha,
         help="Rate at which the background mean follows the frame (lower = slower)",
     )
     parser.add_argument(
         "--variance-alpha",
         type=float,
-        default=BackgroundSettings.variance_alpha,
+        default=BACKGROUND_DEFAULTS.variance_alpha,
         help="Rate at which the per-pixel noise estimate follows the frame",
     )
     parser.add_argument(
         "--foreground-sigma",
         type=float,
-        default=DetectionSettings.foreground_sigma,
+        default=DETECTION_DEFAULTS.foreground_sigma,
         help="Deviation in noise sigma at which a pixel joins a blob",
     )
     parser.add_argument(
         "--detection-sigma",
         type=float,
-        default=DetectionSettings.detection_sigma,
+        default=DETECTION_DEFAULTS.detection_sigma,
         help="Peak deviation in noise sigma a blob needs to be reported",
     )
     parser.add_argument(
         "--min-pixels",
         type=int,
-        default=DetectionSettings.min_pixels,
+        default=DETECTION_DEFAULTS.min_pixels,
         help="Minimum blob size in pixels",
     )
     parser.add_argument(
         "--min-consecutive-frames",
         type=int,
-        default=TrackingSettings.min_consecutive_frames,
+        default=TRACKING_DEFAULTS.min_consecutive_frames,
         help="Minimum consecutive frames with movement",
     )
     parser.add_argument(
         "--max-movement-ratio",
         type=float,
-        default=TrackingSettings.max_movement_ratio,
+        default=TRACKING_DEFAULTS.max_movement_ratio,
         help="Maximum movement per frame as ratio of max frame dimension",
     )
     parser.add_argument(
         "--min-movement-ratio",
         type=float,
-        default=TrackingSettings.min_movement_ratio,
+        default=TRACKING_DEFAULTS.min_movement_ratio,
         help="Minimum movement per frame as ratio of max frame dimension (rejects stationary brightness changes)",
     )
     parser.add_argument(
         "--min-trajectory-span-ratio",
         type=float,
-        default=TrackingSettings.min_trajectory_span_ratio,
+        default=TRACKING_DEFAULTS.min_trajectory_span_ratio,
         help="Minimum trajectory bounding box span as ratio of max frame dimension (filters stationary noise)",
     )
     parser.add_argument("--fps", type=int, default=30, help="Output video frame rate")
     return parser.parse_args()
+
+
+def settings_from_args(args: argparse.Namespace) -> MovementSettings:
+    return MovementSettings(
+        background=BackgroundSettings(
+            mean_alpha=args.mean_alpha,
+            variance_alpha=args.variance_alpha,
+        ),
+        detection=DetectionSettings(
+            foreground_sigma=args.foreground_sigma,
+            detection_sigma=args.detection_sigma,
+            min_pixels=args.min_pixels,
+        ),
+        tracking=TrackingSettings(
+            min_consecutive_frames=args.min_consecutive_frames,
+            max_movement_ratio=args.max_movement_ratio,
+            min_movement_ratio=args.min_movement_ratio,
+            min_trajectory_span_ratio=args.min_trajectory_span_ratio,
+        ),
+    )
 
 
 def _export_gif(*, input_video: Path, output_gif: Path) -> None:
@@ -158,26 +183,7 @@ def main(args: argparse.Namespace) -> None:
     debug_path = output_dir / f"{args.video.stem}_filtered.mp4"
     gif_path = output_dir / f"{args.video.stem}_filtered.gif"
 
-    detector = MovementDetector(
-        stream=stream,
-        settings=MovementSettings(
-            background=BackgroundSettings(
-                mean_alpha=args.mean_alpha,
-                variance_alpha=args.variance_alpha,
-            ),
-            detection=DetectionSettings(
-                foreground_sigma=args.foreground_sigma,
-                detection_sigma=args.detection_sigma,
-                min_pixels=args.min_pixels,
-            ),
-            tracking=TrackingSettings(
-                min_consecutive_frames=args.min_consecutive_frames,
-                max_movement_ratio=args.max_movement_ratio,
-                min_movement_ratio=args.min_movement_ratio,
-                min_trajectory_span_ratio=args.min_trajectory_span_ratio,
-            ),
-        ),
-    )
+    detector = MovementDetector(stream=stream, settings=settings_from_args(args))
 
     debug_sink = TwoPanelVideoDebugSink(
         debug_path,
