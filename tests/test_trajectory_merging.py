@@ -5,6 +5,7 @@ import pytest
 
 from hessdalen.io.video import VideoStream
 from hessdalen.processing.movement import MovementDetector, MovementSettings, TrackingSettings
+from synthetic import MockFrameSource
 
 MERGING_SETTINGS = MovementSettings(
     tracking=TrackingSettings(
@@ -15,34 +16,6 @@ MERGING_SETTINGS = MovementSettings(
         min_trajectory_span_ratio=0.0,
     )
 )
-
-
-class MockVideoCapture:
-    """Mock cv2.VideoCapture for testing."""
-
-    def __init__(self, frames: list[np.ndarray]):
-        self.frames = frames
-        self.index = 0
-
-    def read(self) -> tuple[bool, np.ndarray]:
-        if self.index >= len(self.frames):
-            return False, np.zeros((100, 100, 3), dtype=np.uint8)
-        frame = self.frames[self.index]
-        self.index += 1
-        return True, frame
-
-    def release(self):
-        pass
-
-
-class MockFrameSource:
-    """Mock frame source for testing."""
-
-    def __init__(self, frames: list[np.ndarray]):
-        self.frames = frames
-
-    def open(self):
-        return MockVideoCapture(self.frames)
 
 
 def create_frame_with_dot(width: int, height: int, x: int, y: int, radius: int = 5) -> np.ndarray:
