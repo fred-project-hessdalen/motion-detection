@@ -22,6 +22,8 @@ class MovementDebugFrame:
 class MovementDebugSink(Protocol):
     def emit(self, frame: MovementDebugFrame) -> None: ...
 
+    def record_event(self, event: MovementEvent) -> None: ...
+
     def close(self) -> None: ...
 
 
@@ -30,6 +32,9 @@ class NullMovementDebugSink:
         return
 
     def close(self) -> None:
+        return
+
+    def record_event(self, event: MovementEvent) -> None:
         return
 
 
