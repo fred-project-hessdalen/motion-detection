@@ -32,6 +32,7 @@ MIN_BOX_SIZE = 8
 FALLBACK_FPS = 25.0
 DETECTION_SHARE = 0.5
 DETECTOR_PACKAGES = ("domain", "io", "processing")
+ENCODER_PIXEL_FORMAT = "yuv420p"
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,8 +231,8 @@ def _render(
 
     encoder = _open_encoder(
         output,
-        width=width,
-        height=height,
+        width=_even(width),
+        height=_even(height),
         frames_per_second=frames_per_second if frames_per_second > 0 else FALLBACK_FPS,
     )
     stdin = encoder.stdin
@@ -244,7 +245,7 @@ def _render(
             canvas = frame.frame
             _draw_overlays(canvas, overlays=overlays, frame_number=frame.frame_number, box_size=box_size)
             _draw_frame_number(canvas, frame.frame_number)
-            stdin.write(canvas.tobytes())
+            stdin.write(_planar_bytes(canvas))
             frames_written += 1
             on_frame(frame.frame_number)
     finally:
@@ -254,6 +255,28 @@ def _render(
     if encoder.returncode != 0:
         raise RuntimeError(f"ffmpeg exited with status {encoder.returncode}.")
     return frames_written
+
+
+def _planar_bytes(canvas: np.ndarray) -> bytes:
+    """The frame in the planar format the encoder reads.
+
+    Handing the encoder colour frames makes it convert them itself,
+    which costs ten times what OpenCV charges and sends twice the bytes
+    down the pipe.
+    """
+    height, width = canvas.shape[:2]
+    even = canvas[: _even(height), : _even(width)]
+    planar: np.ndarray = cv2.cvtColor(even, cv2.COLOR_BGR2YUV_I420)
+    return planar.tobytes()
+
+
+def _even(size: int) -> int:
+    """The largest even size at or below this one.
+
+    Colour is stored for every second row and column, so a frame with
+    an odd side loses that side's last line.
+    """
+    return size - size % 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,8 +337,8 @@ def _open_encoder(
     height: int,
     frames_per_second: float,
 ) -> subprocess.Popen[bytes]:
-    """Start an ffmpeg process that turns raw BGR frames into a video a browser
-    can play."""
+    """Start an ffmpeg process that turns raw planar frames into a video a
+    browser can play."""
     command = [
         "ffmpeg",
         "-hide_banner",
@@ -325,23 +348,19 @@ def _open_encoder(
         "-f",
         "rawvideo",
         "-pix_fmt",
-        "bgr24",
+        ENCODER_PIXEL_FORMAT,
         "-s",
         f"{width}x{height}",
         "-r",
         f"{frames_per_second:.6f}",
         "-i",
         "-",
-        "-vf",
-        "scale=trunc(iw/2)*2:trunc(ih/2)*2",
         "-c:v",
         "libx264",
         "-preset",
         "veryfast",
         "-crf",
         "26",
-        "-pix_fmt",
-        "yuv420p",
         "-movflags",
         "+faststart",
         str(output),
