@@ -26,6 +26,8 @@ def test_a_frame_without_movement_writes_no_row(tmp_path) -> None:
         "frame_number",
         "x",
         "y",
+        "centre_x",
+        "centre_y",
         "pixel_count",
         "peak_deviation",
         "brightness",

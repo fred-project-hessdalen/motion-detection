@@ -18,11 +18,19 @@ class BlobMeasurement:
 
     A track carries these as a series over its frames, and that series
     is what separates a wingbeat from a meteor's decay.
+
+    The centre is where the blob's pixels balance, which is a different
+    place from the brightest one a movement is reported at. The
+    brightest pixel of a streak hops along it from frame to frame, and
+    it lands on whole pixels, so a path built from it turns by tens of
+    degrees a frame on an object travelling straight.
     """
 
     pixel_count: int
     peak_deviation: float
     brightness: float
+    centre_x: float
+    centre_y: float
     major_axis: float
     minor_axis: float
 

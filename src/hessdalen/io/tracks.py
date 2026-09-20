@@ -26,6 +26,8 @@ SCHEMA = pa.schema(
         ("frame_number", pa.int32()),
         ("x", pa.float32()),
         ("y", pa.float32()),
+        ("centre_x", pa.float32()),
+        ("centre_y", pa.float32()),
         ("pixel_count", pa.int32()),
         ("peak_deviation", pa.float32()),
         ("brightness", pa.float64()),
@@ -37,6 +39,12 @@ SCHEMA = pa.schema(
 
 The recording is a column of its own so that files gathered into one
 dataset keep saying which recording each row came from.
+
+A row gives two positions. x and y are where the movement was reported,
+which is the blob's brightest pixel and what the tracker matched on. The
+centre is where the blob's pixels balance, which is the one analysis
+reads, because the brightest pixel of a streak hops along it and lands
+on whole pixels.
 """
 
 
@@ -74,6 +82,8 @@ def rows_from_events(events: Iterable[MovementEvent], *, recording: str) -> list
             "frame_number": event.frame_number,
             "x": event.centroid[0],
             "y": event.centroid[1],
+            "centre_x": event.blob.centre_x,
+            "centre_y": event.blob.centre_y,
             "pixel_count": event.blob.pixel_count,
             "peak_deviation": event.blob.peak_deviation,
             "brightness": event.blob.brightness,

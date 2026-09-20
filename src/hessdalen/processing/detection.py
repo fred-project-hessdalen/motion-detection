@@ -40,7 +40,15 @@ class Detection:
 
 
 @dataclass(frozen=True, slots=True)
-class BlobAxes:
+class BlobShape:
+    """Where a blob's pixels balance, and the ellipse they spread into.
+
+    The centre is given in the window the blob was measured in, so a
+    caller adds the window's corner to place it in the frame.
+    """
+
+    centre_x: float
+    centre_y: float
     major: float
     minor: float
 
@@ -234,7 +242,7 @@ def blobs_around_peaks(
             continue
 
         strongest = max(members, key=lambda member: deviations[member])
-        axes = blob_axes(blob)
+        shape = blob_shape(blob)
         found.append(
             Detection(
                 centroid=(float(columns[strongest]), float(rows[strongest])),
@@ -242,31 +250,36 @@ def blobs_around_peaks(
                     pixel_count=pixel_count,
                     peak_deviation=float(deviations[strongest]),
                     brightness=float(gray[top : top + height, left : left + width][blob].sum(dtype=np.float64)),
-                    major_axis=axes.major,
-                    minor_axis=axes.minor,
+                    centre_x=float(left) + shape.centre_x,
+                    centre_y=float(top) + shape.centre_y,
+                    major_axis=shape.major,
+                    minor_axis=shape.minor,
                 ),
             )
         )
     return found
 
 
-def blob_axes(blob: np.ndarray) -> BlobAxes:
-    """The axis lengths of the ellipse with the blob's second moments.
+def blob_shape(blob: np.ndarray) -> BlobShape:
+    """Where a blob balances and the axes of the ellipse with its second
+    moments.
 
-    A meteor's streak and a bird of the same area part company here and
-    nowhere else in the detection, because a pixel count cannot tell a
-    long thin shape from a round one.
+    A meteor's streak and a bird of the same area part company in the
+    axes and nowhere else in the detection, because a pixel count cannot
+    tell a long thin shape from a round one.
     """
     moments = cv2.moments(blob.astype(np.uint8), binaryImage=True)
     area = moments["m00"]
     if area <= 0.0:
-        return BlobAxes(major=0.0, minor=0.0)
+        return BlobShape(centre_x=0.0, centre_y=0.0, major=0.0, minor=0.0)
 
     across = moments["mu20"] / area
     down = moments["mu02"] / area
     diagonal = moments["mu11"] / area
     spread = math.sqrt(max(4.0 * diagonal * diagonal + (across - down) ** 2, 0.0))
-    return BlobAxes(
+    return BlobShape(
+        centre_x=moments["m10"] / area,
+        centre_y=moments["m01"] / area,
         major=2.0 * math.sqrt(max(2.0 * (across + down + spread), 0.0)),
         minor=2.0 * math.sqrt(max(2.0 * (across + down - spread), 0.0)),
     )

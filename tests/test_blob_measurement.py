@@ -4,7 +4,7 @@ holds."""
 import numpy as np
 import pytest
 
-from hessdalen.processing.detection import Detection, FOREGROUND, blob_axes, blobs_around_peaks
+from hessdalen.processing.detection import Detection, FOREGROUND, blob_shape, blobs_around_peaks
 
 WIDTH, HEIGHT = 48, 32
 STREAK_LEVEL = 100
@@ -12,12 +12,26 @@ NEIGHBOUR_LEVEL = 200
 
 
 def test_a_line_is_stretched_where_a_square_is_round() -> None:
-    stretched = blob_axes(np.ones((1, 9), dtype=bool))
-    round_blob = blob_axes(np.ones((3, 3), dtype=bool))
+    stretched = blob_shape(np.ones((1, 9), dtype=bool))
+    round_blob = blob_shape(np.ones((3, 3), dtype=bool))
 
     assert stretched.minor == pytest.approx(0.0, abs=1e-9)
     assert stretched.major > round_blob.major
     assert round_blob.major == pytest.approx(round_blob.minor)
+
+
+def test_a_blob_balances_between_its_pixels() -> None:
+    """The centre sits between whole pixels where the peak pixel cannot, which
+    is what keeps a streak's path from turning as its brightest pixel hops
+    along it."""
+    lopsided = np.zeros((3, 4), dtype=bool)
+    lopsided[1, 0:3] = True
+
+    centre = blob_shape(lopsided)
+
+    assert centre.centre_x == pytest.approx(1.0)
+    assert centre.centre_y == pytest.approx(1.0)
+    assert blob_shape(np.ones((2, 2), dtype=bool)).centre_x == pytest.approx(0.5)
 
 
 def test_a_blob_is_summed_over_its_own_pixels_alone() -> None:
