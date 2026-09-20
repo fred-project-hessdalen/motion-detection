@@ -1,26 +1,10 @@
 """In-memory video sources and generated scenes for the detector tests."""
 
 from dataclasses import dataclass
+from typing import Generator
 
+import cv2
 import numpy as np
-
-
-class MockVideoCapture:
-    """Mock cv2.VideoCapture for testing."""
-
-    def __init__(self, frames: list[np.ndarray]):
-        self.frames = frames
-        self.index = 0
-
-    def read(self) -> tuple[bool, np.ndarray]:
-        if self.index >= len(self.frames):
-            return False, np.zeros((100, 100, 3), dtype=np.uint8)
-        frame = self.frames[self.index]
-        self.index += 1
-        return True, frame
-
-    def release(self):
-        pass
 
 
 class MockFrameSource:
@@ -29,8 +13,12 @@ class MockFrameSource:
     def __init__(self, frames: list[np.ndarray]):
         self.frames = frames
 
-    def open(self):
-        return MockVideoCapture(self.frames)
+    def colour_frames(self) -> Generator[np.ndarray, None, None]:
+        yield from self.frames
+
+    def gray_frames(self) -> Generator[np.ndarray, None, None]:
+        for frame in self.frames:
+            yield cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
 
 @dataclass(frozen=True, slots=True)

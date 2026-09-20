@@ -2,8 +2,8 @@ import queue
 import threading
 from pathlib import Path
 from typing import Generator, Iterator, Protocol, TypeVar
-from itertools import count
 
+import av
 import cv2
 import numpy as np
 
@@ -15,14 +15,25 @@ TIMESTAMP_MASK_COORDS = (0.8, 0.8, 1.0, 1.0)
 PREFETCH_DEPTH = 4
 """Frames a worker may run ahead of the caller."""
 
+LUMA_FIRST_FORMATS = frozenset({"gray", "yuv420p", "yuvj420p", "yuv422p", "yuvj422p", "yuv444p", "yuvj444p", "nv12"})
+"""Decoded formats whose first plane already holds the grayscale."""
+
 Frame = TypeVar("Frame")
 
 
 class FrameSource(Protocol):
     """Protocol for frame sources."""
 
-    def open(self) -> cv2.VideoCapture:
-        """Open and return a VideoCapture object."""
+    def colour_frames(self) -> Generator[np.ndarray, None, None]:
+        """The frames in colour, at the size they were recorded."""
+        ...
+
+    def gray_frames(self) -> Generator[np.ndarray, None, None]:
+        """The frames in grayscale, at the size they were recorded.
+
+        A frame stays readable only until the next one is pulled, so a
+        caller that keeps one has to copy it.
+        """
         ...
 
 
@@ -32,8 +43,31 @@ class FileFrameSource:
     def __init__(self, video_path: Path):
         self.video_file = VideoFile(path=video_path)
 
-    def open(self) -> cv2.VideoCapture:
-        return cv2.VideoCapture(str(self.video_file.path))
+    def colour_frames(self) -> Generator[np.ndarray, None, None]:
+        capture = cv2.VideoCapture(str(self.video_file.path))
+        try:
+            while True:
+                ret, frame = capture.read()
+                if not ret:
+                    return
+                yield frame
+        finally:
+            capture.release()
+
+    def gray_frames(self) -> Generator[np.ndarray, None, None]:
+        """The luma plane of each frame, read where the decoder wrote it.
+
+        Grayscale is what the decoder produced before it built a colour
+        frame, so taking that plane costs neither the colour conversion
+        nor a second pass to undo it.
+        """
+        container = av.open(str(self.video_file.path))
+        container.streams.video[0].thread_type = "AUTO"
+        try:
+            for frame in container.decode(video=0):
+                yield luma_plane(frame)
+        finally:
+            container.close()
 
 
 class CameraFrameSource:
@@ -42,8 +76,20 @@ class CameraFrameSource:
     def __init__(self, camera_index: int = 0):
         self.camera_index = camera_index
 
-    def open(self) -> cv2.VideoCapture:
-        return cv2.VideoCapture(self.camera_index)
+    def colour_frames(self) -> Generator[np.ndarray, None, None]:
+        capture = cv2.VideoCapture(self.camera_index)
+        try:
+            while True:
+                ret, frame = capture.read()
+                if not ret:
+                    return
+                yield frame
+        finally:
+            capture.release()
+
+    def gray_frames(self) -> Generator[np.ndarray, None, None]:
+        for frame in self.colour_frames():
+            yield cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
 
 class VideoStream:
@@ -71,14 +117,27 @@ class VideoStream:
             self._frame_shape = self._read_frame_shape()
         return self._frame_shape
 
-    def _read_frame_shape(self) -> tuple[int, int]:
-        cap = self.source.open()
-        try:
-            ret, frame = cap.read()
-        finally:
-            cap.release()
+    def stream_frames(self) -> Generator[VideoFrame, None, None]:
+        """Stream video frames."""
+        yield from prefetched(self._colour_frames())
 
-        if not ret:
+    def stream_gray_frames(self) -> Generator[VideoFrame, None, None]:
+        """Stream the frames as the grayscale the detector measures.
+
+        The worker carries the resize as well as the decode, which keeps
+        the frames the decoder still owns off the queue and leaves the
+        caller free for the detection.
+        """
+        yield from prefetched(self._gray_frames())
+
+    def _read_frame_shape(self) -> tuple[int, int]:
+        frames = self.source.colour_frames()
+        try:
+            frame = next(frames, None)
+        finally:
+            frames.close()
+
+        if frame is None:
             raise ValueError("Video source yielded no frames.")
 
         height, width = self._resize_frame(frame).shape[:2]
@@ -93,6 +152,20 @@ class VideoStream:
         y2 = int(height * mask_coords[3])
         mask[y1:y2, x1:x2] = 0
         return mask
+
+    def _colour_frames(self) -> Iterator[VideoFrame]:
+        for frame_number, frame in enumerate(self.source.colour_frames()):
+            frame = self._resize_frame(frame)
+            if self.mask is not None:
+                frame = cv2.bitwise_and(frame, frame, mask=self.mask)
+            yield VideoFrame(frame_number=frame_number, frame=frame)
+
+    def _gray_frames(self) -> Iterator[VideoFrame]:
+        for frame_number, gray in enumerate(self.source.gray_frames()):
+            gray = self._resize_frame(gray)
+            if self.mask is not None:
+                gray = cv2.bitwise_and(gray, self.mask)
+            yield VideoFrame(frame_number=frame_number, frame=gray)
 
     def _resize_frame(self, frame: np.ndarray) -> np.ndarray:
         if self.target_height is None:
@@ -112,54 +185,26 @@ class VideoStream:
             interpolation=interpolation,
         )
 
-    def stream_frames(self) -> Generator[VideoFrame, None, None]:
-        """Stream video frames."""
-        yield from prefetched(self._colour_frames(prefetched(self._decoded_frames())))
-
-    def stream_gray_frames(self) -> Generator[VideoFrame, None, None]:
-        """Stream the frames as the grayscale the detector measures.
-
-        Converting before the mask is applied costs a third of what
-        masking three colour channels does, and gives the same pixels,
-        because the conversion is linear and reads black as zero.
-        """
-        yield from prefetched(self._gray_frames(prefetched(self._decoded_frames())))
-
-    def _colour_frames(self, decoded: Iterator[tuple[int, np.ndarray]]) -> Iterator[VideoFrame]:
-        for frame_number, frame in decoded:
-            frame = self._resize_frame(frame)
-            if self.mask is not None:
-                frame = cv2.bitwise_and(frame, frame, mask=self.mask)
-            yield VideoFrame(frame_number=frame_number, frame=frame)
-
-    def _gray_frames(self, decoded: Iterator[tuple[int, np.ndarray]]) -> Iterator[VideoFrame]:
-        for frame_number, frame in decoded:
-            gray = cv2.cvtColor(self._resize_frame(frame), cv2.COLOR_BGR2GRAY)
-            if self.mask is not None:
-                gray = cv2.bitwise_and(gray, self.mask)
-            yield VideoFrame(frame_number=frame_number, frame=gray)
-
-    def _decoded_frames(self) -> Iterator[tuple[int, np.ndarray]]:
-        """The frames as the decoder hands them over, at their own size.
-
-        Resizing stays with the caller so it runs on a thread of its
-        own, which leaves this one doing nothing but decoding.
-        """
-        cap = self.source.open()
-        frame_number = count()
-        try:
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-
-                yield next(frame_number), frame
-        finally:
-            cap.release()
-
 
 def stream_frames_from_file(video_path: Path, *, target_height: int | None = None) -> Generator[VideoFrame, None, None]:
     return VideoStream(FileFrameSource(video_path), target_height=target_height).stream_frames()
+
+
+def luma_plane(frame: av.VideoFrame) -> np.ndarray:
+    """The decoded frame's grayscale, as a view on the decoder's own memory.
+
+    Planar YUV keeps the grayscale in its first plane. Anything else is
+    converted, which costs a frame of its own and is why the cameras'
+    format is the one worth reading directly.
+    """
+    if frame.format.name not in LUMA_FIRST_FORMATS:
+        frame = frame.reformat(format="gray")
+
+    plane = frame.planes[0]
+    rows: np.ndarray = np.frombuffer(plane, dtype=np.uint8, count=plane.line_size * frame.height).reshape(
+        frame.height, plane.line_size
+    )
+    return rows[:, : frame.width]
 
 
 def prefetched(frames: Iterator[Frame]) -> Generator[Frame, None, None]:
@@ -167,8 +212,7 @@ def prefetched(frames: Iterator[Frame]) -> Generator[Frame, None, None]:
 
     Decoding, resizing and colour conversion all release the interpreter
     lock, so the worker keeps the queue filled while the caller works on
-    the frame it already holds. Chaining two of these puts decoding and
-    the work that follows it on separate threads.
+    the frame it already holds.
     """
     pending: queue.Queue[Frame | None] = queue.Queue(maxsize=PREFETCH_DEPTH)
     stop = threading.Event()
