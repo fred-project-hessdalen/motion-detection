@@ -7,6 +7,7 @@ README gives the command that starts it.
 
 from __future__ import annotations
 
+import filecmp
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -46,6 +47,8 @@ SEGMENT_SECONDS = 10.0
 SEGMENT_MARGIN_SECONDS = 3.0
 STATUS_FRAMES = 25
 PHASE_TEXT = {MEASURING: "Measuring up to the segment", DRAWING: "Drawing the segment"}
+PLAYING = "playing"
+"""Session key holding the clip on screen, so a build can leave it there."""
 
 BACKGROUND_DEFAULTS = BackgroundSettings()
 DETECTION_DEFAULTS = DetectionSettings()
@@ -393,46 +396,19 @@ def _live(video: DevelopmentVideo, *, view: _RunView) -> None:
     st.subheader("Live", help=LIVE_HELP)
     details = _probe_cached(video.path)
     segment = _segment_control(video, details=details)
+    stored = _stored_segment(video, view=view, segment=segment)
 
     picture = st.empty()
     status = st.empty()
-    built = _built_segment(video, view=view, details=details, segment=segment, picture=picture, status=status)
-
-    if built.frame_count == 0:
-        picture.empty()
-        status.caption(f"{video.name} ends before the segment starts.")
+    if stored is not None:
+        _play(stored, picture=picture, status=status)
         return
 
-    picture.video(str(built.video), loop=True, autoplay=True, muted=True, width="stretch")
-    status.caption(
-        f"{_count(built.track_count, 'track')} over {built.frame_count} frames, built in {built.build_seconds:.0f} s."
-    )
-
-
-def _built_segment(
-    video: DevelopmentVideo,
-    *,
-    view: _RunView,
-    details: VideoProbe,
-    segment: Segment,
-    picture: DeltaGenerator,
-    status: DeltaGenerator,
-) -> BuiltSegment:
-    stored = load_segment(
-        video.path,
-        settings=view.settings,
-        target_height=view.target_height,
-        panels=view.panels,
-        segment=segment,
-        output_dir=LIVE_DIR,
-    )
-    if stored is not None:
-        return stored
-
-    _show_previous(video, picture=picture)
+    held = _playing()
+    _play_again(picture, clip=held)
     progress = st.progress(0.0)
     try:
-        return build_segment(
+        built = build_segment(
             video.path,
             settings=view.settings,
             target_height=view.target_height,
@@ -445,17 +421,73 @@ def _built_segment(
     finally:
         progress.empty()
 
+    if built.frame_count == 0:
+        picture.empty()
+        status.caption(f"{video.name} ends before the segment starts.")
+        return
+    _play(built, picture=picture, status=status, already_shown=_same_clip(built.video, held))
 
-def _show_previous(video: DevelopmentVideo, *, picture: DeltaGenerator) -> None:
-    """Put the clip built last for this recording back on the page.
 
-    Streamlit names media by a digest of its bytes, so redrawing the
-    clip already on screen leaves the player it is in alone and playback
-    carries on through the build.
+def _play(
+    built: BuiltSegment,
+    *,
+    picture: DeltaGenerator,
+    status: DeltaGenerator,
+    already_shown: bool = False,
+) -> None:
+    """Put a clip in the player and start it, unless it is already there."""
+    if not already_shown:
+        _play_again(picture, clip=built.video)
+    st.session_state[PLAYING] = str(built.video)
+    status.caption(
+        f"{_count(built.track_count, 'track')} over {built.frame_count} frames, built in {built.build_seconds:.0f} s."
+    )
+
+
+def _play_again(picture: DeltaGenerator, *, clip: Path | None) -> None:
+    """Draw a clip into the player, drawing nothing when there is none.
+
+    The player is filled in the same breath as it is made, so the two
+    reach the browser together. A clip drawn exactly as the run before
+    drew it leaves the player untouched and playback carries on through
+    the build. Anything slow in between, or any change to what is asked
+    of the player, takes it down and stops playback for as long as the
+    next clip takes to build.
     """
-    previous = sorted(LIVE_DIR.glob(f"{video.path.stem}__*.mp4"), key=lambda path: path.stat().st_mtime)
-    if previous:
-        picture.video(str(previous[-1]), loop=True, autoplay=True, muted=True, width="stretch")
+    if clip is not None:
+        picture.video(str(clip), loop=True, autoplay=True, muted=True, width="stretch")
+
+
+def _playing() -> Path | None:
+    """The clip on screen, which keeps playing while the next one builds."""
+    shown = st.session_state.get(PLAYING)
+    if shown is None:
+        return None
+    return Path(shown) if Path(shown).is_file() else None
+
+
+def _same_clip(built: Path, held: Path | None) -> bool:
+    """Whether a build came out as the clip the page is already holding.
+
+    Streamlit names a video by a digest of its bytes and refuses to hand
+    the same name out twice in one script run, so a build that lands on
+    the clip being held over must not be drawn a second time. Settings
+    that turn out to make no difference to the drawing do land there.
+    """
+    if held is None or not held.is_file():
+        return False
+    return filecmp.cmp(built, held, shallow=False)
+
+
+def _stored_segment(video: DevelopmentVideo, *, view: _RunView, segment: Segment) -> BuiltSegment | None:
+    return load_segment(
+        video.path,
+        settings=view.settings,
+        target_height=view.target_height,
+        panels=view.panels,
+        segment=segment,
+        output_dir=LIVE_DIR,
+    )
 
 
 def _build_reporter(progress: DeltaGenerator, *, status: DeltaGenerator) -> Callable[[Progress], None]:

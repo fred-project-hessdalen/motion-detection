@@ -104,9 +104,10 @@ def build_segment(
 
     Reporting progress puts the build at the mercy of the caller, which
     is what lets a setting moved while it runs stop it at the frame it
-    has reached. The clip is written under a name of its own and moved
-    onto the one the page plays once the encoder has finished, so a
-    build stopped that way leaves nothing half written behind.
+    has reached. A build stopped that way leaves a part of a clip behind
+    and no record of it, and the record is what a later read looks for,
+    so the part is never taken for a clip and the next build of the same
+    segment writes over it.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     paths = _segment_paths(
@@ -161,7 +162,7 @@ def build_segment(
     started = time.perf_counter()
     frame_count = encode(
         planar_frames(),
-        output=paths.building,
+        output=paths.video,
         width=panel_width,
         height=panel_height * len(names),
         frames_per_second=playback_rate(frames_per_second),
@@ -176,7 +177,6 @@ def build_segment(
     if frame_count == 0:
         return built
 
-    paths.building.replace(paths.video)
     paths.record.write_text(json.dumps(_as_record(built), indent=2))
     return built
 
@@ -252,7 +252,6 @@ def _draw_trails(canvas: np.ndarray, *, trails: dict[int, Trail], frame_number: 
 @dataclass(frozen=True, slots=True)
 class _SegmentPaths:
     video: Path
-    building: Path
     record: Path
 
 
@@ -276,11 +275,7 @@ def _segment_paths(
         modules=MODULES,
     )
     stem = f"{video.stem}__{name}"
-    return _SegmentPaths(
-        video=output_dir / f"{stem}.mp4",
-        building=output_dir / f"{stem}.building.mp4",
-        record=output_dir / f"{stem}.json",
-    )
+    return _SegmentPaths(video=output_dir / f"{stem}.mp4", record=output_dir / f"{stem}.json")
 
 
 def _as_record(built: BuiltSegment) -> dict[str, Any]:
