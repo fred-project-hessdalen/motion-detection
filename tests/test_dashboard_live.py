@@ -3,10 +3,11 @@
 from hessdalen.dashboard.live import Progress, Segment, Trail, extend_trails
 from hessdalen.dashboard.panels import DEVIATION, RECORDING, layout
 from hessdalen.domain.models import DetectedMovement, MovementEvent
+from synthetic import blob_measurement
 
 
 def movement(frame_number: int, track_id: int, x: float) -> DetectedMovement:
-    return DetectedMovement(frame_number=frame_number, track_id=track_id, centroid=(x, 10.0))
+    return DetectedMovement(frame_number=frame_number, track_id=track_id, centroid=(x, 10.0), blob=blob_measurement())
 
 
 def test_frames_without_movement_open_no_trail():

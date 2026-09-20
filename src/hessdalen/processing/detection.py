@@ -15,6 +15,7 @@ from typing import Callable, Protocol
 import cv2
 import numpy as np
 
+from hessdalen.domain.models import BlobMeasurement
 from hessdalen.processing.background import BackgroundModel, BackgroundSettings
 
 Centroid = tuple[float, float]
@@ -34,20 +35,8 @@ SCALE_LADDER = (1.0, 1.25, 1.5625, 1.953125, 2.44140625, 3.0517578125)
 
 @dataclass(frozen=True, slots=True)
 class Detection:
-    """One blob, as the frame it was found in measured it.
-
-    The tracker matches on the pixel count and the peak deviation. The
-    brightness and the axes describe the blob's appearance. A track
-    carries them as a series, and that series is what separates a
-    wingbeat from a meteor's decay.
-    """
-
     centroid: Centroid
-    pixel_count: int
-    peak_deviation: float
-    brightness: float
-    major_axis: float
-    minor_axis: float
+    blob: BlobMeasurement
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,11 +238,13 @@ def blobs_around_peaks(
         found.append(
             Detection(
                 centroid=(float(columns[strongest]), float(rows[strongest])),
-                pixel_count=pixel_count,
-                peak_deviation=float(deviations[strongest]),
-                brightness=float(gray[top : top + height, left : left + width][blob].sum(dtype=np.float64)),
-                major_axis=axes.major,
-                minor_axis=axes.minor,
+                blob=BlobMeasurement(
+                    pixel_count=pixel_count,
+                    peak_deviation=float(deviations[strongest]),
+                    brightness=float(gray[top : top + height, left : left + width][blob].sum(dtype=np.float64)),
+                    major_axis=axes.major,
+                    minor_axis=axes.minor,
+                ),
             )
         )
     return found

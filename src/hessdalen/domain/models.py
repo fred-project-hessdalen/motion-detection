@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -11,15 +12,32 @@ class VideoFrame(pydantic.BaseModel):
     frame: np.ndarray
 
 
+@dataclass(frozen=True, slots=True)
+class BlobMeasurement:
+    """What a frame measured about a blob, beyond where it sat.
+
+    A track carries these as a series over its frames, and that series
+    is what separates a wingbeat from a meteor's decay.
+    """
+
+    pixel_count: int
+    peak_deviation: float
+    brightness: float
+    major_axis: float
+    minor_axis: float
+
+
 class MovementEvent(pydantic.BaseModel):
     frame_number: int
     track_id: int | None = None
     centroid: tuple[float, float] | None
+    blob: BlobMeasurement | None = None
 
 
 class DetectedMovement(MovementEvent):
     track_id: int
     centroid: tuple[float, float]
+    blob: BlobMeasurement
 
 
 class VideoFile(pydantic.BaseModel):

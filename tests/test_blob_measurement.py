@@ -34,9 +34,9 @@ def test_a_blob_is_summed_over_its_own_pixels_alone() -> None:
 
     neighbour, streak = _detections(gray, foreground, seeds=[(10, 20), (11, 11)])
 
-    assert neighbour.brightness == 4.0 * NEIGHBOUR_LEVEL
-    assert streak.brightness == 11.0 * STREAK_LEVEL
-    assert streak.pixel_count == 11
+    assert neighbour.blob.brightness == 4.0 * NEIGHBOUR_LEVEL
+    assert streak.blob.brightness == 11.0 * STREAK_LEVEL
+    assert streak.blob.pixel_count == 11
 
 
 def test_a_blob_carries_the_grey_levels_under_it() -> None:
@@ -45,10 +45,10 @@ def test_a_blob_carries_the_grey_levels_under_it() -> None:
     gray[5:8, 5:8] = STREAK_LEVEL
     foreground[5:8, 5:8] = FOREGROUND
 
-    (blob,) = _detections(gray, foreground, seeds=[(5, 5)])
+    (square,) = _detections(gray, foreground, seeds=[(5, 5)])
 
-    assert blob.brightness == 9.0 * STREAK_LEVEL
-    assert blob.major_axis == pytest.approx(blob.minor_axis)
+    assert square.blob.brightness == 9.0 * STREAK_LEVEL
+    assert square.blob.major_axis == pytest.approx(square.blob.minor_axis)
 
 
 def _detections(gray: np.ndarray, foreground: np.ndarray, *, seeds: list[tuple[int, int]]) -> list[Detection]:

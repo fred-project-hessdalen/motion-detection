@@ -57,14 +57,22 @@ class MovementSettings:
     device: Device
 
 
+@dataclass(frozen=True, slots=True)
+class TrackHit:
+    """One frame of a track, as the detection stage measured it."""
+
+    frame_number: int
+    detection: Detection
+
+
 @dataclass(slots=True)
 class Track:
     track_id: int
-    centroid: Centroid
+    detection: Detection
     consecutive_hits: int = 1
     consecutive_misses: int = 0
     confirmed: bool = False
-    pending: list[tuple[int, Centroid]] = field(default_factory=list)
+    pending: list[TrackHit] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,7 +153,7 @@ class MovementDetector:
         active_confirmed_tracks = [
             track for track in self._tracks.values() if track.confirmed and track.consecutive_misses == 0
         ]
-        centroids = {track.track_id: track.centroid for track in active_confirmed_tracks}
+        centroids = {track.track_id: track.detection.centroid for track in active_confirmed_tracks}
         return FrameAnalysis(events=events, centroids=centroids)
 
     def _to_grayscale(self, frame: np.ndarray) -> np.ndarray:
@@ -224,7 +232,7 @@ class MovementDetector:
         return [
             (dist_sq, track.track_id, detection_index)
             for detection_index, detection in enumerate(detections)
-            if (dist_sq := self._distance_sq(track.centroid, detection.centroid)) <= max_dist_sq
+            if (dist_sq := self._distance_sq(track.detection.centroid, detection.centroid)) <= max_dist_sq
         ]
 
     def _distance_sq(self, a: Centroid, b: Centroid) -> float:
@@ -277,13 +285,13 @@ class MovementDetector:
             self._mark_track_missed(track)
             return []
 
-        centroid = detections[detection_index].centroid
-        distance = float(np.sqrt(self._distance_sq(track.centroid, centroid)))
+        detection = detections[detection_index]
+        distance = float(np.sqrt(self._distance_sq(track.detection.centroid, detection.centroid)))
         if distance < self._min_movement_distance:
             self._mark_track_missed(track)
             return []
 
-        track.centroid = centroid
+        track.detection = detection
         track.consecutive_hits += 1
         track.consecutive_misses = 0
         return self._events_for_track_hit(frame_number=frame_number, track=track)
@@ -291,12 +299,12 @@ class MovementDetector:
     def _events_for_track_hit(self, *, frame_number: int, track: Track) -> list[MovementEvent]:
         if track.confirmed:
             return [
-                self._detected_movement(frame_number=frame_number, track_id=track.track_id, centroid=track.centroid)
+                self._detected_movement(frame_number=frame_number, track_id=track.track_id, detection=track.detection)
             ]
 
         track.pending = [
             *track.pending,
-            (frame_number, track.centroid),
+            TrackHit(frame_number=frame_number, detection=track.detection),
         ]
         if track.consecutive_hits < int(self.settings.tracking.min_consecutive_frames):
             return []
@@ -304,29 +312,30 @@ class MovementDetector:
         if not self._validate_trajectory(track.pending):
             return []
 
-        first_frame, first_centroid = track.pending[0]
-        mergeable_track_id = self._find_mergeable_track(first_centroid, track.track_id)
+        mergeable_track_id = self._find_mergeable_track(track.pending[0].detection.centroid, track.track_id)
         if mergeable_track_id is not None:
             self._merge_track_with_existing(track, mergeable_track_id)
 
         track.confirmed = True
         replay_events: list[MovementEvent] = [
             self._detected_movement(
-                frame_number=int(pending_frame_number), track_id=track.track_id, centroid=pending_centroid
+                frame_number=int(hit.frame_number), track_id=track.track_id, detection=hit.detection
             )
-            for pending_frame_number, pending_centroid in track.pending
+            for hit in track.pending
         ]
         track.pending = []
         return replay_events
 
-    def _detected_movement(self, *, frame_number: int, track_id: int, centroid: Centroid) -> DetectedMovement:
-        return DetectedMovement(frame_number=frame_number, track_id=track_id, centroid=centroid)
+    def _detected_movement(self, *, frame_number: int, track_id: int, detection: Detection) -> DetectedMovement:
+        return DetectedMovement(
+            frame_number=frame_number, track_id=track_id, centroid=detection.centroid, blob=detection.blob
+        )
 
-    def _validate_trajectory(self, pending: list[tuple[int, Centroid]]) -> bool:
+    def _validate_trajectory(self, pending: list[TrackHit]) -> bool:
         if len(pending) < 2:
             return True
 
-        centroids = [centroid for _frame_number, centroid in pending]
+        centroids = [hit.detection.centroid for hit in pending]
         x_coords = [c[0] for c in centroids]
         y_coords = [c[1] for c in centroids]
 
@@ -348,7 +357,7 @@ class MovementDetector:
             if track.consecutive_misses > max_misses_for_merge:
                 return None
 
-            dist_sq = self._distance_sq(track.centroid, first_centroid)
+            dist_sq = self._distance_sq(track.detection.centroid, first_centroid)
             if dist_sq <= max_dist_sq:
                 return track_id
 
@@ -365,23 +374,23 @@ class MovementDetector:
         self._tracks[target_track_id] = track
 
     def _create_track_for_detection(self, *, frame_number: int, detection: Detection) -> list[MovementEvent]:
-        track = self._new_track(centroid=detection.centroid)
+        track = self._new_track(detection=detection)
         self._tracks = {
             **self._tracks,
             track.track_id: track,
         }
         track.pending = [
             *track.pending,
-            (frame_number, track.centroid),
+            TrackHit(frame_number=frame_number, detection=track.detection),
         ]
         if int(self.settings.tracking.min_consecutive_frames) > 1:
             return []
 
         track.confirmed = True
         track.pending = []
-        return [self._detected_movement(frame_number=frame_number, track_id=track.track_id, centroid=track.centroid)]
+        return [self._detected_movement(frame_number=frame_number, track_id=track.track_id, detection=track.detection)]
 
-    def _new_track(self, *, centroid: Centroid) -> Track:
+    def _new_track(self, *, detection: Detection) -> Track:
         track_id = int(self._next_track_id)
         self._next_track_id += 1
-        return Track(track_id=track_id, centroid=centroid, consecutive_hits=1, consecutive_misses=0)
+        return Track(track_id=track_id, detection=detection, consecutive_hits=1, consecutive_misses=0)

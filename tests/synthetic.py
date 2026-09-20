@@ -6,6 +6,13 @@ from typing import Generator
 import cv2
 import numpy as np
 
+from hessdalen.domain.models import BlobMeasurement
+
+
+def blob_measurement() -> BlobMeasurement:
+    """A blob for tests that only care where a track went."""
+    return BlobMeasurement(pixel_count=9, peak_deviation=20.0, brightness=900.0, major_axis=3.0, minor_axis=3.0)
+
 
 class MockFrameSource:
     """Mock frame source for testing."""
