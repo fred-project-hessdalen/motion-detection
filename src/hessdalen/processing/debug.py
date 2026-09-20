@@ -36,6 +36,13 @@ class MovementDebugFrame:
 
 
 class MovementDebugSink(Protocol):
+    wants_frames: bool
+    """Whether emit reads the images on the frame it is given.
+
+    A sink that reads none of them lets the detector skip both the
+    colour frame and the deviation image.
+    """
+
     def emit(self, frame: MovementDebugFrame) -> None: ...
 
     def record_event(self, event: MovementEvent) -> None: ...
@@ -44,6 +51,8 @@ class MovementDebugSink(Protocol):
 
 
 class NullMovementDebugSink:
+    wants_frames = False
+
     def emit(self, frame: MovementDebugFrame) -> None:
         return
 
@@ -58,6 +67,8 @@ NULL_MOVEMENT_DEBUG_SINK = NullMovementDebugSink()
 
 
 class TwoPanelVideoDebugSink:
+    wants_frames = True
+
     def __init__(
         self,
         output_path: str | Path,

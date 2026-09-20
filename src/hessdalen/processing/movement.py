@@ -93,22 +93,29 @@ class MovementDetector:
         previous_debug_sink = self._debug_sink
         self._debug_sink = debug_sink
         try:
-            yield from mapcat(self._process_frame, self.stream.stream_frames())
+            yield from mapcat(self._process_frame, self._frames())
         finally:
             self._debug_sink = previous_debug_sink
+
+    def _frames(self) -> Generator[VideoFrame, None, None]:
+        """Colour frames when the sink draws on them, grayscale otherwise."""
+        if self._debug_sink.wants_frames:
+            return self.stream.stream_frames()
+        return self.stream.stream_gray_frames()
 
     def _process_frame(self, frame: VideoFrame) -> Generator[MovementEvent, None, None]:
         frame_number = int(frame.frame_number)
         analysis = self._analyze_frame(frame_number, frame)
 
-        self._debug_sink.emit(
-            MovementDebugFrame(
-                frame_number=frame_number,
-                filtered=frame.frame,
-                deviation=analysis.deviation,
-                centroids=analysis.centroids,
+        if self._debug_sink.wants_frames:
+            self._debug_sink.emit(
+                MovementDebugFrame(
+                    frame_number=frame_number,
+                    filtered=frame.frame,
+                    deviation=self._deviation_image(analysis.deviation),
+                    centroids=analysis.centroids,
+                )
             )
-        )
 
         if analysis.events:
             yield from analysis.events
@@ -128,10 +135,12 @@ class MovementDetector:
         return FrameAnalysis(
             events=events,
             centroids=centroids,
-            deviation=self._deviation_image(deviation),
+            deviation=deviation,
         )
 
     def _to_grayscale(self, frame: np.ndarray) -> np.ndarray:
+        if frame.ndim == 2:
+            return frame
         return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
     def _deviation_image(self, deviation: np.ndarray) -> np.ndarray:
@@ -141,16 +150,31 @@ class MovementDetector:
         return np.clip(scaled, 0.0, 255.0).astype(np.uint8)
 
     def _extract_detections(self, deviation: np.ndarray) -> list[Detection]:
+        """Report the blob around every pixel that reaches the detection
+        threshold.
+
+        A blob holding no such pixel cannot be reported, so finding the
+        pixels first leaves a handful of blobs to measure out of the
+        hundreds the foreground threshold raises on a textured scene.
+        """
+        peaks = cv2.findNonZero(self._peak_mask(deviation))
+        if peaks is None:
+            return []
+
         foreground = self._foreground_mask(deviation)
         component_count, labels, stats, _centroids = cv2.connectedComponentsWithStats(foreground, connectivity=8)
         return [
             detection
-            for component in range(1, component_count)
-            if (detection := self._component_to_detection(component, labels, stats, deviation)) is not None
+            for component in np.unique(labels[peaks[:, 0, 1], peaks[:, 0, 0]])
+            if 0 < component < component_count
+            and (detection := self._component_to_detection(int(component), labels, stats, deviation)) is not None
         ]
 
+    def _peak_mask(self, deviation: np.ndarray) -> np.ndarray:
+        return _threshold_mask(deviation, self.settings.detection.detection_sigma, cv2.CMP_GE)
+
     def _foreground_mask(self, deviation: np.ndarray) -> np.ndarray:
-        mask: np.ndarray = (deviation > self.settings.detection.foreground_sigma).astype(np.uint8) * 255
+        mask = _threshold_mask(deviation, self.settings.detection.foreground_sigma, cv2.CMP_GT)
         if self.stream.mask is not None:
             mask = cv2.bitwise_and(mask, self.stream.mask)
         if self.settings.detection.close_size <= 1:
@@ -403,3 +427,13 @@ class MovementDetector:
         track_id = int(self._next_track_id)
         self._next_track_id += 1
         return Track(track_id=track_id, centroid=centroid, consecutive_hits=1, consecutive_misses=0)
+
+
+def _threshold_mask(image: np.ndarray, threshold: float, comparison: int) -> np.ndarray:
+    """Pixels standing in the given relation to a threshold, as 0 and 255.
+
+    OpenCV reads the threshold as a scalar, which its type stub does not
+    admit.
+    """
+    mask: np.ndarray = cv2.compare(image, threshold, comparison)  # type: ignore[call-overload]
+    return mask
