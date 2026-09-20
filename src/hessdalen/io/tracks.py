@@ -100,8 +100,9 @@ def provenance(*, frame_height: int, frame_width: int, settings: MovementSetting
     """Everything the detector was told, including the settings no control
     offers, so two runs that differ anywhere can be told apart.
 
-    The frame is measured after resizing, because the rows give positions
-    in its pixels and analysis reads them as ratios of its larger side.
+    The frame is measured after resizing, because the rows give
+    positions in its pixels and analysis reads them as ratios of its
+    larger side.
     """
     return {
         b"hessdalen_frame_height": str(frame_height).encode(),
