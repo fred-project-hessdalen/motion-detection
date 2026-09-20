@@ -33,6 +33,9 @@ dev = [
     "mypy>=1.19.1",
     "ruff>=0.15.0",
 ]
+gpu = [
+    "cupy-cuda12x>=14.2.0",
+]
 test = [
     "pytest>=9.0.2",
     "ruff>=0.15.0",
