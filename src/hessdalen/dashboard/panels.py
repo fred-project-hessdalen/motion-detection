@@ -37,16 +37,22 @@ def box_size(height: int, width: int) -> int:
     return max(MIN_BOX_SIZE, int(BOX_RATIO * max(height, width)))
 
 
-def recording_frames(video: Path, *, target_height: int, wanted: bool) -> Iterator[VideoFrame | None]:
-    """The frames the recording panel draws, or nothing in place of each of
-    them when that panel is not drawn.
+def recording_frames(
+    video: Path,
+    *,
+    target_height: int,
+    wanted: bool,
+    first_frame: int,
+) -> Iterator[VideoFrame | None]:
+    """The frames the recording panel draws from first_frame on, or nothing in
+    place of each of them when that panel is not drawn.
 
     A panel left out opens no decoder of its own, and the caller can
     still step through the recording one frame at a time.
     """
     if not wanted:
         return repeat(None)
-    return masked_stream(video, target_height=target_height).stream_frames()
+    return masked_stream(video, target_height=target_height, first_frame=first_frame).stream_frames()
 
 
 def draw_trail(canvas: np.ndarray, *, polyline: np.ndarray, color: tuple[int, int, int]) -> None:

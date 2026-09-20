@@ -92,16 +92,25 @@ currently in the sidebar plays back without running again. Set
 `HESSDALEN_EXAMPLES_DIR` to list recordings from somewhere other than
 `data/examples`.
 
-The Live switch plays a segment of the selected recording over and over
-while the detector runs on it, and moving any setting starts the segment
-again under the new value. At a frame height of 1080 a segment holds the
-25 frames a second the cameras record at. The frames ahead of the
-segment are measured as well and not drawn, so the tracks and the
-background model stand where a run over the whole recording would leave
-them, and a segment that starts a thousand frames in takes a few seconds
-to reach. The clips start at the event, so they reach it at once.
+The Live switch builds a segment of the selected recording into a short
+clip and loops it in the page, and moving any setting builds the segment
+again under the new value. The clip plays at the rate it was written at,
+which a frame pushed at a time cannot do, because nothing on the far
+side holds those frames to a rate. A clip already built for the settings
+in the sidebar plays at once, so two values can be compared without
+waiting for either again, and the clip built last keeps playing while
+the next one is built.
 
-Rendering the annotated video needs `ffmpeg` with `libx264` on PATH.
+The frames ahead of the segment are measured as well and not drawn, so
+the tracks and the background model stand where a run over the whole
+recording would leave them. At a frame height of 1080 a clip under
+`data/examples/clips` builds in 2 to 5 seconds, and an eight-second
+segment 41 seconds into a recording takes 6 to 10 seconds, most of it
+spent reaching the segment. Built clips are kept under
+`data/out/dashboard/live`, which can be deleted at any time.
+
+A stored run and a live clip are both written through `ffmpeg` with
+`libx264`, which has to be on PATH.
 
 
 ## Development

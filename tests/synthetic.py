@@ -12,6 +12,7 @@ class MockFrameSource:
 
     def __init__(self, frames: list[np.ndarray]):
         self.frames = frames
+        self.first_frame = 0
 
     def colour_frames(self) -> Generator[np.ndarray, None, None]:
         yield from self.frames
@@ -19,6 +20,9 @@ class MockFrameSource:
     def gray_frames(self) -> Generator[np.ndarray, None, None]:
         for frame in self.frames:
             yield cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    def sample_frame(self) -> np.ndarray | None:
+        return self.frames[0] if self.frames else None
 
 
 @dataclass(frozen=True, slots=True)

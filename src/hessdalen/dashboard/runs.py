@@ -8,14 +8,11 @@ earlier result again.
 
 from __future__ import annotations
 
-import hashlib
 import json
-import subprocess
 import time
 from bisect import bisect_right
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import asdict, dataclass
-from functools import cache
 from itertools import repeat
 from pathlib import Path
 from typing import Any
@@ -23,6 +20,7 @@ from typing import Any
 import cv2
 import numpy as np
 
+from hessdalen.dashboard.encoder import STORED, encode, even, playback_rate
 from hessdalen.dashboard.panels import (
     DEVIATION,
     RECORDING,
@@ -34,17 +32,16 @@ from hessdalen.dashboard.panels import (
     layout,
     recording_frames,
 )
+from hessdalen.dashboard.store import digest
 from hessdalen.domain.models import MovementEvent, VideoFrame
 from hessdalen.io.video import masked_stream
 from hessdalen.processing.debug import track_color
 from hessdalen.processing.devices import detection_stage
 from hessdalen.processing.movement import MovementDetector, MovementSettings
 
-FALLBACK_FPS = 25.0
 PHASES = 2
-DETECTOR_PACKAGES = ("domain", "io", "processing")
-DRAWING_MODULES = ("panels.py",)
-ENCODER_PIXEL_FORMAT = "yuv420p"
+MODULES = ("runs.py", "panels.py", "encoder.py")
+"""The dashboard modules that decide what a stored run holds."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,7 +243,7 @@ def _render(
     """
     names = layout(panels)
     height, width = masked_stream(video, target_height=target_height).frame_shape
-    panel_height, panel_width = _even(height), _even(width)
+    panel_height, panel_width = even(height), even(width)
 
     overlays = _overlays(trajectories)
     size = box_size(panel_height, panel_width)
@@ -255,7 +252,7 @@ def _render(
     views = {name: stacked[index * panel_height : (index + 1) * panel_height] for index, name in enumerate(names)}
     planar = np.empty((panel_height * len(names) * 3 // 2, panel_width), dtype=np.uint8)
 
-    colour_frames = recording_frames(video, target_height=target_height, wanted=RECORDING in names)
+    colour_frames = recording_frames(video, target_height=target_height, wanted=RECORDING in names, first_frame=0)
     gray_stream = masked_stream(video, target_height=target_height)
     gray_frames: Iterator[VideoFrame | None] = gray_stream.stream_gray_frames() if DEVIATION in names else repeat(None)
     stage = detection_stage(
@@ -265,18 +262,7 @@ def _render(
         timestamp_mask=gray_stream.mask,
     )
 
-    encoder = _open_encoder(
-        output,
-        width=panel_width,
-        height=panel_height * len(names),
-        frames_per_second=frames_per_second if frames_per_second > 0 else FALLBACK_FPS,
-    )
-    stdin = encoder.stdin
-    if stdin is None:
-        raise RuntimeError("ffmpeg was started without an input pipe.")
-
-    frames_written = 0
-    try:
+    def planar_frames() -> Iterator[np.ndarray]:
         for frame_number, (colour, gray) in enumerate(zip(colour_frames, gray_frames)):
             if colour is not None:
                 np.copyto(views[RECORDING], colour.frame[:panel_height, :panel_width])
@@ -290,25 +276,17 @@ def _render(
             draw_frame_number(views[names[0]], frame_number)
 
             cv2.cvtColor(stacked, cv2.COLOR_BGR2YUV_I420, dst=planar)
-            stdin.write(planar)
-            frames_written += 1
+            yield planar
             on_frame(frame_number)
-    finally:
-        stdin.close()
-        encoder.wait()
 
-    if encoder.returncode != 0:
-        raise RuntimeError(f"ffmpeg exited with status {encoder.returncode}.")
-    return frames_written
-
-
-def _even(size: int) -> int:
-    """The largest even size at or below this one.
-
-    Colour is stored for every second row and column, so a frame with an
-    odd side loses that side's last line.
-    """
-    return size - size % 2
+    return encode(
+        planar_frames(),
+        output=output,
+        width=panel_width,
+        height=panel_height * len(names),
+        frames_per_second=playback_rate(frames_per_second),
+        encoding=STORED,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -341,49 +319,6 @@ def _draw_overlays(canvas: np.ndarray, *, overlays: tuple[_Overlay, ...], frame_
             draw_box(canvas, point=overlay.polyline[reached - 1], color=color, size=size, label=str(overlay.track_id))
 
 
-def _open_encoder(
-    output: Path,
-    *,
-    width: int,
-    height: int,
-    frames_per_second: float,
-) -> subprocess.Popen[bytes]:
-    """Start an ffmpeg process that turns raw planar frames into a video a
-    browser can play.
-
-    Handing the encoder colour frames makes it convert them itself,
-    which costs ten times what OpenCV charges and sends twice the bytes
-    down the pipe.
-    """
-    command = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
-        "-f",
-        "rawvideo",
-        "-pix_fmt",
-        ENCODER_PIXEL_FORMAT,
-        "-s",
-        f"{width}x{height}",
-        "-r",
-        f"{frames_per_second:.6f}",
-        "-i",
-        "-",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
-        "-crf",
-        "26",
-        "-movflags",
-        "+faststart",
-        str(output),
-    ]
-    return subprocess.Popen(command, stdin=subprocess.PIPE)
-
-
 @dataclass(frozen=True, slots=True)
 class _RunPaths:
     video: Path
@@ -398,42 +333,12 @@ def _run_paths(
     panels: Panels,
     output_dir: Path,
 ) -> _RunPaths:
-    digest = _digest(settings=settings, target_height=target_height, panels=panels)
-    stem = f"{video.stem}__{digest}"
-    return _RunPaths(video=output_dir / f"{stem}.mp4", record=output_dir / f"{stem}.json")
-
-
-def _digest(*, settings: MovementSettings, target_height: int, panels: Panels) -> str:
-    payload = json.dumps(
-        {
-            "settings": asdict(settings),
-            "target_height": target_height,
-            "panels": panels,
-            "code": _code_digest(),
-        },
-        sort_keys=True,
+    name = digest(
+        {"settings": asdict(settings), "target_height": target_height, "panels": panels},
+        modules=MODULES,
     )
-    return hashlib.sha1(payload.encode()).hexdigest()[:10]
-
-
-@cache
-def _code_digest() -> str:
-    """Digest of the code that decides what a run holds.
-
-    The dashboard is used while the detector is being changed, so a
-    stored run has to stop matching once its code has been edited. This
-    module and the one that draws the marks are included because they
-    decide what the video shows.
-    """
-    here = Path(__file__).resolve()
-    package = here.parents[1]
-    sources = [source for name in DETECTOR_PACKAGES for source in sorted((package / name).rglob("*.py"))]
-    drawing = [here.parent / name for name in DRAWING_MODULES]
-
-    digest = hashlib.sha1()
-    for source in [*sources, here, *drawing]:
-        digest.update(source.read_bytes())
-    return digest.hexdigest()[:10]
+    stem = f"{video.stem}__{name}"
+    return _RunPaths(video=output_dir / f"{stem}.mp4", record=output_dir / f"{stem}.json")
 
 
 def _as_record(run: DetectionRun) -> dict[str, Any]:

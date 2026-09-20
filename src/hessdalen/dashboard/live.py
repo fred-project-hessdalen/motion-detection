@@ -1,22 +1,30 @@
-"""A detection that hands every frame back as it is drawn.
+"""A segment of a recording, built into a clip with its detections drawn on it.
 
-The dashboard plays a segment of a recording while the detector runs on
-it, so a setting can be moved and its effect watched without waiting for
-a run to finish. The frames ahead of the segment are measured as well
-and not drawn, which leaves the background model where a run over the
-whole recording would leave it.
+The dashboard plays one segment over and over while a setting is being
+found, and builds it again under each new value. A built clip loops in
+the page at the rate it was written at. A frame pushed at a time cannot,
+because nothing on the far side holds it to a rate, so each frame
+arrives when its fetch and its decode happen to finish.
+
+The frames ahead of the segment are measured as well and not drawn,
+which leaves the background model and the tracks where a run over the
+whole recording would leave them. Their colour is only grabbed, because
+only the segment is drawn.
 """
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Any, Literal
 
 import cv2
 import numpy as np
 
+from hessdalen.dashboard.encoder import LIVE, encode, even, playback_rate
 from hessdalen.dashboard.panels import (
     DEVIATION,
     RECORDING,
@@ -28,19 +36,18 @@ from hessdalen.dashboard.panels import (
     layout,
     recording_frames,
 )
+from hessdalen.dashboard.store import digest
 from hessdalen.domain.models import MovementEvent
 from hessdalen.io.video import masked_stream
 from hessdalen.processing.debug import track_color
 from hessdalen.processing.movement import MovementDetector, MovementSettings
 
-DISPLAY_WIDTH = 1460
-"""Widest a frame is sent at.
+MODULES = ("live.py", "panels.py", "encoder.py")
+"""The dashboard modules that decide what a built segment holds."""
 
-Streamlit reopens and re-encodes any image wider than this before it
-sends it, which costs more than the detection of the frame does.
-"""
-
-JPEG_QUALITY = 80
+Phase = Literal["measuring", "drawing"]
+MEASURING: Phase = "measuring"
+DRAWING: Phase = "drawing"
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,12 +57,165 @@ class Segment:
     begin_frame: int
     end_frame: int
 
+    @property
+    def drawn_frames(self) -> int:
+        return self.end_frame - self.begin_frame + 1
+
 
 @dataclass(frozen=True, slots=True)
-class LiveFrame:
+class Progress:
+    """How far a build has got through the phase it is in."""
+
+    phase: Phase
     frame_number: int
-    image: bytes
+    frame_count: int
+
+    @property
+    def fraction(self) -> float:
+        return min(1.0, (self.frame_number + 1) / max(1, self.frame_count))
+
+
+@dataclass(frozen=True, slots=True)
+class BuiltSegment:
+    """A clip a build produced.
+
+    A frame count of zero means the recording ended before the segment
+    started, and no clip was written.
+    """
+
+    video: Path
+    frame_count: int
     track_count: int
+    build_seconds: float
+
+
+def build_segment(
+    video: Path,
+    *,
+    settings: MovementSettings,
+    target_height: int,
+    panels: Panels,
+    segment: Segment,
+    frames_per_second: float,
+    output_dir: Path,
+    on_progress: Callable[[Progress], None],
+) -> BuiltSegment:
+    """Draw the segment of a recording into a clip under output_dir.
+
+    Reporting progress puts the build at the mercy of the caller, which
+    is what lets a setting moved while it runs stop it at the frame it
+    has reached. The clip is written under a name of its own and moved
+    onto the one the page plays once the encoder has finished, so a
+    build stopped that way leaves nothing half written behind.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    paths = _segment_paths(
+        video, settings=settings, target_height=target_height, panels=panels, segment=segment, output_dir=output_dir
+    )
+
+    names = layout(panels)
+    gray_stream = masked_stream(video, target_height=target_height)
+    height, width = gray_stream.frame_shape
+    panel_height, panel_width = even(height), even(width)
+    size = box_size(panel_height, panel_width)
+
+    stacked = np.empty((panel_height * len(names), panel_width, 3), dtype=np.uint8)
+    views = {name: stacked[index * panel_height : (index + 1) * panel_height] for index, name in enumerate(names)}
+    planar = np.empty((panel_height * len(names) * 3 // 2, panel_width), dtype=np.uint8)
+
+    colour_frames = recording_frames(
+        video, target_height=target_height, wanted=RECORDING in names, first_frame=segment.begin_frame
+    )
+    detector = MovementDetector(stream=gray_stream, settings=settings)
+    gray_frames = gray_stream.stream_gray_frames()
+    trails: dict[int, Trail] = {}
+
+    def planar_frames() -> Iterator[np.ndarray]:
+        for frame_number in range(segment.begin_frame):
+            gray = next(gray_frames, None)
+            if gray is None:
+                return
+            extend_trails(trails, detector.process_frame(gray))
+            on_progress(progress_at(frame_number, segment=segment))
+
+        for offset, (colour, gray) in enumerate(zip(colour_frames, gray_frames)):
+            frame_number = segment.begin_frame + offset
+            if frame_number > segment.end_frame:
+                return
+
+            extend_trails(trails, detector.process_frame(gray))
+            if colour is not None:
+                np.copyto(views[RECORDING], colour.frame[:panel_height, :panel_width])
+            if DEVIATION in views:
+                deviation = detector.stage.deviation_image()[:panel_height, :panel_width]
+                cv2.cvtColor(deviation, cv2.COLOR_GRAY2BGR, dst=views[DEVIATION])
+
+            for panel in views.values():
+                _draw_trails(panel, trails=trails, frame_number=frame_number, size=size)
+            draw_frame_number(views[names[0]], frame_number)
+
+            cv2.cvtColor(stacked, cv2.COLOR_BGR2YUV_I420, dst=planar)
+            yield planar
+            on_progress(progress_at(frame_number, segment=segment))
+
+    started = time.perf_counter()
+    frame_count = encode(
+        planar_frames(),
+        output=paths.building,
+        width=panel_width,
+        height=panel_height * len(names),
+        frames_per_second=playback_rate(frames_per_second),
+        encoding=LIVE,
+    )
+    built = BuiltSegment(
+        video=paths.video,
+        frame_count=frame_count,
+        track_count=len(trails),
+        build_seconds=time.perf_counter() - started,
+    )
+    if frame_count == 0:
+        return built
+
+    paths.building.replace(paths.video)
+    paths.record.write_text(json.dumps(_as_record(built), indent=2))
+    return built
+
+
+def load_segment(
+    video: Path,
+    *,
+    settings: MovementSettings,
+    target_height: int,
+    panels: Panels,
+    segment: Segment,
+    output_dir: Path,
+) -> BuiltSegment | None:
+    """The clip built for these settings, or None when there is none."""
+    paths = _segment_paths(
+        video, settings=settings, target_height=target_height, panels=panels, segment=segment, output_dir=output_dir
+    )
+    if not (paths.record.is_file() and paths.video.is_file()):
+        return None
+
+    record = json.loads(paths.record.read_text())
+    return BuiltSegment(
+        video=paths.video,
+        frame_count=int(record["frame_count"]),
+        track_count=int(record["track_count"]),
+        build_seconds=float(record["build_seconds"]),
+    )
+
+
+def progress_at(frame_number: int, *, segment: Segment) -> Progress:
+    """Which phase a frame belongs to, and how far into that phase it
+    stands."""
+    if frame_number < segment.begin_frame:
+        return Progress(phase=MEASURING, frame_number=frame_number, frame_count=segment.begin_frame)
+    return Progress(
+        phase=DRAWING,
+        frame_number=frame_number - segment.begin_frame,
+        frame_count=segment.drawn_frames,
+    )
 
 
 @dataclass(slots=True)
@@ -81,64 +241,6 @@ def extend_trails(trails: dict[int, Trail], events: Iterable[MovementEvent]) -> 
         trail.last_frame = max(trail.last_frame, event.frame_number)
 
 
-def live_frames(
-    video: Path,
-    *,
-    settings: MovementSettings,
-    target_height: int,
-    panels: Panels,
-    segment: Segment,
-    frames_per_second: float,
-    on_lead_in: Callable[[int], None],
-) -> Iterator[LiveFrame]:
-    """Detect movement in a recording and yield the drawn frames of the
-    segment.
-
-    Every frame is yielded as a JPEG, so the caller only has to put it
-    on the page. The pace is held to the rate the recording was taken
-    at, measured after the caller has drawn the frame, and a caller that
-    cannot keep up sets the pace itself.
-    """
-    names = layout(panels)
-    gray_stream = masked_stream(video, target_height=target_height)
-    height, width = gray_stream.frame_shape
-    size = box_size(height, width)
-
-    stacked = np.empty((height * len(names), width, 3), dtype=np.uint8)
-    views = {name: stacked[index * height : (index + 1) * height] for index, name in enumerate(names)}
-
-    colour_frames = recording_frames(video, target_height=target_height, wanted=RECORDING in names)
-    detector = MovementDetector(stream=gray_stream, settings=settings)
-    gray_frames = gray_stream.stream_gray_frames()
-
-    trails: dict[int, Trail] = {}
-    interval = 1.0 / frames_per_second if frames_per_second > 0 else 0.0
-    deadline = time.perf_counter()
-
-    for frame_number, (colour, gray) in enumerate(zip(colour_frames, gray_frames)):
-        if frame_number > segment.end_frame:
-            return
-
-        extend_trails(trails, detector.process_frame(gray))
-        if frame_number < segment.begin_frame:
-            on_lead_in(frame_number)
-            continue
-
-        if colour is not None:
-            np.copyto(views[RECORDING], colour.frame)
-        if DEVIATION in views:
-            cv2.cvtColor(detector.stage.deviation_image(), cv2.COLOR_GRAY2BGR, dst=views[DEVIATION])
-
-        for panel in views.values():
-            _draw_trails(panel, trails=trails, frame_number=frame_number, size=size)
-        draw_frame_number(views[names[0]], frame_number)
-
-        yield LiveFrame(frame_number=frame_number, image=_encode(stacked), track_count=len(trails))
-
-        deadline = max(deadline + interval, time.perf_counter())
-        time.sleep(max(0.0, deadline - time.perf_counter()))
-
-
 def _draw_trails(canvas: np.ndarray, *, trails: dict[int, Trail], frame_number: int, size: int) -> None:
     for track_id, trail in trails.items():
         color = track_color(track_id)
@@ -147,17 +249,43 @@ def _draw_trails(canvas: np.ndarray, *, trails: dict[int, Trail], frame_number: 
             draw_box(canvas, point=np.array(trail.points[-1]), color=color, size=size, label=str(track_id))
 
 
-def _encode(canvas: np.ndarray) -> bytes:
-    ok, buffer = cv2.imencode(".jpg", _fitted(canvas), (cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY))
-    if not ok:
-        raise RuntimeError("OpenCV could not encode a live frame as JPEG.")
-    return buffer.tobytes()
+@dataclass(frozen=True, slots=True)
+class _SegmentPaths:
+    video: Path
+    building: Path
+    record: Path
 
 
-def _fitted(canvas: np.ndarray) -> np.ndarray:
-    height, width = canvas.shape[:2]
-    if width <= DISPLAY_WIDTH:
-        return canvas
+def _segment_paths(
+    video: Path,
+    *,
+    settings: MovementSettings,
+    target_height: int,
+    panels: Panels,
+    segment: Segment,
+    output_dir: Path,
+) -> _SegmentPaths:
+    name = digest(
+        {
+            "settings": asdict(settings),
+            "target_height": target_height,
+            "panels": panels,
+            "begin_frame": segment.begin_frame,
+            "end_frame": segment.end_frame,
+        },
+        modules=MODULES,
+    )
+    stem = f"{video.stem}__{name}"
+    return _SegmentPaths(
+        video=output_dir / f"{stem}.mp4",
+        building=output_dir / f"{stem}.building.mp4",
+        record=output_dir / f"{stem}.json",
+    )
 
-    scale = DISPLAY_WIDTH / width
-    return cv2.resize(canvas, (DISPLAY_WIDTH, max(1, round(height * scale))), interpolation=cv2.INTER_AREA)
+
+def _as_record(built: BuiltSegment) -> dict[str, Any]:
+    return {
+        "frame_count": built.frame_count,
+        "track_count": built.track_count,
+        "build_seconds": built.build_seconds,
+    }

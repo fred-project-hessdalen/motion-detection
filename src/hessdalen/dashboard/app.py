@@ -8,7 +8,6 @@ README gives the command that starts it.
 from __future__ import annotations
 
 import os
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,10 +18,10 @@ from streamlit.delta_generator import DeltaGenerator
 from streamlit.typing import DataframeState
 
 from hessdalen.dashboard.catalog import DevelopmentVideo, Label, development_videos
-from hessdalen.dashboard.live import Segment, live_frames
+from hessdalen.dashboard.encoder import playback_rate
+from hessdalen.dashboard.live import DRAWING, MEASURING, BuiltSegment, Progress, Segment, build_segment, load_segment
 from hessdalen.dashboard.panels import PANEL_CHOICES, Panels
 from hessdalen.dashboard.runs import (
-    FALLBACK_FPS,
     DetectionRun,
     VideoProbe,
     load_run,
@@ -39,12 +38,14 @@ from hessdalen.processing.movement import (
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 OUTPUT_DIR = REPO_ROOT / "data" / "out" / "dashboard"
+LIVE_DIR = OUTPUT_DIR / "live"
 EXAMPLES_DIR_VARIABLE = "HESSDALEN_EXAMPLES_DIR"
 FRAME_HEIGHTS = (270, 540, 720, 1080, 1440, 2160)
 SEGMENT_STEP = 0.5
 SEGMENT_SECONDS = 10.0
 SEGMENT_MARGIN_SECONDS = 3.0
 STATUS_FRAMES = 25
+PHASE_TEXT = {MEASURING: "Measuring up to the segment", DRAWING: "Drawing the segment"}
 
 BACKGROUND_DEFAULTS = BackgroundSettings()
 DETECTION_DEFAULTS = DetectionSettings()
@@ -59,14 +60,17 @@ PLAYBACK_HELP = (
 )
 TRACKS_HELP = "One row per track the detector confirmed, in the order the tracks were opened."
 LIVE_HELP = (
-    "Play the selected recording while the detector runs on it, over and over. "
-    "Moving a setting starts the segment again under the new value, so its effect is on screen while it is being "
-    "found. Nothing is stored, and the recording still has to be run to be played back with its tracks."
+    "Build a segment of the selected recording into a clip and loop it. "
+    "Moving a setting builds the segment again under the new value, so its effect can be watched while it is being "
+    "found, and the clip built last keeps playing while the next one is built. "
+    "A clip already built for the settings in the sidebar is played straight away, so two values can be compared "
+    "without waiting for either again. "
+    "The whole recording still has to be run to be played back with its tracks."
 )
 SEGMENT_HELP = (
-    "The stretch of the recording the live view draws. "
+    "The stretch of the recording the clip holds. "
     "The frames ahead of it are measured as well and not drawn, so a track and a background model stand where a run "
-    "over the whole recording would leave them, and a segment that starts late takes a moment to reach. "
+    "over the whole recording would leave them, and a segment that starts late takes longer to build. "
     "A background model needs about a hundred frames to settle, so a segment at the very start of a recording reads "
     "high until it has."
 )
@@ -377,13 +381,14 @@ def _label_text(labels: tuple[Label, ...]) -> str:
 
 
 def _live(video: DevelopmentVideo, *, view: _RunView) -> None:
-    """Play the segment over and over until a setting is moved.
+    """Show the segment built for the settings in the sidebar, building it
+    first when it has not been built before.
 
-    Every frame drawn onto the page is a point at which Streamlit hands
-    a waiting change to the script, so a change stops the pass at the
-    frame it has reached and the next script run plays the segment under
-    the new value. Holding the passes in one script run keeps the frame
-    last drawn on the page while the next pass reaches its first one.
+    The clip built last keeps looping in the page while the next one is
+    built, because the browser plays it without the script's help.
+    Reporting progress is also what lets a setting moved during a build
+    stop it, since every mark on the page is a point at which Streamlit
+    hands the script a waiting change.
     """
     st.subheader("Live", help=LIVE_HELP)
     details = _probe_cached(video.path)
@@ -391,12 +396,20 @@ def _live(video: DevelopmentVideo, *, view: _RunView) -> None:
 
     picture = st.empty()
     status = st.empty()
-    while _play(video, view=view, details=details, segment=segment, picture=picture, status=status):
-        continue
-    status.caption(f"{video.name} ends before the segment starts.")
+    built = _built_segment(video, view=view, details=details, segment=segment, picture=picture, status=status)
+
+    if built.frame_count == 0:
+        picture.empty()
+        status.caption(f"{video.name} ends before the segment starts.")
+        return
+
+    picture.video(str(built.video), loop=True, autoplay=True, muted=True, width="stretch")
+    status.caption(
+        f"{_count(built.track_count, 'track')} over {built.frame_count} frames, built in {built.build_seconds:.0f} s."
+    )
 
 
-def _play(
+def _built_segment(
     video: DevelopmentVideo,
     *,
     view: _RunView,
@@ -404,33 +417,58 @@ def _play(
     segment: Segment,
     picture: DeltaGenerator,
     status: DeltaGenerator,
-) -> bool:
-    """Play the segment once, and report whether it holds any frames."""
-    drawn = 0
-    marked = 0.0
-    for frame in live_frames(
+) -> BuiltSegment:
+    stored = load_segment(
         video.path,
         settings=view.settings,
         target_height=view.target_height,
         panels=view.panels,
         segment=segment,
-        frames_per_second=details.frames_per_second,
-        on_lead_in=_lead_in_reporter(status, segment=segment),
-    ):
-        picture.image(frame.image, width="stretch")
-        if drawn == 0:
-            marked = time.perf_counter()
-        drawn += 1
+        output_dir=LIVE_DIR,
+    )
+    if stored is not None:
+        return stored
 
-        if drawn % STATUS_FRAMES == 0:
-            now = time.perf_counter()
-            status.caption(f"{_count(frame.track_count, 'track')} at {STATUS_FRAMES / (now - marked):.0f} fps.")
-            marked = now
-    return drawn > 0
+    _show_previous(video, picture=picture)
+    progress = st.progress(0.0)
+    try:
+        return build_segment(
+            video.path,
+            settings=view.settings,
+            target_height=view.target_height,
+            panels=view.panels,
+            segment=segment,
+            frames_per_second=details.frames_per_second,
+            output_dir=LIVE_DIR,
+            on_progress=_build_reporter(progress, status=status),
+        )
+    finally:
+        progress.empty()
+
+
+def _show_previous(video: DevelopmentVideo, *, picture: DeltaGenerator) -> None:
+    """Put the clip built last for this recording back on the page.
+
+    Streamlit names media by a digest of its bytes, so redrawing the
+    clip already on screen leaves the player it is in alone and playback
+    carries on through the build.
+    """
+    previous = sorted(LIVE_DIR.glob(f"{video.path.stem}__*.mp4"), key=lambda path: path.stat().st_mtime)
+    if previous:
+        picture.video(str(previous[-1]), loop=True, autoplay=True, muted=True, width="stretch")
+
+
+def _build_reporter(progress: DeltaGenerator, *, status: DeltaGenerator) -> Callable[[Progress], None]:
+    def report(point: Progress) -> None:
+        progress.progress(point.fraction, text=PHASE_TEXT[point.phase])
+        if point.frame_number % STATUS_FRAMES == 0:
+            status.caption(f"Frame {point.frame_number} of {point.frame_count}.")
+
+    return report
 
 
 def _segment_control(video: DevelopmentVideo, *, details: VideoProbe) -> Segment:
-    rate = details.frames_per_second if details.frames_per_second > 0 else FALLBACK_FPS
+    rate = playback_rate(details.frames_per_second)
     duration = max(round(details.frame_count / rate, 1), SEGMENT_STEP)
     begin, end = st.slider(
         "Segment",
@@ -452,14 +490,6 @@ def _default_segment(labels: tuple[Label, ...], *, duration: float) -> tuple[flo
     begin = max(0.0, min(label.begin_s for label in labels) - SEGMENT_MARGIN_SECONDS)
     end = min(duration, max(label.end_s for label in labels) + SEGMENT_MARGIN_SECONDS)
     return begin, end
-
-
-def _lead_in_reporter(status: DeltaGenerator, *, segment: Segment) -> Callable[[int], None]:
-    def report(frame_number: int) -> None:
-        if frame_number % STATUS_FRAMES == 0:
-            status.caption(f"Measuring up to the segment, frame {frame_number} of {segment.begin_frame}.")
-
-    return report
 
 
 def _playback(video: DevelopmentVideo, *, view: _RunView) -> None:

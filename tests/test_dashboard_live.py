@@ -1,6 +1,6 @@
-"""Test what the live view draws from the events of one frame at a time."""
+"""Test what the live view draws and how far along it reports a build to be."""
 
-from hessdalen.dashboard.live import Trail, extend_trails
+from hessdalen.dashboard.live import DRAWING, MEASURING, Segment, Trail, extend_trails, progress_at
 from hessdalen.dashboard.panels import DEVIATION, RECORDING, layout
 from hessdalen.domain.models import DetectedMovement, MovementEvent
 
@@ -51,3 +51,30 @@ def test_one_panel_is_stacked_alone_and_both_are_stacked_in_order():
     assert layout("recording") == (RECORDING,)
     assert layout("deviation") == (DEVIATION,)
     assert layout("both") == (RECORDING, DEVIATION)
+
+
+def test_a_frame_ahead_of_the_segment_counts_towards_reaching_it():
+    point = progress_at(200, segment=Segment(begin_frame=500, end_frame=600))
+
+    assert point.phase == MEASURING
+    assert (point.frame_number, point.frame_count) == (200, 500)
+
+
+def test_the_first_frame_of_the_segment_opens_the_drawing_phase():
+    point = progress_at(500, segment=Segment(begin_frame=500, end_frame=600))
+
+    assert point.phase == DRAWING
+    assert (point.frame_number, point.frame_count) == (0, 101)
+
+
+def test_the_last_frame_of_the_segment_fills_the_bar():
+    point = progress_at(600, segment=Segment(begin_frame=500, end_frame=600))
+
+    assert point.fraction == 1.0
+
+
+def test_a_segment_at_the_start_of_a_recording_has_nothing_to_reach():
+    point = progress_at(0, segment=Segment(begin_frame=0, end_frame=100))
+
+    assert point.phase == DRAWING
+    assert point.fraction > 0.0

@@ -38,6 +38,9 @@ class FrameRegion:
 class FrameSource(Protocol):
     """Protocol for frame sources."""
 
+    first_frame: int
+    """Number the first frame this source yields carries."""
+
     def colour_frames(self) -> Generator[np.ndarray, None, None]:
         """The frames in colour, at the size they were recorded."""
         ...
@@ -50,16 +53,35 @@ class FrameSource(Protocol):
         """
         ...
 
+    def sample_frame(self) -> np.ndarray | None:
+        """One frame in colour, for measuring the shape of the rest.
+
+        A source starting in the middle of a recording answers this from
+        the beginning of it, so asking costs nothing beyond one frame.
+        """
+        ...
+
 
 class FileFrameSource:
-    """Frame source from video file."""
+    """Frame source from video file, starting at a given frame.
 
-    def __init__(self, video_path: Path):
+    Reaching a frame in the middle of a recording means decoding every
+    frame before it, because neither decoder seeks to the frame a linear
+    decode calls by that number on the cameras' files. A colour frame
+    passed by this way is only grabbed, which decodes it without
+    building a colour image out of it.
+    """
+
+    def __init__(self, video_path: Path, first_frame: int = 0):
         self.video_file = VideoFile(path=video_path)
+        self.first_frame = first_frame
 
     def colour_frames(self) -> Generator[np.ndarray, None, None]:
         capture = cv2.VideoCapture(str(self.video_file.path))
         try:
+            for _ in range(self.first_frame):
+                if not capture.grab():
+                    return
             while True:
                 ret, frame = capture.read()
                 if not ret:
@@ -78,10 +100,19 @@ class FileFrameSource:
         container = av.open(str(self.video_file.path))
         container.streams.video[0].thread_type = "AUTO"
         try:
-            for frame in container.decode(video=0):
-                yield luma_plane(frame)
+            for index, frame in enumerate(container.decode(video=0)):
+                if index >= self.first_frame:
+                    yield luma_plane(frame)
         finally:
             container.close()
+
+    def sample_frame(self) -> np.ndarray | None:
+        capture = cv2.VideoCapture(str(self.video_file.path))
+        try:
+            ret, frame = capture.read()
+            return frame if ret else None
+        finally:
+            capture.release()
 
 
 class CameraFrameSource:
@@ -89,6 +120,7 @@ class CameraFrameSource:
 
     def __init__(self, camera_index: int = 0):
         self.camera_index = camera_index
+        self.first_frame = 0
 
     def colour_frames(self) -> Generator[np.ndarray, None, None]:
         capture = cv2.VideoCapture(self.camera_index)
@@ -104,6 +136,9 @@ class CameraFrameSource:
     def gray_frames(self) -> Generator[np.ndarray, None, None]:
         for frame in self.colour_frames():
             yield cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    def sample_frame(self) -> np.ndarray | None:
+        return next(self.colour_frames(), None)
 
 
 class VideoStream:
@@ -133,8 +168,14 @@ class VideoStream:
         return self._frame_shape
 
     def stream_frames(self) -> Generator[VideoFrame, None, None]:
-        """Stream video frames."""
-        yield from prefetched(self._colour_frames())
+        """Stream video frames.
+
+        The worker is running by the time this returns, so a caller with
+        other work to do first has the decode done while it does it.
+        Yielding here instead would hold the worker back until the first
+        frame was asked for.
+        """
+        return prefetched(self._colour_frames())
 
     def stream_gray_frames(self) -> Generator[VideoFrame, None, None]:
         """Stream the frames as the grayscale the detector measures.
@@ -143,15 +184,10 @@ class VideoStream:
         the frames the decoder still owns off the queue and leaves the
         caller free for the detection.
         """
-        yield from prefetched(self._gray_frames())
+        return prefetched(self._gray_frames())
 
     def _read_frame_shape(self) -> tuple[int, int]:
-        frames = self.source.colour_frames()
-        try:
-            frame = next(frames, None)
-        finally:
-            frames.close()
-
+        frame = self.source.sample_frame()
         if frame is None:
             raise ValueError("Video source yielded no frames.")
 
@@ -174,7 +210,7 @@ class VideoStream:
         return mask
 
     def _colour_frames(self) -> Iterator[VideoFrame]:
-        for frame_number, frame in enumerate(self.source.colour_frames()):
+        for frame_number, frame in enumerate(self.source.colour_frames(), start=self.source.first_frame):
             frame = self._resize_frame(frame)
             if self.timestamp_corner is not None:
                 self.timestamp_corner.blank(frame)
@@ -187,7 +223,7 @@ class VideoStream:
         the decoder still owns, so a frame the resize passed through
         untouched is copied first.
         """
-        for frame_number, gray in enumerate(self.source.gray_frames()):
+        for frame_number, gray in enumerate(self.source.gray_frames(), start=self.source.first_frame):
             prepared = self._resize_frame(gray)
             if prepared is gray:
                 prepared = gray.copy()
@@ -218,10 +254,18 @@ def stream_frames_from_file(video_path: Path, *, target_height: int | None = Non
     return VideoStream(FileFrameSource(video_path), target_height=target_height).stream_frames()
 
 
-def masked_stream(video_path: Path, *, target_height: int) -> VideoStream:
+def masked_stream(video_path: Path, *, target_height: int, first_frame: int = 0) -> VideoStream:
     """A recording as the detector reads it, with the timestamp corner blanked
-    out."""
-    return VideoStream(FileFrameSource(video_path), mask_coords=TIMESTAMP_MASK_COORDS, target_height=target_height)
+    out.
+
+    The detector itself has to read from the start, because the
+    background it measures against is what those frames build.
+    """
+    return VideoStream(
+        FileFrameSource(video_path, first_frame=first_frame),
+        mask_coords=TIMESTAMP_MASK_COORDS,
+        target_height=target_height,
+    )
 
 
 def luma_plane(frame: av.VideoFrame) -> np.ndarray:
@@ -246,7 +290,10 @@ def prefetched(frames: Iterator[Frame]) -> Generator[Frame, None, None]:
 
     Decoding, resizing and colour conversion all release the interpreter
     lock, so the worker keeps the queue filled while the caller works on
-    the frame it already holds.
+    the frame it already holds. The worker starts here rather than at
+    the first frame pulled, so a caller that has other work to do first
+    gets that decoding done underneath it. A stream that is created and
+    then never iterated leaves the worker holding its prefetch.
     """
     pending: queue.Queue[Frame | None] = queue.Queue(maxsize=PREFETCH_DEPTH)
     stop = threading.Event()
@@ -260,16 +307,20 @@ def prefetched(frames: Iterator[Frame]) -> Generator[Frame, None, None]:
 
     worker = threading.Thread(target=produce, daemon=True)
     worker.start()
-    try:
-        while True:
-            frame = pending.get()
-            if frame is None:
-                return
-            yield frame
-    finally:
-        stop.set()
-        while worker.is_alive():
-            try:
-                pending.get(timeout=0.1)
-            except queue.Empty:
-                continue
+
+    def consume() -> Generator[Frame, None, None]:
+        try:
+            while True:
+                frame = pending.get()
+                if frame is None:
+                    return
+                yield frame
+        finally:
+            stop.set()
+            while worker.is_alive():
+                try:
+                    pending.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+
+    return consume()
