@@ -5,7 +5,8 @@ objects and follows them across frames. The open question is how to sort
 the resulting trajectories into recurring classes and flag the ones no
 class explains.
 
-Nothing here is implemented.
+The per-track record and the writer that stores it are built. Everything
+from the recurrence prior onwards is still a design.
 
 
 ## Corpus
@@ -29,13 +30,10 @@ downstream.
 Decide the fields before extraction. Re-running over hundreds of hours
 to add one is the expensive mistake.
 
-Each track holds a per-frame record:
-
-- centroid position
-- peak deviation
-- summed blob intensity
-- blob pixel count
-- blob eccentricity or major and minor axis
+`hessdalen.io.tracks` writes one row per frame of every track, with the
+centroid, the peak deviation, the blob's pixel count, its summed grey
+levels and the major and minor axis of the ellipse with its second
+moments. `scripts/dev/extract_tracks.py` writes one file per recording.
 
 Position alone is not enough for either route below. The photometric
 channel is likely the stronger discriminator: a meteor shows a single
@@ -48,9 +46,11 @@ periodically, a satellite is near-flat with slow variation.
 Every trajectory is a product of the analytical detector and the
 settings it ran under, which live in `config/detector.toml`. Any model
 trained on the corpus learns the detector as much as it learns the sky.
-Store the settings with each extracted track. A settings change then
-leaves two populations that can be told apart, and a model can be
-trained on either one alone.
+
+A track file carries the frame height and the whole settings tree in its
+metadata, including the values no dashboard control offers, so two runs
+that differ anywhere can be told apart and a model can be trained on
+either population alone.
 
 
 ## Clutter and recurrence
