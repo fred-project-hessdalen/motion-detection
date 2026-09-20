@@ -5,8 +5,9 @@ objects and follows them across frames. The open question is how to sort
 the resulting trajectories into recurring classes and flag the ones no
 class explains.
 
-The per-track record and the writer that stores it are built. Everything
-from the recurrence prior onwards is still a design.
+The per-track record, the writer that stores it and the fixed-length
+descriptor are built. The recurrence prior, the clustering and both
+anomaly rankings are still a design.
 
 
 ## Corpus
@@ -82,26 +83,37 @@ cluster in that space. Comparability is solved by construction and every
 axis is readable, which matters when the output has to be defended to a
 domain expert.
 
-Grouped by what they separate:
+`hessdalen.analysis.descriptors` builds 27 of them per track, and
+`scripts/dev/describe_tracks.py` writes one row per track for a
+directory of track files. Grouped by what they separate:
 
-- Kinematics: duration, path length, net displacement, straightness
-  ratio, speed mean and maximum and standard deviation, acceleration
-  mean and standard deviation. All in frame-relative units, as the
-  tracker's distances already are.
-- Shape: turning-angle distribution (mean absolute turn, maximum turn,
-  sinuosity), curvature, residual of a straight-line fit, residual of a
-  constant-acceleration fit.
-- Frame geometry: entry and exit edge, or appearance in mid-frame, and
-  the elevation band. A track that crosses the frame and a track that
-  appears and vanishes inside it are different populations.
-- Photometry: peak deviation, light-curve shape, rise and fall
-  asymmetry, and the power spectrum of the brightness series.
-- Model-fit residuals: fit constant velocity, constant acceleration, a
-  low-order polynomial, and a correlated random walk. The residual
-  vector is the descriptor, and "no model in the library explains it" is
-  an anomaly criterion that can be stated in words.
+- Kinematics: frames held, frames missed, path length, net
+  displacement, straightness, and the mean, maximum and spread of
+  speed. All as ratios of the frame's larger side, as the tracker's
+  distances already are.
+- Shape: mean and largest heading change, the residual of a
+  straight-line fit, and the residuals of a steady-heading and a
+  steady-acceleration fit.
+- Frame geometry: how far the first and last point sit from the nearest
+  frame edge, and the elevation band. A track that crosses the frame
+  and a track that appears and vanishes inside it are different
+  populations.
+- Photometry: peak deviation, area and its swing, elongation, summed
+  brightness and its swing, and the strength and rate of any rhythm in
+  the brightness.
 
 Standardise per camera, or the first principal axis is the site.
+
+Two of these needed care, and both were found by running the
+descriptors over the example recordings. A meteor's single rise and
+decay is one narrow lobe at the low end of the spectrum and holds over
+half the power in its strongest bin, so a rhythm is only counted when
+it completes at least three cycles within the track. A heading measured
+across half a pixel says nothing, so heading changes are weighed by how
+far the track moved to make them.
+
+Still missing from the list: a correlated random walk in the model
+library, and the rise and fall asymmetry of the light curve.
 
 ### Elastic distance measures
 
