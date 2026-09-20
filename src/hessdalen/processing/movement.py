@@ -8,29 +8,23 @@ from funcy import lmapcat, mapcat, first
 
 from hessdalen.io.video import VideoStream
 from hessdalen.domain.models import DetectedMovement, MovementEvent, VideoFrame
-from hessdalen.processing.background import BackgroundModel, BackgroundSettings
+from hessdalen.processing.background import BackgroundSettings
 from hessdalen.processing.debug import (
     MovementDebugFrame,
     MovementDebugSink,
     NULL_MOVEMENT_DEBUG_SINK,
 )
+from hessdalen.processing.detection import Centroid, Detection, DetectionSettings
+from hessdalen.processing.devices import Device, detection_stage
 
-Centroid = tuple[float, float]
-
-
-@dataclass(frozen=True, slots=True)
-class Detection:
-    centroid: Centroid
-    pixel_count: int
-    peak_deviation: float
-
-
-@dataclass(frozen=True, slots=True)
-class DetectionSettings:
-    foreground_sigma: float = 5.0
-    detection_sigma: float = 15.0
-    min_pixels: int = 3
-    close_size: int = 5
+__all__ = [
+    "Centroid",
+    "Detection",
+    "DetectionSettings",
+    "MovementDetector",
+    "MovementSettings",
+    "TrackingSettings",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +41,7 @@ class MovementSettings:
     background: BackgroundSettings = field(default_factory=BackgroundSettings)
     detection: DetectionSettings = field(default_factory=DetectionSettings)
     tracking: TrackingSettings = field(default_factory=TrackingSettings)
+    device: Device = "auto"
 
 
 @dataclass(slots=True)
@@ -63,14 +58,18 @@ class Track:
 class FrameAnalysis:
     events: list[MovementEvent]
     centroids: dict[int, Centroid]
-    deviation: np.ndarray
 
 
 class MovementDetector:
     def __init__(self, stream: VideoStream, settings: MovementSettings):
         self.stream = stream
         self.settings = settings
-        self.background = BackgroundModel(settings.background)
+        self.stage = detection_stage(
+            device=settings.device,
+            background=settings.background,
+            detection=settings.detection,
+            timestamp_mask=stream.mask,
+        )
 
         height, width = stream.frame_shape
         frame_max_dimension = float(max(height, width))
@@ -78,9 +77,6 @@ class MovementDetector:
         self._max_movement_distance = tracking.max_movement_ratio * frame_max_dimension
         self._min_movement_distance = tracking.min_movement_ratio * frame_max_dimension
         self._min_trajectory_span = tracking.min_trajectory_span_ratio * frame_max_dimension
-
-        close_size = settings.detection.close_size
-        self._close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_size, close_size))
 
         self._tracks: dict[int, Track] = {}
         self._next_track_id: int = 1
@@ -112,7 +108,7 @@ class MovementDetector:
                 MovementDebugFrame(
                     frame_number=frame_number,
                     filtered=frame.frame,
-                    deviation=self._deviation_image(analysis.deviation),
+                    deviation=self.stage.deviation_image(),
                     centroids=analysis.centroids,
                 )
             )
@@ -125,86 +121,18 @@ class MovementDetector:
 
     def _analyze_frame(self, frame_number: int, frame: VideoFrame) -> FrameAnalysis:
         gray = self._to_grayscale(frame.frame)
-        deviation = self.background.deviation(gray)
-        events = self._update_tracks(frame_number, self._extract_detections(deviation))
+        events = self._update_tracks(frame_number, self.stage.detections(gray))
 
         active_confirmed_tracks = [
             track for track in self._tracks.values() if track.confirmed and track.consecutive_misses == 0
         ]
         centroids = {track.track_id: track.centroid for track in active_confirmed_tracks}
-        return FrameAnalysis(
-            events=events,
-            centroids=centroids,
-            deviation=deviation,
-        )
+        return FrameAnalysis(events=events, centroids=centroids)
 
     def _to_grayscale(self, frame: np.ndarray) -> np.ndarray:
         if frame.ndim == 2:
             return frame
         return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-    def _deviation_image(self, deviation: np.ndarray) -> np.ndarray:
-        """Scale the deviation for the debug video, with the detection
-        threshold at full white."""
-        scaled = deviation * (255.0 / self.settings.detection.detection_sigma)
-        return np.clip(scaled, 0.0, 255.0).astype(np.uint8)
-
-    def _extract_detections(self, deviation: np.ndarray) -> list[Detection]:
-        """Report the blob around every pixel that reaches the detection
-        threshold.
-
-        A blob holding no such pixel cannot be reported, so finding the
-        pixels first leaves a handful of blobs to measure out of the
-        hundreds the foreground threshold raises on a textured scene.
-        """
-        peaks = cv2.findNonZero(self._peak_mask(deviation))
-        if peaks is None:
-            return []
-
-        foreground = self._foreground_mask(deviation)
-        component_count, labels, stats, _centroids = cv2.connectedComponentsWithStats(foreground, connectivity=8)
-        return [
-            detection
-            for component in np.unique(labels[peaks[:, 0, 1], peaks[:, 0, 0]])
-            if 0 < component < component_count
-            and (detection := self._component_to_detection(int(component), labels, stats, deviation)) is not None
-        ]
-
-    def _peak_mask(self, deviation: np.ndarray) -> np.ndarray:
-        return _threshold_mask(deviation, self.settings.detection.detection_sigma, cv2.CMP_GE)
-
-    def _foreground_mask(self, deviation: np.ndarray) -> np.ndarray:
-        mask = _threshold_mask(deviation, self.settings.detection.foreground_sigma, cv2.CMP_GT)
-        if self.stream.mask is not None:
-            mask = cv2.bitwise_and(mask, self.stream.mask)
-        if self.settings.detection.close_size <= 1:
-            return mask
-        return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self._close_kernel)
-
-    def _component_to_detection(
-        self,
-        component: int,
-        labels: np.ndarray,
-        stats: np.ndarray,
-        deviation: np.ndarray,
-    ) -> Detection | None:
-        x, y, width, height, pixel_count = (int(value) for value in stats[component])
-        if pixel_count < self.settings.detection.min_pixels:
-            return None
-
-        window = np.where(
-            labels[y : y + height, x : x + width] == component, deviation[y : y + height, x : x + width], 0.0
-        )
-        peak_deviation = float(window.max())
-        if peak_deviation < self.settings.detection.detection_sigma:
-            return None
-
-        peak_y, peak_x = np.unravel_index(int(np.argmax(window)), window.shape)
-        return Detection(
-            centroid=(float(x + int(peak_x)), float(y + int(peak_y))),
-            pixel_count=pixel_count,
-            peak_deviation=peak_deviation,
-        )
 
     def _update_tracks(self, frame_number: int, detections: list[Detection]) -> list[MovementEvent]:
         if not detections:
@@ -427,13 +355,3 @@ class MovementDetector:
         track_id = int(self._next_track_id)
         self._next_track_id += 1
         return Track(track_id=track_id, centroid=centroid, consecutive_hits=1, consecutive_misses=0)
-
-
-def _threshold_mask(image: np.ndarray, threshold: float, comparison: int) -> np.ndarray:
-    """Pixels standing in the given relation to a threshold, as 0 and 255.
-
-    OpenCV reads the threshold as a scalar, which its type stub does not
-    admit.
-    """
-    mask: np.ndarray = cv2.compare(image, threshold, comparison)  # type: ignore[call-overload]
-    return mask

@@ -44,6 +44,26 @@ than in pixels, so `--max-movement-ratio` and its siblings hold their
 meaning at any `--target-height`.
 
 
+## Graphics card
+
+The per-pixel stage of the detector runs on an NVIDIA card when CuPy is
+installed and a card answers, and on the host otherwise.
+
+```bash
+uv sync --group core --group gpu
+```
+
+Over the example recordings at a frame height of 1080 the card cuts
+detection time from 94.7 to 62.2 seconds. Eight of the ten recordings
+report the same tracks either way, including every meteor. The two
+daytime recordings differ in a handful of centroids by one pixel,
+because the card rounds a float differently and the detector compares
+that float against a fixed threshold.
+
+Set `device` on `MovementSettings` to `"cpu"` to stay on the host, or to
+`"cuda"` to fail rather than fall back when no card answers.
+
+
 ## Dashboard
 
 A debugging dashboard lists the recordings under `data/examples`, runs the
@@ -51,7 +71,7 @@ detector over one or all of them, and plays the result with the tracks
 drawn on it.
 
 ```bash
-uv run --group dashboard streamlit run src/hessdalen/dashboard/app.py
+uv run --group dashboard --group gpu streamlit run src/hessdalen/dashboard/app.py
 ```
 
 Pick a recording by clicking its row, set the parameters in the sidebar

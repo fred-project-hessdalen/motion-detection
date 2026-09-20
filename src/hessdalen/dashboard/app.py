@@ -19,6 +19,7 @@ from streamlit.typing import DataframeState
 from hessdalen.dashboard.catalog import DevelopmentVideo, Label, development_videos
 from hessdalen.dashboard.runs import DetectionRun, VideoProbe, load_run, probe, run_detection
 from hessdalen.processing.background import BackgroundSettings
+from hessdalen.processing.devices import DEVICES, Device
 from hessdalen.processing.movement import (
     DetectionSettings,
     MovementSettings,
@@ -45,6 +46,10 @@ RECORDINGS_HELP = (
     "Tracks and run time are filled in once a recording has been run with the settings in the sidebar."
 )
 DURATION_HELP = "Taken from the container until the recording has been run, and from the decoded frames after that."
+DEVICE_HELP = (
+    "Where the per-pixel work runs. Auto takes the graphics card when one answers. "
+    "The card rounds a float differently from the processor, so a few detections can land a pixel apart."
+)
 
 
 def main() -> None:
@@ -64,7 +69,13 @@ def main() -> None:
             value=1080,
             help="Frames are resized to this height before detection. A lower value runs faster.",
         )
-        settings = _settings_controls()
+        device = st.radio(
+            "Device",
+            options=DEVICES,
+            horizontal=True,
+            help=DEVICE_HELP,
+        )
+        settings = _settings_controls(device)
 
     selected = _recordings_table(videos, settings=settings, target_height=target_height)
 
@@ -105,7 +116,7 @@ def _run_controls(*, videos: list[DevelopmentVideo], selected: DevelopmentVideo)
     return []
 
 
-def _settings_controls() -> MovementSettings:
+def _settings_controls(device: Device) -> MovementSettings:
     with st.expander("Detection", expanded=True):
         foreground_sigma = st.slider(
             "Foreground sigma",
@@ -207,6 +218,7 @@ def _settings_controls() -> MovementSettings:
             max_missed_frames=max_missed_frames,
             min_trajectory_span_ratio=min_trajectory_span_ratio,
         ),
+        device=device,
     )
 
 
