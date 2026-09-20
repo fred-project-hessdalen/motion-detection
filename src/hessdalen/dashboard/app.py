@@ -42,6 +42,13 @@ PLAYBACK_HELP = (
     "The number beside a box is the track id."
 )
 TRACKS_HELP = "One row per track the detector confirmed, in the order the tracks were opened."
+PANELS_HELP = "Which panel of the video the player shows. All three are the same run, so switching costs nothing."
+BOTH_PANELS = "Both"
+PLAYER_KEY = "player"
+# How far the video is lifted in the player, for each choice of panel. A bare
+# string here would be a docstring in any other module and a paragraph on the
+# page in this one, which Streamlit renders from every loose expression.
+PANELS: dict[str, str | None] = {BOTH_PANELS: None, "Recording": "0", "Deviation": "-50%"}
 RECORDINGS_HELP = (
     "Click a row to show that recording below. "
     "Tracks and run time are filled in once a recording has been run with the settings in the sidebar."
@@ -331,10 +338,50 @@ def _playback(video: DevelopmentVideo, *, settings: MovementSettings, target_hei
 
     player, tracks = st.columns([1, 1])
     with player:
-        st.video(str(run.annotated_video), start_time=_start_time(video.labels))
-        st.caption(f"{len(run.trajectories)} tracks over {run.frame_count} frames.")
+        panels = st.segmented_control(
+            "Panels",
+            options=list(PANELS),
+            default=BOTH_PANELS,
+            help=PANELS_HELP,
+        )
+        _show_panels(panels or BOTH_PANELS, aspect=_probe_cached(video.path))
+        with st.container(key=PLAYER_KEY):
+            st.video(str(run.annotated_video), start_time=_start_time(video.labels))
+        st.caption(f"{_count(len(run.trajectories), 'track')} over {run.frame_count} frames.")
     with tracks:
         _tracks_table(run)
+
+
+def _show_panels(panels: str, *, aspect: VideoProbe) -> None:
+    """Crop the player to the chosen panel.
+
+    Both panels are encoded as one frame, so the choice is which half of
+    that frame the player shows and costs no second run. The player is
+    held to the shape of a single panel, which leaves the video inside
+    it twice as tall as the player, and the lower panel is reached by
+    lifting the video by half its own height. A translation measures
+    that half against the video, where a top offset would measure it
+    against whichever box Streamlit wraps the video in.
+    """
+    offset = PANELS[panels]
+    if offset is None:
+        return
+
+    st.html(
+        f"""
+        <style>
+        .st-key-{PLAYER_KEY} {{
+            overflow: hidden;
+            aspect-ratio: {aspect.width} / {aspect.height};
+        }}
+        .st-key-{PLAYER_KEY} video {{ transform: translateY({offset}); }}
+        </style>
+        """
+    )
+
+
+def _count(number: int, noun: str) -> str:
+    return f"{number} {noun}" if number == 1 else f"{number} {noun}s"
 
 
 def _start_time(labels: tuple[Label, ...]) -> int:
