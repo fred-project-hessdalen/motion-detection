@@ -25,12 +25,13 @@ import numpy as np
 from hessdalen.domain.models import MovementEvent
 from hessdalen.io.video import TIMESTAMP_MASK_COORDS, FileFrameSource, VideoStream
 from hessdalen.processing.debug import track_color
+from hessdalen.processing.devices import detection_stage
 from hessdalen.processing.movement import MovementDetector, MovementSettings
 
 BOX_RATIO = 0.025
 MIN_BOX_SIZE = 8
 FALLBACK_FPS = 25.0
-DETECTION_SHARE = 0.5
+PHASES = 2
 DETECTOR_PACKAGES = ("domain", "io", "processing")
 ENCODER_PIXEL_FORMAT = "yuv420p"
 
@@ -93,26 +94,20 @@ def run_detection(
     output_dir.mkdir(parents=True, exist_ok=True)
     paths = _run_paths(video, settings=settings, target_height=target_height, output_dir=output_dir)
     details = probe(video)
-    expected_frames = max(1, details.frame_count)
+    phase = _phase_progress(on_progress, expected_frames=max(1, details.frame_count))
 
     started = time.perf_counter()
-    trajectories = _detect(
-        video,
-        settings=settings,
-        target_height=target_height,
-        on_frame=lambda index: on_progress(DETECTION_SHARE * min(1.0, (index + 1) / expected_frames)),
-    )
+    trajectories = _detect(video, settings=settings, target_height=target_height, on_frame=phase(0))
     detection_seconds = time.perf_counter() - started
 
     frame_count = _render(
         video,
+        settings=settings,
         target_height=target_height,
         frames_per_second=details.frames_per_second,
         trajectories=trajectories,
         output=paths.video,
-        on_frame=lambda index: on_progress(
-            DETECTION_SHARE + (1.0 - DETECTION_SHARE) * min(1.0, (index + 1) / expected_frames)
-        ),
+        on_frame=phase(1),
     )
 
     run = DetectionRun(
@@ -124,6 +119,20 @@ def run_detection(
     )
     paths.record.write_text(json.dumps(_as_record(run), indent=2))
     return run
+
+
+def _phase_progress(
+    on_progress: Callable[[float], None],
+    *,
+    expected_frames: int,
+) -> Callable[[int], Callable[[int], None]]:
+    """A per-frame reporter for each phase, covering its own share of the
+    bar."""
+
+    def phase(index: int) -> Callable[[int], None]:
+        return lambda frame_index: on_progress((index + min(1.0, (frame_index + 1) / expected_frames)) / PHASES)
+
+    return phase
 
 
 def load_run(
@@ -190,13 +199,16 @@ def _detect(
     target_height: int,
     on_frame: Callable[[int], None],
 ) -> tuple[Trajectory, ...]:
-    stream = VideoStream(
+    detector = MovementDetector(stream=_stream(video, target_height=target_height), settings=settings)
+    return trajectories_from_events(_reporting_progress(detector.detect(), on_frame))
+
+
+def _stream(video: Path, *, target_height: int) -> VideoStream:
+    return VideoStream(
         FileFrameSource(video),
         mask_coords=TIMESTAMP_MASK_COORDS,
         target_height=target_height,
     )
-    detector = MovementDetector(stream=stream, settings=settings)
-    return trajectories_from_events(_reporting_progress(detector.detect(), on_frame))
 
 
 def _reporting_progress(events: Iterable[MovementEvent], on_frame: Callable[[int], None]) -> Iterator[MovementEvent]:
@@ -208,46 +220,65 @@ def _reporting_progress(events: Iterable[MovementEvent], on_frame: Callable[[int
 def _render(
     video: Path,
     *,
+    settings: MovementSettings,
     target_height: int,
     frames_per_second: float,
     trajectories: tuple[Trajectory, ...],
     output: Path,
     on_frame: Callable[[int], None],
 ) -> int:
-    """Draw every track onto the frames the detector saw and encode them.
+    """Draw every track onto the recording and onto the deviation behind it,
+    and encode the pair as one frame.
 
-    Returns the number of frames written. Some containers declare a
-    frame count their stream does not hold, so this is the count that
-    was decoded.
+    The deviation is measured again here from the same grayscale the
+    detector read, which is what makes the lower panel the picture the
+    detections were taken from. Returns the number of frames written.
+    Some containers declare a frame count their stream does not hold, so
+    this is the count that was decoded.
     """
-    stream = VideoStream(
-        FileFrameSource(video),
-        mask_coords=TIMESTAMP_MASK_COORDS,
-        target_height=target_height,
-    )
-    height, width = stream.frame_shape
+    colour_stream = _stream(video, target_height=target_height)
+    gray_stream = _stream(video, target_height=target_height)
+    height, width = colour_stream.frame_shape
+    panel_height, panel_width = _even(height), _even(width)
+
     overlays = _overlays(trajectories)
     box_size = max(MIN_BOX_SIZE, int(BOX_RATIO * max(height, width)))
+    stage = detection_stage(
+        device=settings.device,
+        background=settings.background,
+        detection=settings.detection,
+        timestamp_mask=gray_stream.mask,
+    )
 
     encoder = _open_encoder(
         output,
-        width=_even(width),
-        height=_even(height),
+        width=panel_width,
+        height=panel_height * 2,
         frames_per_second=frames_per_second if frames_per_second > 0 else FALLBACK_FPS,
     )
     stdin = encoder.stdin
     if stdin is None:
         raise RuntimeError("ffmpeg was started without an input pipe.")
 
+    stacked = np.empty((panel_height * 2, panel_width, 3), dtype=np.uint8)
+    recording, deviation = stacked[:panel_height], stacked[panel_height:]
+    planar = np.empty((panel_height * 3, panel_width), dtype=np.uint8)
+
     frames_written = 0
     try:
-        for frame in stream.stream_frames():
-            canvas = frame.frame
-            _draw_overlays(canvas, overlays=overlays, frame_number=frame.frame_number, box_size=box_size)
-            _draw_frame_number(canvas, frame.frame_number)
-            stdin.write(_planar_bytes(canvas))
+        for colour, gray in zip(colour_stream.stream_frames(), gray_stream.stream_gray_frames()):
+            stage.detections(gray.frame)
+            np.copyto(recording, colour.frame[:panel_height, :panel_width])
+            cv2.cvtColor(stage.deviation_image()[:panel_height, :panel_width], cv2.COLOR_GRAY2BGR, dst=deviation)
+
+            for panel in (recording, deviation):
+                _draw_overlays(panel, overlays=overlays, frame_number=colour.frame_number, box_size=box_size)
+            _draw_frame_number(recording, colour.frame_number)
+
+            cv2.cvtColor(stacked, cv2.COLOR_BGR2YUV_I420, dst=planar)
+            stdin.write(planar)
             frames_written += 1
-            on_frame(frame.frame_number)
+            on_frame(colour.frame_number)
     finally:
         stdin.close()
         encoder.wait()
@@ -255,19 +286,6 @@ def _render(
     if encoder.returncode != 0:
         raise RuntimeError(f"ffmpeg exited with status {encoder.returncode}.")
     return frames_written
-
-
-def _planar_bytes(canvas: np.ndarray) -> bytes:
-    """The frame in the planar format the encoder reads.
-
-    Handing the encoder colour frames makes it convert them itself,
-    which costs ten times what OpenCV charges and sends twice the bytes
-    down the pipe.
-    """
-    height, width = canvas.shape[:2]
-    even = canvas[: _even(height), : _even(width)]
-    planar: np.ndarray = cv2.cvtColor(even, cv2.COLOR_BGR2YUV_I420)
-    return planar.tobytes()
 
 
 def _even(size: int) -> int:
@@ -338,7 +356,12 @@ def _open_encoder(
     frames_per_second: float,
 ) -> subprocess.Popen[bytes]:
     """Start an ffmpeg process that turns raw planar frames into a video a
-    browser can play."""
+    browser can play.
+
+    Handing the encoder colour frames makes it convert them itself,
+    which costs ten times what OpenCV charges and sends twice the bytes
+    down the pipe.
+    """
     command = [
         "ffmpeg",
         "-hide_banner",
@@ -382,24 +405,26 @@ def _run_paths(video: Path, *, settings: MovementSettings, target_height: int, o
 
 def _digest(*, settings: MovementSettings, target_height: int) -> str:
     payload = json.dumps(
-        {"settings": asdict(settings), "target_height": target_height, "code": _detector_digest()},
+        {"settings": asdict(settings), "target_height": target_height, "code": _code_digest()},
         sort_keys=True,
     )
     return hashlib.sha1(payload.encode()).hexdigest()[:10]
 
 
 @cache
-def _detector_digest() -> str:
-    """Digest of the modules the detector is built from.
+def _code_digest() -> str:
+    """Digest of the code that decides what a run holds.
 
     The dashboard is used while the detector is being changed, so a
-    stored run has to stop matching once its code has been edited.
+    stored run has to stop matching once its code has been edited. This
+    module is included because it draws the video.
     """
     package = Path(__file__).resolve().parents[1]
+    sources = [source for name in DETECTOR_PACKAGES for source in sorted((package / name).rglob("*.py"))]
+
     digest = hashlib.sha1()
-    for name in DETECTOR_PACKAGES:
-        for source in sorted((package / name).rglob("*.py")):
-            digest.update(source.read_bytes())
+    for source in [*sources, Path(__file__).resolve()]:
+        digest.update(source.read_bytes())
     return digest.hexdigest()[:10]
 
 

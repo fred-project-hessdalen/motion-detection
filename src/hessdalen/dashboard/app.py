@@ -36,7 +36,8 @@ DETECTION_DEFAULTS = DetectionSettings()
 TRACKING_DEFAULTS = TrackingSettings()
 
 PLAYBACK_HELP = (
-    "The recording as the detector sees it, with the timestamp corner masked out. "
+    "Above, the recording as the detector sees it, with the timestamp corner masked out. "
+    "Below, how far each pixel stands from its own background, with the detection threshold at full white. "
     "Each confirmed track carries a box on the frames it was seen in and the trail it has travelled so far. "
     "The number beside a box is the track id."
 )
@@ -328,7 +329,7 @@ def _playback(video: DevelopmentVideo, *, settings: MovementSettings, target_hei
         st.info("This recording has not been run with the current settings. Press Run in the sidebar.")
         return
 
-    player, tracks = st.columns([2, 1])
+    player, tracks = st.columns([1, 1])
     with player:
         st.video(str(run.annotated_video), start_time=_start_time(video.labels))
         st.caption(f"{len(run.trajectories)} tracks over {run.frame_count} frames.")
