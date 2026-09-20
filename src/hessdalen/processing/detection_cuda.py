@@ -1,12 +1,13 @@
 """The per-pixel stage of the detector, run on an NVIDIA GPU.
 
-One kernel carries the whole per-pixel chain, so a frame is read once
-and the background state never leaves the card. The host receives the
+The background state never leaves the card. The host receives the
 foreground mask and the few pixels that reached the detection threshold,
 and never the deviation frame.
 """
 
 from __future__ import annotations
+
+import math
 
 import cupy as cp  # type: ignore[import-not-found]
 import cv2
@@ -45,15 +46,79 @@ Out-of-frame reads mirror without repeating the edge pixel, which is
 what the host filter does.
 """
 
+_SQUARES = cp.ElementwiseKernel(
+    "float32 smoothed, float32 mean",
+    "float32 squares",
+    """
+    const float residual = smoothed - mean;
+    squares = residual * residual;
+    """,
+    "movement_squares",
+)
+
+_HALVE = cp.ElementwiseKernel(
+    "raw float32 source, int32 source_rows, int32 source_columns, int32 columns",
+    "float32 halved",
+    """
+    const int row = 2 * (i / columns);
+    const int column = 2 * (i % columns);
+    const int below = (row + 1 < source_rows) ? row + 1 : row;
+    const int right = (column + 1 < source_columns) ? column + 1 : column;
+    const float total = (source[row * source_columns + column] + source[row * source_columns + right])
+                      + (source[below * source_columns + column] + source[below * source_columns + right]);
+    halved = total * 0.25f;
+    """,
+    "movement_halve",
+)
+"""Mean of four neighbours, added as the two pairs the host adds.
+
+An odd side reads its last line twice, which is the line the host pads
+with.
+"""
+
+_NEIGHBOURHOOD = cp.ElementwiseKernel(
+    "raw float32 blocks, int32 rows, int32 columns, int32 reach, int32 inner, float32 cells",
+    "float32 spread",
+    """
+    const int row = i / columns;
+    const int column = i % columns;
+    float total = 0.0f;
+    for (int down = -reach; down <= reach; ++down) {
+        for (int right = -reach; right <= reach; ++right) {
+            if (abs(down) <= inner && abs(right) <= inner) { continue; }
+            int y = row + down;
+            if (y < 0) { y = -y; }
+            if (y >= rows) { y = 2 * (rows - 1) - y; }
+            int x = column + right;
+            if (x < 0) { x = -x; }
+            if (x >= columns) { x = 2 * (columns - 1) - x; }
+            total += blocks[y * columns + x];
+        }
+    }
+    const float mean = total / cells;
+    spread = sqrtf(mean > 0.0f ? mean : 0.0f);
+    """,
+    "movement_neighbourhood",
+)
+"""Spread of the residual over the blocks around each one.
+
+The blocks are added in the order the host adds them, and out-of-frame
+blocks mirror without repeating the edge block.
+"""
+
 _STEP = cp.ElementwiseKernel(
-    "float32 smoothed, float32 variance_alpha, float32 mean_alpha, float32 noise_floor_variance, "
+    "float32 smoothed, raw float32 spread, int32 width, int32 shift, int32 blocks_columns, "
+    "float32 variance_alpha, float32 mean_alpha, float32 noise_floor_variance, "
     "float32 outlier_sigma, float32 foreground_sigma, float32 detection_sigma, uint8 timestamp_mask",
     "float32 mean, float32 variance, float32 deviation, uint8 foreground, uint8 peaks",
     """
     const float value = smoothed;
     const float residual = value - mean;
     const float clamped = variance < noise_floor_variance ? noise_floor_variance : variance;
-    const float distance = fabsf(residual) / sqrtf(clamped);
+    const float tracked = sqrtf(clamped);
+    const float around = spread[((i / width) >> shift) * blocks_columns + ((i % width) >> shift)];
+    const float noise = tracked > around ? tracked : around;
+    const float distance = fabsf(residual) / noise;
 
     deviation = distance;
     foreground = (distance > foreground_sigma && timestamp_mask != 0) ? 255 : 0;
@@ -84,6 +149,7 @@ class CudaDetectionStage:
         shape = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (detection.close_size, detection.close_size))
         self._close_kernel = cp.asarray(shape.astype(bool))
         self._noise_floor_variance = float(background.noise_floor) ** 2
+        self._halvings = round(math.log2(int(background.noise_block)))
         self._updates = 0
         self._buffers: _FrameBuffers | None = None
         self._state: _DeviceState | None = None
@@ -97,12 +163,19 @@ class CudaDetectionStage:
                 shape=gray.shape,
                 timestamp_mask=self.timestamp_mask,
                 noise_floor_variance=self._noise_floor_variance,
+                halvings=self._halvings,
             )
             return []
 
         self._updates += 1
+        _SQUARES(smoothed, state.mean, state.squares)
+        spread = self._neighbourhood_noise(state)
         _STEP(
             smoothed,
+            spread,
+            np.int32(gray.shape[1]),
+            np.int32(self._halvings),
+            np.int32(spread.shape[1]),
             cp.float32(max(self.background.variance_alpha, 1.0 / self._updates)),
             cp.float32(self.background.mean_alpha),
             cp.float32(self._noise_floor_variance),
@@ -156,6 +229,33 @@ class CudaDetectionStage:
         closed = binary_erosion(filled, structure=self._close_kernel, border_value=1)
         return cp.asnumpy(closed.astype(cp.uint8) * 255)
 
+    def _neighbourhood_noise(self, state: _DeviceState) -> cp.ndarray:
+        """Reduce the squared residual to blocks and spread each block over its
+        neighbours."""
+        blocks = state.squares
+        for halved in state.pyramid:
+            _HALVE(
+                blocks,
+                np.int32(blocks.shape[0]),
+                np.int32(blocks.shape[1]),
+                np.int32(halved.shape[1]),
+                halved,
+            )
+            blocks = halved
+
+        span = int(self.background.neighbourhood_blocks)
+        guard = int(self.background.guard_blocks)
+        _NEIGHBOURHOOD(
+            blocks,
+            np.int32(blocks.shape[0]),
+            np.int32(blocks.shape[1]),
+            np.int32(span // 2),
+            np.int32(guard // 2),
+            np.float32(span * span - guard * guard),
+            state.spread,
+        )
+        return state.spread
+
     def _smoothed(self, gray: np.ndarray) -> cp.ndarray:
         """Upload the frame as bytes and smooth it into floats on the card.
 
@@ -195,7 +295,17 @@ class _DeviceState:
     """The background model and the frames derived from it, held on the
     card."""
 
-    __slots__ = ("deviation", "foreground", "mean", "peaks", "timestamp_mask", "variance")
+    __slots__ = (
+        "deviation",
+        "foreground",
+        "mean",
+        "peaks",
+        "pyramid",
+        "spread",
+        "squares",
+        "timestamp_mask",
+        "variance",
+    )
 
     def __init__(
         self,
@@ -205,6 +315,9 @@ class _DeviceState:
         deviation: cp.ndarray,
         foreground: cp.ndarray,
         peaks: cp.ndarray,
+        squares: cp.ndarray,
+        pyramid: list[cp.ndarray],
+        spread: cp.ndarray,
         timestamp_mask: cp.ndarray,
     ) -> None:
         self.mean = mean
@@ -212,6 +325,9 @@ class _DeviceState:
         self.deviation = deviation
         self.foreground = foreground
         self.peaks = peaks
+        self.squares = squares
+        self.pyramid = pyramid
+        self.spread = spread
         self.timestamp_mask = timestamp_mask
 
     @classmethod
@@ -222,13 +338,29 @@ class _DeviceState:
         shape: tuple[int, ...],
         timestamp_mask: np.ndarray | None,
         noise_floor_variance: float,
+        halvings: int,
     ) -> _DeviceState:
         mask = timestamp_mask if timestamp_mask is not None else np.full(shape, 255, dtype=np.uint8)
+        pyramid = _pyramid(shape, halvings=halvings)
         return cls(
             mean=smoothed.copy(),
             variance=cp.full(shape, noise_floor_variance, dtype=cp.float32),
             deviation=cp.zeros(shape, dtype=cp.float32),
             foreground=cp.empty(shape, dtype=cp.uint8),
             peaks=cp.empty(shape, dtype=cp.uint8),
+            squares=cp.empty(shape, dtype=cp.float32),
+            pyramid=pyramid,
+            spread=cp.empty(pyramid[-1].shape, dtype=cp.float32),
             timestamp_mask=cp.asarray(mask),
         )
+
+
+def _pyramid(shape: tuple[int, ...], *, halvings: int) -> list[cp.ndarray]:
+    """A buffer for each halving, each side rounded up so an odd one keeps its
+    last line."""
+    rows, columns = int(shape[0]), int(shape[1])
+    levels: list[cp.ndarray] = []
+    for _ in range(halvings):
+        rows, columns = (rows + 1) // 2, (columns + 1) // 2
+        levels.append(cp.empty((rows, columns), dtype=cp.float32))
+    return levels

@@ -42,22 +42,29 @@ saved there against every scene it covers.
 
 ## Detection
 
-Every pixel keeps a running mean and a running estimate of its own noise,
-and a pixel counts towards a detection once it departs from that mean by
-a given number of standard deviations. The estimate never falls below
-`noise_floor` on `BackgroundSettings`, which is one grey level.
+Every pixel keeps a running mean, and a pixel counts towards a detection
+once it departs from that mean by a given number of standard deviations.
+The noise it is divided by is the larger of two estimates, with
+`noise_floor` on `BackgroundSettings` under both at one grey level. One
+is what the pixel's own residual has been over the frames before it. The
+other is how far the residual spreads over the pixels around it,
+measured on 16 by 16 blocks, with the block the pixel sits in and the
+blocks touching it left out so an object does not raise the level it is
+measured against.
 
-That floor is what most of the picture runs on. H.264 repeats a block
-verbatim while nothing in it changes, so a pixel in a still part of the
-scene has no noise left to measure, and over the example recordings the
-estimate stays at the floor on 98.8 to 99.99 percent of the frame. With
-the floor at one grey level the threshold there is `--detection-sigma`
-grey levels. A dark sky, a moonlit slope and a snowy afternoon all read
-on that one scale, so a single set of settings covers them.
+The second estimate is there because of how the recordings are coded.
+H.264 repeats a block verbatim while nothing in it changes, so a pixel in
+a still part of the scene shows no noise to measure, and the estimate
+over time falls to the floor on 98.8 to 99.99 percent of the frame. Every
+keyframe then recodes the picture from scratch and moves those pixels
+again, which a pixel measured against the frames before it reads as
+movement. The pixels around it read it for what it is, because an object
+covers a few blocks and a recoded picture covers all of them.
 
-The measured estimate takes over where the scene keeps moving. Over
-foliage and a wind-blown horizon the noise climbs above the floor and
-those pixels need a much larger departure before they report.
+Either estimate on its own leaves a gap. The one over time is what holds
+down foliage and a wind-blown horizon, where the same pixels move again
+and again. The one over the neighbourhood is what holds down a recoded
+picture, where everything moves at once.
 
 `--detection-sigma` sets how far a blob's brightest pixel has to depart
 from the background to be reported, and it is the first parameter to
@@ -78,7 +85,7 @@ uv sync --group core --group gpu
 ```
 
 Over the example recordings at a frame height of 1080 the card cuts
-detection time from 74.0 to 21.1 seconds, and all ten recordings report
+detection time from 98.0 to 25.2 seconds, and all ten recordings report
 the same frame numbers, track ids and centroids either way.
 
 Set `device` on `MovementSettings` to `"cpu"` to stay on the host, or to
