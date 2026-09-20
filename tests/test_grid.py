@@ -3,12 +3,14 @@
 Run with: uv run --group test pytest tests/test_grid.py -v
 """
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from hessdalen.config import config
 from hessdalen.io.video import VideoStream, FileFrameSource
-from hessdalen.processing.movement import MovementDetector, MovementSettings, TrackingSettings
+from hessdalen.processing.movement import MovementDetector
 
 
 TEST_DATA_DIR = Path("tests/data/test_grid")
@@ -28,9 +30,10 @@ def test_data_dir():
 
 def count_detections(video_path: Path) -> int:
     stream = VideoStream(FileFrameSource(video_path))
+    settings = config().settings
     detector = MovementDetector(
         stream=stream,
-        settings=MovementSettings(tracking=TrackingSettings(min_consecutive_frames=3)),
+        settings=replace(settings, tracking=replace(settings.tracking, min_consecutive_frames=3)),
     )
 
     detected_count = 0

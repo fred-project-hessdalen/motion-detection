@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from hessdalen.processing.movement import MovementSettings
+from hessdalen.config import config
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "dev" / "detect_movement.py"
 
@@ -25,12 +25,12 @@ def entry_script():
     return module
 
 
-def test_bare_invocation_builds_the_default_settings(entry_script, monkeypatch):
+def test_bare_invocation_builds_the_settings_the_config_holds(entry_script, monkeypatch):
     monkeypatch.setattr(sys, "argv", [SCRIPT_PATH.name, "recording.mkv"])
 
     settings = entry_script.settings_from_args(entry_script.parse_args())
 
-    assert settings == MovementSettings()
+    assert settings == config().settings
 
 
 def test_a_flag_reaches_the_settings(entry_script, monkeypatch):

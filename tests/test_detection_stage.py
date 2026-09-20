@@ -4,14 +4,16 @@ The GPU stage is skipped when no card answers, so the host stage is the
 one every machine checks.
 """
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
+from hessdalen.config import config
 from hessdalen.io.video import VideoStream
-from hessdalen.processing.background import BackgroundSettings
-from hessdalen.processing.detection import CpuDetectionStage, DetectionSettings
+from hessdalen.processing.detection import CpuDetectionStage
 from hessdalen.processing.devices import Device, cuda_available, detection_stage
-from hessdalen.processing.movement import MovementDetector, MovementSettings
+from hessdalen.processing.movement import MovementDetector
 from synthetic import MockFrameSource, Scene, draw_object, scene_frames
 
 WIDTH, HEIGHT = 320, 240
@@ -28,8 +30,8 @@ SCENE = Scene(name="moonlit night", level=60, noise=8.0)
 def test_host_stage_is_chosen_when_asked_for() -> None:
     stage = detection_stage(
         device="cpu",
-        background=BackgroundSettings(),
-        detection=DetectionSettings(),
+        background=config().settings.background,
+        detection=config().settings.detection,
         timestamp_mask=None,
     )
 
@@ -84,8 +86,8 @@ def test_both_stages_track_the_same_object() -> None:
 
 def _host_stage() -> CpuDetectionStage:
     return CpuDetectionStage(
-        background=BackgroundSettings(),
-        detection=DetectionSettings(),
+        background=config().settings.background,
+        detection=config().settings.detection,
         timestamp_mask=None,
     )
 
@@ -110,7 +112,7 @@ def _frames_with_moving_object() -> list[np.ndarray]:
 
 def _tracks(frames: list[np.ndarray], *, device: Device) -> dict[int, list[tuple[float, float]]]:
     stream = VideoStream(MockFrameSource(frames), target_height=HEIGHT)
-    detector = MovementDetector(stream=stream, settings=MovementSettings(device=device))
+    detector = MovementDetector(stream=stream, settings=replace(config().settings, device=device))
 
     tracks: dict[int, list[tuple[float, float]]] = {}
     for event in detector.detect():

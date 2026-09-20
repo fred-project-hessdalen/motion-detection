@@ -27,6 +27,19 @@ uv run python scripts/dev/detect_movement.py path/to/video.mp4 --output output_d
 Run with `--help` for all available parameters.
 
 
+## Configuration
+
+`config/detector.toml` holds what a run starts from and what the
+dashboard's sidebar opens on. Every value in it has a control of its own
+on the page, and Save there writes the file, so tuning done on the
+dashboard becomes a change to review and commit. The settings with no
+control, such as the closing size and the noise floor, keep their values
+with the settings class they belong to.
+
+The tests read the same file, so the scene sweep measures whatever is
+saved there against every scene it covers.
+
+
 ## Detection
 
 Every pixel keeps a running mean and a running estimate of its own noise,
@@ -92,12 +105,13 @@ currently in the sidebar plays back without running again. Set
 `HESSDALEN_EXAMPLES_DIR` to list recordings from somewhere other than
 `data/examples`.
 
-Under the settings, Reset puts the detection, tracking and background
-sliders back to the values the detector ships with, Export writes those
-same settings to a file, and Import reads a file back. Frame height,
-panels and device are left out of all three. A file may name as few
-settings as it likes, and the sliders it does not name stay where they
-stand.
+Under the settings, Save writes everything the sidebar sets to
+`config/detector.toml`, Reset puts the detection, tracking and
+background sliders back to the values that file holds, Export writes
+those same settings to a file of your own, and Import reads one back.
+Frame height, panels and device are saved but left out of Reset, Export
+and Import. An exported file may name as few settings as it likes, and
+the sliders it does not name stay where they stand.
 
 The Live switch builds a segment of the selected recording into a short
 clip and loops it in the page, and moving any setting builds the segment

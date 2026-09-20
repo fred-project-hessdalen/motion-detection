@@ -33,9 +33,16 @@ class Detection:
 
 @dataclass(frozen=True, slots=True)
 class DetectionSettings:
-    foreground_sigma: float = 5.0
-    detection_sigma: float = 15.0
-    min_pixels: int = 3
+    """What a blob has to be before it is reported.
+
+    The first three are set from the dashboard and come from the config,
+    so they are asked of the caller. The closing size has no control of
+    its own and keeps its value here.
+    """
+
+    foreground_sigma: float
+    detection_sigma: float
+    min_pixels: int
     close_size: int = 5
 
 

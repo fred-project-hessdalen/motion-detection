@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 
+from hessdalen.config import config
 from hessdalen.io.video import masked_stream
 from hessdalen.processing.background import BackgroundSettings
 from hessdalen.processing.debug import TwoPanelVideoDebugSink
@@ -17,9 +18,8 @@ from hessdalen.processing.movement import (
 )
 
 
-BACKGROUND_DEFAULTS = BackgroundSettings()
-DETECTION_DEFAULTS = DetectionSettings()
-TRACKING_DEFAULTS = TrackingSettings()
+STARTING = config().settings
+"""What the config holds, which every option here falls back to."""
 
 
 def parse_args():
@@ -39,55 +39,55 @@ def parse_args():
     parser.add_argument(
         "--mean-alpha",
         type=float,
-        default=BACKGROUND_DEFAULTS.mean_alpha,
+        default=STARTING.background.mean_alpha,
         help="Rate at which the background mean follows the frame (lower = slower)",
     )
     parser.add_argument(
         "--variance-alpha",
         type=float,
-        default=BACKGROUND_DEFAULTS.variance_alpha,
+        default=STARTING.background.variance_alpha,
         help="Rate at which the per-pixel noise estimate follows the frame",
     )
     parser.add_argument(
         "--foreground-sigma",
         type=float,
-        default=DETECTION_DEFAULTS.foreground_sigma,
+        default=STARTING.detection.foreground_sigma,
         help="Deviation in noise sigma at which a pixel joins a blob",
     )
     parser.add_argument(
         "--detection-sigma",
         type=float,
-        default=DETECTION_DEFAULTS.detection_sigma,
+        default=STARTING.detection.detection_sigma,
         help="Peak deviation in noise sigma a blob needs to be reported",
     )
     parser.add_argument(
         "--min-pixels",
         type=int,
-        default=DETECTION_DEFAULTS.min_pixels,
+        default=STARTING.detection.min_pixels,
         help="Minimum blob size in pixels",
     )
     parser.add_argument(
         "--min-consecutive-frames",
         type=int,
-        default=TRACKING_DEFAULTS.min_consecutive_frames,
+        default=STARTING.tracking.min_consecutive_frames,
         help="Minimum consecutive frames with movement",
     )
     parser.add_argument(
         "--max-movement-ratio",
         type=float,
-        default=TRACKING_DEFAULTS.max_movement_ratio,
+        default=STARTING.tracking.max_movement_ratio,
         help="Maximum movement per frame as ratio of max frame dimension",
     )
     parser.add_argument(
         "--min-movement-ratio",
         type=float,
-        default=TRACKING_DEFAULTS.min_movement_ratio,
+        default=STARTING.tracking.min_movement_ratio,
         help="Minimum movement per frame as ratio of max frame dimension (rejects stationary brightness changes)",
     )
     parser.add_argument(
         "--min-trajectory-span-ratio",
         type=float,
-        default=TRACKING_DEFAULTS.min_trajectory_span_ratio,
+        default=STARTING.tracking.min_trajectory_span_ratio,
         help="Minimum trajectory bounding box span as ratio of max frame dimension (filters stationary noise)",
     )
     parser.add_argument("--fps", type=int, default=30, help="Output video frame rate")
@@ -109,8 +109,10 @@ def settings_from_args(args: argparse.Namespace) -> MovementSettings:
             min_consecutive_frames=args.min_consecutive_frames,
             max_movement_ratio=args.max_movement_ratio,
             min_movement_ratio=args.min_movement_ratio,
+            max_missed_frames=STARTING.tracking.max_missed_frames,
             min_trajectory_span_ratio=args.min_trajectory_span_ratio,
         ),
+        device=STARTING.device,
     )
 
 

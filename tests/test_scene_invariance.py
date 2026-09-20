@@ -2,13 +2,16 @@
 
 The scenes below span a factor of thirty in brightness and ten in noise,
 which is the range the example recordings cover between a dark night and
-a snowy afternoon. Each is run through the detector's default settings.
+a snowy afternoon. Each is run through the settings the config holds, so
+a set of settings saved from the dashboard is measured against every
+scene here.
 """
 
 import pytest
 
+from hessdalen.config import config
 from hessdalen.io.video import VideoStream
-from hessdalen.processing.movement import MovementDetector, MovementSettings
+from hessdalen.processing.movement import MovementDetector
 from synthetic import MockFrameSource, Scene, draw_object, scene_frames
 
 WIDTH, HEIGHT = 320, 240
@@ -29,7 +32,7 @@ SCENE_IDS = [scene.name for scene in SCENES]
 
 def detect_tracks(frames: list) -> dict[int, list[tuple[float, float]]]:
     stream = VideoStream(MockFrameSource(frames), target_height=HEIGHT)
-    detector = MovementDetector(stream=stream, settings=MovementSettings())
+    detector = MovementDetector(stream=stream, settings=config().settings)
 
     tracks: dict[int, list[tuple[float, float]]] = {}
     for event in detector.detect():

@@ -1,0 +1,24 @@
+# What the detector starts from, and what the dashboard's sidebar opens on.
+# Save on the dashboard writes this file. Every value here has a slider or a
+# control of its own on the page. The settings with no control, such as the
+# closing size and the noise floor, stay with the settings they belong to.
+
+frame_height = 1080
+panels = "both"
+device = "auto"
+
+[detection]
+foreground_sigma = 5.0
+detection_sigma = 15.0
+min_pixels = 3
+
+[background]
+mean_alpha = 0.5
+variance_alpha = 0.02
+
+[tracking]
+min_consecutive_frames = 6
+max_movement_ratio = 0.02
+min_movement_ratio = 0.001
+max_missed_frames = 8
+min_trajectory_span_ratio = 0.02

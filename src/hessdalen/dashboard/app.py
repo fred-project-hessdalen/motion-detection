@@ -18,6 +18,7 @@ import streamlit as st
 from streamlit.delta_generator import DeltaGenerator
 from streamlit.typing import DataframeState
 
+from hessdalen.config import CONFIG_PATH, FRAME_HEIGHTS, Config, config, write_config
 from hessdalen.dashboard.catalog import DevelopmentVideo, Label, development_videos
 from hessdalen.dashboard.encoder import playback_rate
 from hessdalen.dashboard.live import BuiltSegment, Progress, Segment, build_segment, load_segment
@@ -34,22 +35,17 @@ from hessdalen.dashboard.settings import (
     SETTINGS,
     Reading,
     as_file,
+    as_settings,
     defaults,
     from_file,
 )
-from hessdalen.processing.background import BackgroundSettings
 from hessdalen.processing.devices import DEVICES, Device
-from hessdalen.processing.movement import (
-    DetectionSettings,
-    MovementSettings,
-    TrackingSettings,
-)
+from hessdalen.processing.movement import MovementSettings
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 OUTPUT_DIR = REPO_ROOT / "data" / "out" / "dashboard"
 LIVE_DIR = OUTPUT_DIR / "live"
 EXAMPLES_DIR_VARIABLE = "HESSDALEN_EXAMPLES_DIR"
-FRAME_HEIGHTS = (270, 540, 720, 1080, 1440, 2160)
 SEGMENT_STEP = 0.5
 SEGMENT_SECONDS = 10.0
 SEGMENT_MARGIN_SECONDS = 3.0
@@ -100,8 +96,12 @@ RECORDINGS_HELP = (
     "Tracks and run time are filled in once a recording has been run with the settings in the sidebar."
 )
 DURATION_HELP = "Taken from the container until the recording has been run, and from the decoded frames after that."
+SAVE_HELP = (
+    "Write everything the sidebar sets to the config, which is what the page opens on and what a run started "
+    "anywhere else reads. The file is kept in the repository, so a save shows up as a change to commit."
+)
 RESET_HELP = (
-    "Put the detection, tracking and background settings back to the values the detector ships with. "
+    "Put the detection, tracking and background settings back to the values the config holds. "
     "Frame height, panels and device are left as they are."
 )
 EXPORT_HELP = (
@@ -128,30 +128,36 @@ def main() -> None:
         st.error(f"No recordings under {_examples_dir()}. Fetch them with `dvc pull`.")
         return
 
+    opening = config()
     with st.sidebar:
         run_controls = st.container()
         target_height = st.select_slider(
             "Frame height",
             options=FRAME_HEIGHTS,
-            value=1080,
+            value=opening.frame_height,
             help="Frames are resized to this height before detection. A lower value runs faster.",
         )
         panels = st.segmented_control(
             "Panels",
             options=PANEL_CHOICES,
-            default="both",
+            default=opening.panels,
             format_func=str.capitalize,
             help=PANELS_HELP,
         )
         device = st.radio(
             "Device",
             options=DEVICES,
+            index=DEVICES.index(opening.settings.device),
             horizontal=True,
             help=DEVICE_HELP,
         )
         settings = _settings_controls(device)
 
-    view = _RunView(settings=settings, target_height=target_height, panels=panels or "both")
+    standing = Config(frame_height=target_height, panels=panels or "both", settings=settings)
+    with st.sidebar:
+        _settings_file_controls(standing)
+
+    view = _RunView(settings=settings, target_height=target_height, panels=standing.panels)
     selected = _recordings_table(videos, view=view)
 
     with run_controls:
@@ -313,36 +319,35 @@ def _settings_controls(device: Device) -> MovementSettings:
             help="Rate at which the per-pixel noise estimate follows the frame.",
         )
 
-    _settings_file_controls()
-
-    return MovementSettings(
-        background=BackgroundSettings(mean_alpha=mean_alpha, variance_alpha=variance_alpha),
-        detection=DetectionSettings(
-            foreground_sigma=foreground_sigma,
-            detection_sigma=detection_sigma,
-            min_pixels=min_pixels,
-        ),
-        tracking=TrackingSettings(
-            min_consecutive_frames=min_consecutive_frames,
-            max_movement_ratio=max_movement_ratio,
-            min_movement_ratio=min_movement_ratio,
-            max_missed_frames=max_missed_frames,
-            min_trajectory_span_ratio=min_trajectory_span_ratio,
-        ),
+    return as_settings(
+        {
+            "foreground_sigma": foreground_sigma,
+            "detection_sigma": detection_sigma,
+            "min_pixels": min_pixels,
+            "min_consecutive_frames": min_consecutive_frames,
+            "max_movement_ratio": max_movement_ratio,
+            "min_movement_ratio": min_movement_ratio,
+            "max_missed_frames": max_missed_frames,
+            "min_trajectory_span_ratio": min_trajectory_span_ratio,
+            "mean_alpha": mean_alpha,
+            "variance_alpha": variance_alpha,
+        },
         device=device,
     )
 
 
-def _settings_file_controls() -> None:
-    """Draw the controls that put the settings back, write them out and read
-    them in.
+def _settings_file_controls(standing: Config) -> None:
+    """Draw the controls that save the settings, put them back, write them out
+    and read them in.
 
     The uploader carries the number of files taken so far in its name,
     so taking one draws an empty box next time. A box left holding the
     file it has already taken would say nothing about whether the
     sliders still stand where that file put them.
     """
-    restore, export = st.columns(2)
+    save, restore, export = st.columns(3)
+    with save:
+        st.button("Save", width="stretch", on_click=_save_config, args=(standing,), help=SAVE_HELP)
     with restore:
         st.button("Reset", width="stretch", on_click=_restore_defaults, help=RESET_HELP)
     with export:
@@ -366,6 +371,17 @@ def _settings_file_controls() -> None:
     report = st.session_state.get(IMPORT_REPORT)
     if report:
         st.caption(report)
+
+
+def _save_config(standing: Config) -> None:
+    """Write what the sidebar is standing at to the config.
+
+    The file is what the page opens on and what a run started anywhere
+    else reads, so saving makes these the settings the detector works
+    from until they are saved over.
+    """
+    write_config(standing, CONFIG_PATH)
+    st.session_state[IMPORT_REPORT] = f"Saved to {CONFIG_PATH.name}."
 
 
 def _read_settings_file() -> None:
@@ -404,9 +420,9 @@ def _seed_settings() -> None:
     Streamlit report that the two disagree, so the value is kept in the
     session alone and the sliders read it from there.
     """
-    for key, setting in SETTINGS.items():
+    for key, value in defaults().items():
         if key not in st.session_state:
-            st.session_state[key] = setting.default
+            st.session_state[key] = value
 
 
 def _restore_defaults() -> None:

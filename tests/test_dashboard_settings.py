@@ -4,8 +4,12 @@ from hessdalen.dashboard.settings import SETTINGS, as_file, defaults, from_file
 
 
 def test_every_setting_opens_inside_the_range_its_slider_offers():
-    for key, setting in SETTINGS.items():
-        assert setting.lowest <= setting.default <= setting.highest, key
+    for key, value in defaults().items():
+        assert SETTINGS[key].lowest <= value <= SETTINGS[key].highest, key
+
+
+def test_the_config_names_every_setting_a_slider_offers():
+    assert defaults().keys() == SETTINGS.keys()
 
 
 def test_the_settings_survive_being_written_and_read_back():

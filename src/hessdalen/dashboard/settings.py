@@ -11,41 +11,47 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
+from hessdalen.config import config
 from hessdalen.processing.background import BackgroundSettings
 from hessdalen.processing.detection import DetectionSettings
-from hessdalen.processing.movement import TrackingSettings
+from hessdalen.processing.devices import Device
+from hessdalen.processing.movement import MovementSettings, TrackingSettings
 
 FILE_NAME = "detector-settings.json"
-
-BACKGROUND_DEFAULTS = BackgroundSettings()
-DETECTION_DEFAULTS = DetectionSettings()
-TRACKING_DEFAULTS = TrackingSettings()
 
 
 @dataclass(frozen=True, slots=True)
 class Setting:
-    """What one setting may be set to, and what it opens on."""
+    """The range one slider offers.
+
+    A range written with whole ends counts something and cannot take a
+    fraction, which is what a value read out of a file is brought to.
+    """
 
     lowest: float
     highest: float
-    default: float
+
+    @property
+    def whole(self) -> bool:
+        return isinstance(self.lowest, int) and isinstance(self.highest, int)
 
     def held(self, value: float) -> float:
         """This value brought inside the range the slider offers."""
-        return type(self.default)(min(self.highest, max(self.lowest, value)))
+        inside = min(self.highest, max(self.lowest, value))
+        return int(inside) if self.whole else float(inside)
 
 
 SETTINGS: dict[str, Setting] = {
-    "foreground_sigma": Setting(1.0, 15.0, DETECTION_DEFAULTS.foreground_sigma),
-    "detection_sigma": Setting(5.0, 40.0, DETECTION_DEFAULTS.detection_sigma),
-    "min_pixels": Setting(1, 50, DETECTION_DEFAULTS.min_pixels),
-    "min_consecutive_frames": Setting(1, 20, TRACKING_DEFAULTS.min_consecutive_frames),
-    "max_movement_ratio": Setting(0.002, 0.100, TRACKING_DEFAULTS.max_movement_ratio),
-    "min_movement_ratio": Setting(0.0000, 0.0100, TRACKING_DEFAULTS.min_movement_ratio),
-    "max_missed_frames": Setting(0, 30, TRACKING_DEFAULTS.max_missed_frames),
-    "min_trajectory_span_ratio": Setting(0.000, 0.100, TRACKING_DEFAULTS.min_trajectory_span_ratio),
-    "mean_alpha": Setting(0.05, 1.00, BACKGROUND_DEFAULTS.mean_alpha),
-    "variance_alpha": Setting(0.005, 0.500, BACKGROUND_DEFAULTS.variance_alpha),
+    "foreground_sigma": Setting(1.0, 15.0),
+    "detection_sigma": Setting(5.0, 40.0),
+    "min_pixels": Setting(1, 50),
+    "min_consecutive_frames": Setting(1, 20),
+    "max_movement_ratio": Setting(0.002, 0.100),
+    "min_movement_ratio": Setting(0.0000, 0.0100),
+    "max_missed_frames": Setting(0, 30),
+    "min_trajectory_span_ratio": Setting(0.000, 0.100),
+    "mean_alpha": Setting(0.05, 1.00),
+    "variance_alpha": Setting(0.005, 0.500),
 }
 
 
@@ -63,8 +69,51 @@ class Reading:
 
 
 def defaults() -> dict[str, float]:
-    """The value every setting opens on."""
-    return {key: setting.default for key, setting in SETTINGS.items()}
+    """The value every setting opens on, read from the config each time.
+
+    Saving the page writes that file, so a later read has to see what
+    was written rather than what the sliders were first drawn from.
+    """
+    return as_values(config().settings)
+
+
+def as_values(settings: MovementSettings) -> dict[str, float]:
+    """The settings under the names their sliders go by."""
+    return {
+        "foreground_sigma": settings.detection.foreground_sigma,
+        "detection_sigma": settings.detection.detection_sigma,
+        "min_pixels": settings.detection.min_pixels,
+        "min_consecutive_frames": settings.tracking.min_consecutive_frames,
+        "max_movement_ratio": settings.tracking.max_movement_ratio,
+        "min_movement_ratio": settings.tracking.min_movement_ratio,
+        "max_missed_frames": settings.tracking.max_missed_frames,
+        "min_trajectory_span_ratio": settings.tracking.min_trajectory_span_ratio,
+        "mean_alpha": settings.background.mean_alpha,
+        "variance_alpha": settings.background.variance_alpha,
+    }
+
+
+def as_settings(values: dict[str, float], *, device: Device) -> MovementSettings:
+    """The settings the sliders are standing at."""
+    return MovementSettings(
+        background=BackgroundSettings(
+            mean_alpha=values["mean_alpha"],
+            variance_alpha=values["variance_alpha"],
+        ),
+        detection=DetectionSettings(
+            foreground_sigma=values["foreground_sigma"],
+            detection_sigma=values["detection_sigma"],
+            min_pixels=int(values["min_pixels"]),
+        ),
+        tracking=TrackingSettings(
+            min_consecutive_frames=int(values["min_consecutive_frames"]),
+            max_movement_ratio=values["max_movement_ratio"],
+            min_movement_ratio=values["min_movement_ratio"],
+            max_missed_frames=int(values["max_missed_frames"]),
+            min_trajectory_span_ratio=values["min_trajectory_span_ratio"],
+        ),
+        device=device,
+    )
 
 
 def as_file(values: dict[str, float]) -> bytes:

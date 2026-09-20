@@ -6,8 +6,15 @@ import numpy as np
 
 @dataclass(frozen=True, slots=True)
 class BackgroundSettings:
-    mean_alpha: float = 0.5
-    variance_alpha: float = 0.02
+    """How fast the background follows the frames it is measuring.
+
+    The two rates are set from the dashboard and come from the config,
+    so they are asked of the caller. The three below them have no
+    control of their own and keep their values here.
+    """
+
+    mean_alpha: float
+    variance_alpha: float
     noise_floor: float = 1.0
     outlier_sigma: float = 5.0
     smoothing_size: int = 3

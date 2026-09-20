@@ -1,20 +1,24 @@
 """Test trajectory merging across detection gaps."""
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
+from hessdalen.config import config
 from hessdalen.io.video import VideoStream
-from hessdalen.processing.movement import MovementDetector, MovementSettings, TrackingSettings
+from hessdalen.processing.movement import MovementDetector, TrackingSettings
 from synthetic import MockFrameSource
 
-MERGING_SETTINGS = MovementSettings(
+MERGING_SETTINGS = replace(
+    config().settings,
     tracking=TrackingSettings(
         min_consecutive_frames=3,
         max_movement_ratio=0.25,
         min_movement_ratio=0.01,
         max_missed_frames=3,
         min_trajectory_span_ratio=0.0,
-    )
+    ),
 )
 
 

@@ -29,19 +29,32 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class TrackingSettings:
-    min_consecutive_frames: int = 6
-    max_movement_ratio: float = 0.02
-    min_movement_ratio: float = 0.001
-    max_missed_frames: int = 8
-    min_trajectory_span_ratio: float = 0.02
+    """What a run of detections has to look like before it is a track.
+
+    Every one of these is set from the dashboard and comes from the
+    config, so they are asked of the caller.
+    """
+
+    min_consecutive_frames: int
+    max_movement_ratio: float
+    min_movement_ratio: float
+    max_missed_frames: int
+    min_trajectory_span_ratio: float
 
 
 @dataclass(frozen=True, slots=True)
 class MovementSettings:
-    background: BackgroundSettings = field(default_factory=BackgroundSettings)
-    detection: DetectionSettings = field(default_factory=DetectionSettings)
-    tracking: TrackingSettings = field(default_factory=TrackingSettings)
-    device: Device = "auto"
+    """Everything a run of the detector is told.
+
+    These come from the config rather than from values written here, so
+    the numbers a run starts from sit in one file that can be edited by
+    hand and written back from the dashboard.
+    """
+
+    background: BackgroundSettings
+    detection: DetectionSettings
+    tracking: TrackingSettings
+    device: Device
 
 
 @dataclass(slots=True)
