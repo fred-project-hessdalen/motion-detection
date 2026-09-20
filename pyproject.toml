@@ -18,6 +18,7 @@ build-backend = "setuptools.build_meta"
 
 [dependency-groups]
 core = [
+    "av>=18.1.0",
     "funcy>=2.0",
     "opencv-python>=4.13.0.92",
     "pydantic>=2.12.5",
