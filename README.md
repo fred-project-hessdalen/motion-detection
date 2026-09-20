@@ -101,13 +101,14 @@ in the sidebar plays at once, so two values can be compared without
 waiting for either again, and the clip built last keeps playing while
 the next one is built.
 
-The frames ahead of the segment are measured as well and not drawn, so
-the tracks and the background model stand where a run over the whole
-recording would leave them. At a frame height of 1080 a clip under
-`data/examples/clips` builds in 2 to 5 seconds, and an eight-second
-segment 41 seconds into a recording takes 6 to 10 seconds, most of it
-spent reaching the segment. Built clips are kept under
-`data/out/dashboard/live`, which can be deleted at any time.
+Only the segment is detected, so the background model opens on its first
+frame and takes its scene from the frames after it. At a frame height of
+1080 a clip under `data/examples/clips` builds in 2 to 4 seconds, and an
+eight-second segment 41 seconds into a recording takes 5 to 10 seconds.
+Most of the latter is spent reaching the segment, because neither
+decoder lands on the frame a linear decode calls by that number on these
+files, so everything before it has to be decoded. Built clips are kept
+under `data/out/dashboard/live`, which can be deleted at any time.
 
 A stored run and a live clip are both written through `ffmpeg` with
 `libx264`, which has to be on PATH.

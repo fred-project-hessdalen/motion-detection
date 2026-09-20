@@ -20,7 +20,7 @@ from streamlit.typing import DataframeState
 
 from hessdalen.dashboard.catalog import DevelopmentVideo, Label, development_videos
 from hessdalen.dashboard.encoder import playback_rate
-from hessdalen.dashboard.live import DRAWING, MEASURING, BuiltSegment, Progress, Segment, build_segment, load_segment
+from hessdalen.dashboard.live import BuiltSegment, Progress, Segment, build_segment, load_segment
 from hessdalen.dashboard.panels import PANEL_CHOICES, Panels
 from hessdalen.dashboard.runs import (
     DetectionRun,
@@ -46,7 +46,8 @@ SEGMENT_STEP = 0.5
 SEGMENT_SECONDS = 10.0
 SEGMENT_MARGIN_SECONDS = 3.0
 STATUS_FRAMES = 25
-PHASE_TEXT = {MEASURING: "Measuring up to the segment", DRAWING: "Drawing the segment"}
+REACHING_TEXT = "Reaching the segment"
+DRAWING_TEXT = "Drawing the segment"
 # Session key holding the clip on screen, so a build can leave it there. A
 # string of its own here would be drawn onto the page, the way Streamlit draws
 # every loose expression in the script it runs.
@@ -88,11 +89,11 @@ LIVE_HELP = (
     "The whole recording still has to be run to be played back with its tracks."
 )
 SEGMENT_HELP = (
-    "The stretch of the recording the clip holds. "
-    "The frames ahead of it are measured as well and not drawn, so a track and a background model stand where a run "
-    "over the whole recording would leave them, and a segment that starts late takes longer to build. "
-    "A background model needs about a hundred frames to settle, so a segment at the very start of a recording reads "
-    "high until it has."
+    "The stretch of the recording the clip holds, and the only stretch the detector measures. "
+    "A background model needs about a hundred frames to settle, so a segment reads high over its own first frames "
+    "where a run over the whole recording would not. Allow for that at the front, or start the segment earlier. "
+    "Reaching a segment still costs a decode of the recording ahead of it, so one starting late takes longer to "
+    "build."
 )
 PANELS_HELP = (
     "Which panels the run draws. Each one costs a pass over the recording and its share of the encode, "
@@ -452,7 +453,7 @@ def _live(video: DevelopmentVideo, *, view: _RunView) -> None:
 
     held = _playing()
     _play_again(picture, clip=held)
-    progress = st.progress(0.0)
+    progress = st.progress(0.0, text=REACHING_TEXT)
     try:
         built = build_segment(
             video.path,
@@ -538,7 +539,7 @@ def _stored_segment(video: DevelopmentVideo, *, view: _RunView, segment: Segment
 
 def _build_reporter(progress: DeltaGenerator, *, status: DeltaGenerator) -> Callable[[Progress], None]:
     def report(point: Progress) -> None:
-        progress.progress(point.fraction, text=PHASE_TEXT[point.phase])
+        progress.progress(point.fraction, text=DRAWING_TEXT)
         if point.frame_number % STATUS_FRAMES == 0:
             status.caption(f"Frame {point.frame_number} of {point.frame_count}.")
 

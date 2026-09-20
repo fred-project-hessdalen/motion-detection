@@ -6,10 +6,15 @@ the page at the rate it was written at. A frame pushed at a time cannot,
 because nothing on the far side holds it to a rate, so each frame
 arrives when its fetch and its decode happen to finish.
 
-The frames ahead of the segment are measured as well and not drawn,
-which leaves the background model and the tracks where a run over the
-whole recording would leave them. Their colour is only grabbed, because
-only the segment is drawn.
+Only the segment is detected. The background model therefore opens on
+the segment's first frame and takes its scene from the frames after it,
+so a segment beginning in the middle of a recording reads high for its
+first frames where a run over the whole recording would not.
+
+Reaching the segment still costs a decode of everything before it,
+because neither decoder lands on the frame a linear decode calls by that
+number on the cameras' files. Those frames are passed by as cheaply as
+each decoder allows.
 """
 
 from __future__ import annotations
@@ -19,7 +24,7 @@ import time
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import cv2
 import numpy as np
@@ -45,10 +50,6 @@ from hessdalen.processing.movement import MovementDetector, MovementSettings
 MODULES = ("live.py", "panels.py", "encoder.py")
 """The dashboard modules that decide what a built segment holds."""
 
-Phase = Literal["measuring", "drawing"]
-MEASURING: Phase = "measuring"
-DRAWING: Phase = "drawing"
-
 
 @dataclass(frozen=True, slots=True)
 class Segment:
@@ -64,9 +65,8 @@ class Segment:
 
 @dataclass(frozen=True, slots=True)
 class Progress:
-    """How far a build has got through the phase it is in."""
+    """How many of the segment's frames a build has drawn."""
 
-    phase: Phase
     frame_number: int
     frame_count: int
 
@@ -115,7 +115,7 @@ def build_segment(
     )
 
     names = layout(panels)
-    gray_stream = masked_stream(video, target_height=target_height)
+    gray_stream = masked_stream(video, target_height=target_height, first_frame=segment.begin_frame)
     height, width = gray_stream.frame_shape
     panel_height, panel_width = even(height), even(width)
     size = box_size(panel_height, panel_width)
@@ -132,13 +132,6 @@ def build_segment(
     trails: dict[int, Trail] = {}
 
     def planar_frames() -> Iterator[np.ndarray]:
-        for frame_number in range(segment.begin_frame):
-            gray = next(gray_frames, None)
-            if gray is None:
-                return
-            extend_trails(trails, detector.process_frame(gray))
-            on_progress(progress_at(frame_number, segment=segment))
-
         for offset, (colour, gray) in enumerate(zip(colour_frames, gray_frames)):
             frame_number = segment.begin_frame + offset
             if frame_number > segment.end_frame:
@@ -157,7 +150,7 @@ def build_segment(
 
             cv2.cvtColor(stacked, cv2.COLOR_BGR2YUV_I420, dst=planar)
             yield planar
-            on_progress(progress_at(frame_number, segment=segment))
+            on_progress(Progress(frame_number=offset, frame_count=segment.drawn_frames))
 
     started = time.perf_counter()
     frame_count = encode(
@@ -203,18 +196,6 @@ def load_segment(
         frame_count=int(record["frame_count"]),
         track_count=int(record["track_count"]),
         build_seconds=float(record["build_seconds"]),
-    )
-
-
-def progress_at(frame_number: int, *, segment: Segment) -> Progress:
-    """Which phase a frame belongs to, and how far into that phase it
-    stands."""
-    if frame_number < segment.begin_frame:
-        return Progress(phase=MEASURING, frame_number=frame_number, frame_count=segment.begin_frame)
-    return Progress(
-        phase=DRAWING,
-        frame_number=frame_number - segment.begin_frame,
-        frame_count=segment.drawn_frames,
     )
 
 
