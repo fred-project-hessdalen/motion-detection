@@ -89,17 +89,18 @@ class MovementDetector:
         previous_debug_sink = self._debug_sink
         self._debug_sink = debug_sink
         try:
-            yield from mapcat(self._process_frame, self._frames())
+            yield from mapcat(self.process_frame, self._frames())
         finally:
             self._debug_sink = previous_debug_sink
 
-    def _frames(self) -> Generator[VideoFrame, None, None]:
-        """Colour frames when the sink draws on them, grayscale otherwise."""
-        if self._debug_sink.wants_frames:
-            return self.stream.stream_frames()
-        return self.stream.stream_gray_frames()
+    def process_frame(self, frame: VideoFrame) -> list[MovementEvent]:
+        """The events one frame produces, for a caller that owns the frame
+        loop.
 
-    def _process_frame(self, frame: VideoFrame) -> Generator[MovementEvent, None, None]:
+        A caller that drives the detector frame by frame can show each
+        frame as it is measured, which detect cannot do because it holds
+        the loop itself.
+        """
         frame_number = int(frame.frame_number)
         analysis = self._analyze_frame(frame_number, frame)
 
@@ -114,10 +115,15 @@ class MovementDetector:
             )
 
         if analysis.events:
-            yield from analysis.events
-            return
+            return analysis.events
 
-        yield MovementEvent(frame_number=frame_number, track_id=None, centroid=None)
+        return [MovementEvent(frame_number=frame_number, track_id=None, centroid=None)]
+
+    def _frames(self) -> Generator[VideoFrame, None, None]:
+        """Colour frames when the sink draws on them, grayscale otherwise."""
+        if self._debug_sink.wants_frames:
+            return self.stream.stream_frames()
+        return self.stream.stream_gray_frames()
 
     def _analyze_frame(self, frame_number: int, frame: VideoFrame) -> FrameAnalysis:
         gray = self._to_grayscale(frame.frame)

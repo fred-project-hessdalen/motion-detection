@@ -8,6 +8,7 @@ README gives the command that starts it.
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,10 +19,11 @@ from streamlit.delta_generator import DeltaGenerator
 from streamlit.typing import DataframeState
 
 from hessdalen.dashboard.catalog import DevelopmentVideo, Label, development_videos
+from hessdalen.dashboard.live import Segment, live_frames
+from hessdalen.dashboard.panels import PANEL_CHOICES, Panels
 from hessdalen.dashboard.runs import (
-    PANEL_CHOICES,
+    FALLBACK_FPS,
     DetectionRun,
-    Panels,
     VideoProbe,
     load_run,
     probe,
@@ -39,6 +41,10 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 OUTPUT_DIR = REPO_ROOT / "data" / "out" / "dashboard"
 EXAMPLES_DIR_VARIABLE = "HESSDALEN_EXAMPLES_DIR"
 FRAME_HEIGHTS = (270, 540, 720, 1080, 1440, 2160)
+SEGMENT_STEP = 0.5
+SEGMENT_SECONDS = 10.0
+SEGMENT_MARGIN_SECONDS = 3.0
+STATUS_FRAMES = 25
 
 BACKGROUND_DEFAULTS = BackgroundSettings()
 DETECTION_DEFAULTS = DetectionSettings()
@@ -52,6 +58,18 @@ PLAYBACK_HELP = (
     "The number beside a box is the track id."
 )
 TRACKS_HELP = "One row per track the detector confirmed, in the order the tracks were opened."
+LIVE_HELP = (
+    "Play the selected recording while the detector runs on it, over and over. "
+    "Moving a setting starts the segment again under the new value, so its effect is on screen while it is being "
+    "found. Nothing is stored, and the recording still has to be run to be played back with its tracks."
+)
+SEGMENT_HELP = (
+    "The stretch of the recording the live view draws. "
+    "The frames ahead of it are measured as well and not drawn, so a track and a background model stand where a run "
+    "over the whole recording would leave them, and a segment that starts late takes a moment to reach. "
+    "A background model needs about a hundred frames to settle, so a segment at the very start of a recording reads "
+    "high until it has."
+)
 PANELS_HELP = (
     "Which panels the run draws. Each one costs a pass over the recording and its share of the encode, "
     "so one panel takes about half as long as both."
@@ -104,9 +122,13 @@ def main() -> None:
 
     with run_controls:
         queued = _run_controls(videos=videos, selected=selected)
+        live = st.toggle("Live", help=LIVE_HELP)
     if queued:
         _execute(queued, view=view)
 
+    if live:
+        _live(selected, view=view)
+        return
     _playback(selected, view=view)
 
 
@@ -352,6 +374,92 @@ def _probe_cached(video: Path) -> VideoProbe:
 
 def _label_text(labels: tuple[Label, ...]) -> str:
     return ", ".join(f"{label.name} {label.begin_s:.0f}-{label.end_s:.0f} s" for label in labels)
+
+
+def _live(video: DevelopmentVideo, *, view: _RunView) -> None:
+    """Play the segment over and over until a setting is moved.
+
+    Every frame drawn onto the page is a point at which Streamlit hands
+    a waiting change to the script, so a change stops the pass at the
+    frame it has reached and the next script run plays the segment under
+    the new value. Holding the passes in one script run keeps the frame
+    last drawn on the page while the next pass reaches its first one.
+    """
+    st.subheader("Live", help=LIVE_HELP)
+    details = _probe_cached(video.path)
+    segment = _segment_control(video, details=details)
+
+    picture = st.empty()
+    status = st.empty()
+    while _play(video, view=view, details=details, segment=segment, picture=picture, status=status):
+        continue
+    status.caption(f"{video.name} ends before the segment starts.")
+
+
+def _play(
+    video: DevelopmentVideo,
+    *,
+    view: _RunView,
+    details: VideoProbe,
+    segment: Segment,
+    picture: DeltaGenerator,
+    status: DeltaGenerator,
+) -> bool:
+    """Play the segment once, and report whether it holds any frames."""
+    drawn = 0
+    marked = 0.0
+    for frame in live_frames(
+        video.path,
+        settings=view.settings,
+        target_height=view.target_height,
+        panels=view.panels,
+        segment=segment,
+        frames_per_second=details.frames_per_second,
+        on_lead_in=_lead_in_reporter(status, segment=segment),
+    ):
+        picture.image(frame.image, width="stretch")
+        if drawn == 0:
+            marked = time.perf_counter()
+        drawn += 1
+
+        if drawn % STATUS_FRAMES == 0:
+            now = time.perf_counter()
+            status.caption(f"{_count(frame.track_count, 'track')} at {STATUS_FRAMES / (now - marked):.0f} fps.")
+            marked = now
+    return drawn > 0
+
+
+def _segment_control(video: DevelopmentVideo, *, details: VideoProbe) -> Segment:
+    rate = details.frames_per_second if details.frames_per_second > 0 else FALLBACK_FPS
+    duration = max(round(details.frame_count / rate, 1), SEGMENT_STEP)
+    begin, end = st.slider(
+        "Segment",
+        min_value=0.0,
+        max_value=duration,
+        value=_default_segment(video.labels, duration=duration),
+        step=SEGMENT_STEP,
+        format="%.1f s",
+        help=SEGMENT_HELP,
+    )
+    return Segment(begin_frame=int(begin * rate), end_frame=int(end * rate))
+
+
+def _default_segment(labels: tuple[Label, ...], *, duration: float) -> tuple[float, float]:
+    """The stretch the live view opens on, which is the labelled event."""
+    if not labels:
+        return 0.0, min(SEGMENT_SECONDS, duration)
+
+    begin = max(0.0, min(label.begin_s for label in labels) - SEGMENT_MARGIN_SECONDS)
+    end = min(duration, max(label.end_s for label in labels) + SEGMENT_MARGIN_SECONDS)
+    return begin, end
+
+
+def _lead_in_reporter(status: DeltaGenerator, *, segment: Segment) -> Callable[[int], None]:
+    def report(frame_number: int) -> None:
+        if frame_number % STATUS_FRAMES == 0:
+            status.caption(f"Measuring up to the segment, frame {frame_number} of {segment.begin_frame}.")
+
+    return report
 
 
 def _playback(video: DevelopmentVideo, *, view: _RunView) -> None:

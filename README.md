@@ -81,6 +81,15 @@ currently in the sidebar plays back without running again. Set
 `HESSDALEN_EXAMPLES_DIR` to list recordings from somewhere other than
 `data/examples`.
 
+The Live switch plays a segment of the selected recording over and over
+while the detector runs on it, and moving any setting starts the segment
+again under the new value. At a frame height of 1080 a segment holds the
+25 frames a second the cameras record at. The frames ahead of the
+segment are measured as well and not drawn, so the tracks and the
+background model stand where a run over the whole recording would leave
+them, and a segment that starts a thousand frames in takes a few seconds
+to reach. The clips start at the event, so they reach it at once.
+
 Rendering the annotated video needs `ffmpeg` with `libx264` on PATH.
 
 

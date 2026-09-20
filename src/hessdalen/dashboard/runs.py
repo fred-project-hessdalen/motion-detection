@@ -18,28 +18,33 @@ from dataclasses import asdict, dataclass
 from functools import cache
 from itertools import repeat
 from pathlib import Path
-from typing import Any, Literal, get_args
+from typing import Any
 
 import cv2
 import numpy as np
 
+from hessdalen.dashboard.panels import (
+    DEVIATION,
+    RECORDING,
+    Panels,
+    box_size,
+    draw_box,
+    draw_frame_number,
+    draw_trail,
+    layout,
+    recording_frames,
+)
 from hessdalen.domain.models import MovementEvent, VideoFrame
-from hessdalen.io.video import TIMESTAMP_MASK_COORDS, FileFrameSource, VideoStream
+from hessdalen.io.video import masked_stream
 from hessdalen.processing.debug import track_color
 from hessdalen.processing.devices import detection_stage
 from hessdalen.processing.movement import MovementDetector, MovementSettings
 
-BOX_RATIO = 0.025
-MIN_BOX_SIZE = 8
 FALLBACK_FPS = 25.0
 PHASES = 2
 DETECTOR_PACKAGES = ("domain", "io", "processing")
+DRAWING_MODULES = ("panels.py",)
 ENCODER_PIXEL_FORMAT = "yuv420p"
-
-RECORDING = "recording"
-DEVIATION = "deviation"
-Panels = Literal["recording", "deviation", "both"]
-PANEL_CHOICES: tuple[Panels, ...] = get_args(Panels)
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,16 +213,8 @@ def _detect(
     target_height: int,
     on_frame: Callable[[int], None],
 ) -> tuple[Trajectory, ...]:
-    detector = MovementDetector(stream=_stream(video, target_height=target_height), settings=settings)
+    detector = MovementDetector(stream=masked_stream(video, target_height=target_height), settings=settings)
     return trajectories_from_events(_reporting_progress(detector.detect(), on_frame))
-
-
-def _stream(video: Path, *, target_height: int) -> VideoStream:
-    return VideoStream(
-        FileFrameSource(video),
-        mask_coords=TIMESTAMP_MASK_COORDS,
-        target_height=target_height,
-    )
 
 
 def _reporting_progress(events: Iterable[MovementEvent], on_frame: Callable[[int], None]) -> Iterator[MovementEvent]:
@@ -247,20 +244,20 @@ def _render(
     number of frames written. Some containers declare a frame count
     their stream does not hold, so this is the count that was decoded.
     """
-    layout = _layout(panels)
-    height, width = _stream(video, target_height=target_height).frame_shape
+    names = layout(panels)
+    height, width = masked_stream(video, target_height=target_height).frame_shape
     panel_height, panel_width = _even(height), _even(width)
 
     overlays = _overlays(trajectories)
-    box_size = max(MIN_BOX_SIZE, int(BOX_RATIO * max(panel_height, panel_width)))
+    size = box_size(panel_height, panel_width)
 
-    stacked = np.empty((panel_height * len(layout), panel_width, 3), dtype=np.uint8)
-    views = {name: stacked[index * panel_height : (index + 1) * panel_height] for index, name in enumerate(layout)}
-    planar = np.empty((panel_height * len(layout) * 3 // 2, panel_width), dtype=np.uint8)
+    stacked = np.empty((panel_height * len(names), panel_width, 3), dtype=np.uint8)
+    views = {name: stacked[index * panel_height : (index + 1) * panel_height] for index, name in enumerate(names)}
+    planar = np.empty((panel_height * len(names) * 3 // 2, panel_width), dtype=np.uint8)
 
-    colour_frames = _recording_frames(video, target_height=target_height, wanted=RECORDING in layout)
-    gray_stream = _stream(video, target_height=target_height)
-    gray_frames: Iterator[VideoFrame | None] = gray_stream.stream_gray_frames() if DEVIATION in layout else repeat(None)
+    colour_frames = recording_frames(video, target_height=target_height, wanted=RECORDING in names)
+    gray_stream = masked_stream(video, target_height=target_height)
+    gray_frames: Iterator[VideoFrame | None] = gray_stream.stream_gray_frames() if DEVIATION in names else repeat(None)
     stage = detection_stage(
         device=settings.device,
         background=settings.background,
@@ -271,7 +268,7 @@ def _render(
     encoder = _open_encoder(
         output,
         width=panel_width,
-        height=panel_height * len(layout),
+        height=panel_height * len(names),
         frames_per_second=frames_per_second if frames_per_second > 0 else FALLBACK_FPS,
     )
     stdin = encoder.stdin
@@ -289,8 +286,8 @@ def _render(
                 cv2.cvtColor(stage.deviation_image()[:panel_height, :panel_width], cv2.COLOR_GRAY2BGR, dst=view)
 
             for panel in views.values():
-                _draw_overlays(panel, overlays=overlays, frame_number=frame_number, box_size=box_size)
-            _draw_frame_number(views[layout[0]], frame_number)
+                _draw_overlays(panel, overlays=overlays, frame_number=frame_number, size=size)
+            draw_frame_number(views[names[0]], frame_number)
 
             cv2.cvtColor(stacked, cv2.COLOR_BGR2YUV_I420, dst=planar)
             stdin.write(planar)
@@ -303,17 +300,6 @@ def _render(
     if encoder.returncode != 0:
         raise RuntimeError(f"ffmpeg exited with status {encoder.returncode}.")
     return frames_written
-
-
-def _layout(panels: Panels) -> tuple[str, ...]:
-    """The panels to stack, from top to bottom."""
-    return (RECORDING, DEVIATION) if panels == "both" else (panels,)
-
-
-def _recording_frames(video: Path, *, target_height: int, wanted: bool) -> Iterator[VideoFrame | None]:
-    if not wanted:
-        return repeat(None)
-    return _stream(video, target_height=target_height).stream_frames()
 
 
 def _even(size: int) -> int:
@@ -343,37 +329,16 @@ def _overlays(trajectories: tuple[Trajectory, ...]) -> tuple[_Overlay, ...]:
     )
 
 
-def _draw_overlays(canvas: np.ndarray, *, overlays: tuple[_Overlay, ...], frame_number: int, box_size: int) -> None:
+def _draw_overlays(canvas: np.ndarray, *, overlays: tuple[_Overlay, ...], frame_number: int, size: int) -> None:
     for overlay in overlays:
         reached = bisect_right(overlay.frames, frame_number)
         if reached == 0:
             continue
 
         color = track_color(overlay.track_id)
-        cv2.polylines(canvas, [overlay.polyline[:reached]], isClosed=False, color=color, thickness=2)
+        draw_trail(canvas, polyline=overlay.polyline[:reached], color=color)
         if overlay.frames[reached - 1] == frame_number:
-            _draw_box(
-                canvas, point=overlay.polyline[reached - 1], color=color, box_size=box_size, label=str(overlay.track_id)
-            )
-
-
-def _draw_box(
-    canvas: np.ndarray,
-    *,
-    point: np.ndarray,
-    color: tuple[int, int, int],
-    box_size: int,
-    label: str,
-) -> None:
-    x, y = int(point[0]), int(point[1])
-    cv2.rectangle(canvas, (x - box_size, y - box_size), (x + box_size, y + box_size), color, 2)
-    cv2.putText(canvas, label, (x - box_size, y - box_size - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-
-
-def _draw_frame_number(canvas: np.ndarray, frame_number: int) -> None:
-    position = (12, 36)
-    cv2.putText(canvas, f"frame {frame_number}", position, cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 5)
-    cv2.putText(canvas, f"frame {frame_number}", position, cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
+            draw_box(canvas, point=overlay.polyline[reached - 1], color=color, size=size, label=str(overlay.track_id))
 
 
 def _open_encoder(
@@ -457,13 +422,16 @@ def _code_digest() -> str:
 
     The dashboard is used while the detector is being changed, so a
     stored run has to stop matching once its code has been edited. This
-    module is included because it draws the video.
+    module and the one that draws the marks are included because they
+    decide what the video shows.
     """
-    package = Path(__file__).resolve().parents[1]
+    here = Path(__file__).resolve()
+    package = here.parents[1]
     sources = [source for name in DETECTOR_PACKAGES for source in sorted((package / name).rglob("*.py"))]
+    drawing = [here.parent / name for name in DRAWING_MODULES]
 
     digest = hashlib.sha1()
-    for source in [*sources, Path(__file__).resolve()]:
+    for source in [*sources, here, *drawing]:
         digest.update(source.read_bytes())
     return digest.hexdigest()[:10]
 

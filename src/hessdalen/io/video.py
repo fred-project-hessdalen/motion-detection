@@ -218,6 +218,12 @@ def stream_frames_from_file(video_path: Path, *, target_height: int | None = Non
     return VideoStream(FileFrameSource(video_path), target_height=target_height).stream_frames()
 
 
+def masked_stream(video_path: Path, *, target_height: int) -> VideoStream:
+    """A recording as the detector reads it, with the timestamp corner blanked
+    out."""
+    return VideoStream(FileFrameSource(video_path), mask_coords=TIMESTAMP_MASK_COORDS, target_height=target_height)
+
+
 def luma_plane(frame: av.VideoFrame) -> np.ndarray:
     """The decoded frame's grayscale, as a view on the decoder's own memory.
 
