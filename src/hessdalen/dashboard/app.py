@@ -47,12 +47,29 @@ SEGMENT_SECONDS = 10.0
 SEGMENT_MARGIN_SECONDS = 3.0
 STATUS_FRAMES = 25
 PHASE_TEXT = {MEASURING: "Measuring up to the segment", DRAWING: "Drawing the segment"}
+# Session key holding the clip on screen, so a build can leave it there. A
+# string of its own here would be drawn onto the page, the way Streamlit draws
+# every loose expression in the script it runs.
 PLAYING = "playing"
-"""Session key holding the clip on screen, so a build can leave it there."""
 
 BACKGROUND_DEFAULTS = BackgroundSettings()
 DETECTION_DEFAULTS = DetectionSettings()
 TRACKING_DEFAULTS = TrackingSettings()
+
+# The value Reset puts each slider back to, under the key naming it. Read off
+# the settings themselves, so a default changed there is the one Reset gives.
+SETTING_DEFAULTS: dict[str, float] = {
+    "foreground_sigma": DETECTION_DEFAULTS.foreground_sigma,
+    "detection_sigma": DETECTION_DEFAULTS.detection_sigma,
+    "min_pixels": DETECTION_DEFAULTS.min_pixels,
+    "min_consecutive_frames": TRACKING_DEFAULTS.min_consecutive_frames,
+    "max_movement_ratio": TRACKING_DEFAULTS.max_movement_ratio,
+    "min_movement_ratio": TRACKING_DEFAULTS.min_movement_ratio,
+    "max_missed_frames": TRACKING_DEFAULTS.max_missed_frames,
+    "min_trajectory_span_ratio": TRACKING_DEFAULTS.min_trajectory_span_ratio,
+    "mean_alpha": BACKGROUND_DEFAULTS.mean_alpha,
+    "variance_alpha": BACKGROUND_DEFAULTS.variance_alpha,
+}
 
 PLAYBACK_HELP = (
     "The recording panel shows the frames as the detector sees them, with the timestamp corner masked out. "
@@ -86,6 +103,10 @@ RECORDINGS_HELP = (
     "Tracks and run time are filled in once a recording has been run with the settings in the sidebar."
 )
 DURATION_HELP = "Taken from the container until the recording has been run, and from the decoded frames after that."
+RESET_HELP = (
+    "Put the detection, tracking and background settings back to the values the detector ships with. "
+    "Frame height, panels and device are left as they are."
+)
 DEVICE_HELP = (
     "Where the per-pixel work runs. Auto takes the graphics card when one answers, "
     "which finds the same tracks in about half the time."
@@ -188,28 +209,29 @@ def _run_controls(*, videos: list[DevelopmentVideo], selected: DevelopmentVideo)
 
 
 def _settings_controls(device: Device) -> MovementSettings:
+    _seed_settings()
     with st.expander("Detection", expanded=True):
         foreground_sigma = st.slider(
             "Foreground sigma",
             min_value=1.0,
             max_value=15.0,
-            value=DETECTION_DEFAULTS.foreground_sigma,
             step=0.5,
+            key="foreground_sigma",
             help="How far a pixel has to depart from its own background noise to join a blob.",
         )
         detection_sigma = st.slider(
             "Detection sigma",
             min_value=5.0,
             max_value=40.0,
-            value=DETECTION_DEFAULTS.detection_sigma,
             step=0.5,
+            key="detection_sigma",
             help="How far the brightest pixel of a blob has to depart before the blob is reported.",
         )
         min_pixels = st.slider(
             "Minimum pixels",
             min_value=1,
             max_value=50,
-            value=DETECTION_DEFAULTS.min_pixels,
+            key="min_pixels",
             help="Smallest blob the detector reports.",
         )
 
@@ -218,41 +240,41 @@ def _settings_controls(device: Device) -> MovementSettings:
             "Minimum consecutive frames",
             min_value=1,
             max_value=20,
-            value=TRACKING_DEFAULTS.min_consecutive_frames,
+            key="min_consecutive_frames",
             help="How many frames in a row a detection has to be matched before the track is confirmed.",
         )
         max_movement_ratio = st.slider(
             "Maximum movement ratio",
             min_value=0.002,
             max_value=0.100,
-            value=TRACKING_DEFAULTS.max_movement_ratio,
             step=0.002,
             format="%.3f",
+            key="max_movement_ratio",
             help="Furthest a track may move between frames, as a ratio of the larger frame dimension.",
         )
         min_movement_ratio = st.slider(
             "Minimum movement ratio",
             min_value=0.0000,
             max_value=0.0100,
-            value=TRACKING_DEFAULTS.min_movement_ratio,
             step=0.0005,
             format="%.4f",
+            key="min_movement_ratio",
             help="Least a track has to move between frames, which drops stationary brightness changes.",
         )
         max_missed_frames = st.slider(
             "Maximum missed frames",
             min_value=0,
             max_value=30,
-            value=TRACKING_DEFAULTS.max_missed_frames,
+            key="max_missed_frames",
             help="How long a track may go unmatched and still take up a later detection.",
         )
         min_trajectory_span_ratio = st.slider(
             "Minimum trajectory span ratio",
             min_value=0.000,
             max_value=0.100,
-            value=TRACKING_DEFAULTS.min_trajectory_span_ratio,
             step=0.005,
             format="%.3f",
+            key="min_trajectory_span_ratio",
             help="Least ground a track has to cover before it is confirmed, as a ratio of the larger frame dimension.",
         )
 
@@ -261,19 +283,21 @@ def _settings_controls(device: Device) -> MovementSettings:
             "Mean alpha",
             min_value=0.05,
             max_value=1.00,
-            value=BACKGROUND_DEFAULTS.mean_alpha,
             step=0.05,
+            key="mean_alpha",
             help="Rate at which the background mean follows the frame.",
         )
         variance_alpha = st.slider(
             "Variance alpha",
             min_value=0.005,
             max_value=0.500,
-            value=BACKGROUND_DEFAULTS.variance_alpha,
             step=0.005,
             format="%.3f",
+            key="variance_alpha",
             help="Rate at which the per-pixel noise estimate follows the frame.",
         )
+
+    st.button("Reset", width="stretch", on_click=_restore_defaults, help=RESET_HELP)
 
     return MovementSettings(
         background=BackgroundSettings(mean_alpha=mean_alpha, variance_alpha=variance_alpha),
@@ -291,6 +315,28 @@ def _settings_controls(device: Device) -> MovementSettings:
         ),
         device=device,
     )
+
+
+def _seed_settings() -> None:
+    """Put each setting in the session before its slider is drawn.
+
+    A slider carrying a starting value of its own as well as a key has
+    Streamlit report that the two disagree, so the value is kept in the
+    session alone and the sliders read it from there.
+    """
+    for key, default in SETTING_DEFAULTS.items():
+        if key not in st.session_state:
+            st.session_state[key] = default
+
+
+def _restore_defaults() -> None:
+    """Put every setting slider back to the value it opens on.
+
+    Streamlit refuses to set a widget from the script once that widget
+    has been drawn, so this runs as the button's own callback, which it
+    takes before the page is drawn again.
+    """
+    st.session_state.update(SETTING_DEFAULTS)
 
 
 def _execute(videos: list[DevelopmentVideo], *, view: _RunView) -> None:
