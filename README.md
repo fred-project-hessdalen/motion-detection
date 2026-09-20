@@ -31,9 +31,20 @@ Run with `--help` for all available parameters.
 
 Every pixel keeps a running mean and a running estimate of its own noise,
 and a pixel counts towards a detection once it departs from that mean by
-a given number of its own standard deviations. A dark sky, a moonlit
-slope and a snowy afternoon all read on that one scale, so a single set
-of settings covers them.
+a given number of standard deviations. The estimate never falls below
+`noise_floor` on `BackgroundSettings`, which is one grey level.
+
+That floor is what most of the picture runs on. H.264 repeats a block
+verbatim while nothing in it changes, so a pixel in a still part of the
+scene has no noise left to measure, and over the example recordings the
+estimate stays at the floor on 98.8 to 99.99 percent of the frame. With
+the floor at one grey level the threshold there is `--detection-sigma`
+grey levels. A dark sky, a moonlit slope and a snowy afternoon all read
+on that one scale, so a single set of settings covers them.
+
+The measured estimate takes over where the scene keeps moving. Over
+foliage and a wind-blown horizon the noise climbs above the floor and
+those pixels need a much larger departure before they report.
 
 `--detection-sigma` sets how far a blob's brightest pixel has to depart
 from the background to be reported, and it is the first parameter to
