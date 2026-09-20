@@ -110,8 +110,7 @@ def blobs_around_peaks(
     deviations: np.ndarray,
     min_pixels: int,
 ) -> list[Detection]:
-    """Report the blob around every pixel that reaches the detection
-    threshold.
+    """Report the blob around every pixel that reaches the detection threshold.
 
     A blob holding no such pixel cannot be reported, so filling out from
     the pixels that did leaves a handful of blobs to measure out of the
@@ -120,8 +119,8 @@ def blobs_around_peaks(
     The fill writes MEASURED over the blob it has just counted, so the
     peaks standing on MEASURED are that blob's own. Every earlier blob
     took its peaks with it when it was filled, and the peaks arrive in
-    row order, so a blob whose strongest value appears more than once
-    is placed at the first of them.
+    row order, so a blob whose strongest value appears more than once is
+    placed at the first of them.
     """
     found: list[Detection] = []
     claimed = np.zeros(rows.size, dtype=bool)

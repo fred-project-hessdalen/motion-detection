@@ -273,8 +273,8 @@ def _planar_bytes(canvas: np.ndarray) -> bytes:
 def _even(size: int) -> int:
     """The largest even size at or below this one.
 
-    Colour is stored for every second row and column, so a frame with
-    an odd side loses that side's last line.
+    Colour is stored for every second row and column, so a frame with an
+    odd side loses that side's last line.
     """
     return size - size % 2
 
