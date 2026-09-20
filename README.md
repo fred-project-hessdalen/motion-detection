@@ -92,6 +92,13 @@ currently in the sidebar plays back without running again. Set
 `HESSDALEN_EXAMPLES_DIR` to list recordings from somewhere other than
 `data/examples`.
 
+Under the settings, Reset puts the detection, tracking and background
+sliders back to the values the detector ships with, Export writes those
+same settings to a file, and Import reads a file back. Frame height,
+panels and device are left out of all three. A file may name as few
+settings as it likes, and the sliders it does not name stay where they
+stand.
+
 The Live switch builds a segment of the selected recording into a short
 clip and loops it in the page, and moving any setting builds the segment
 again under the new value. The clip plays at the rate it was written at,

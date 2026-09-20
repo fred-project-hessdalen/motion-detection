@@ -29,6 +29,14 @@ from hessdalen.dashboard.runs import (
     probe,
     run_detection,
 )
+from hessdalen.dashboard.settings import (
+    FILE_NAME,
+    SETTINGS,
+    Reading,
+    as_file,
+    defaults,
+    from_file,
+)
 from hessdalen.processing.background import BackgroundSettings
 from hessdalen.processing.devices import DEVICES, Device
 from hessdalen.processing.movement import (
@@ -53,24 +61,12 @@ DRAWING_TEXT = "Drawing the segment"
 # every loose expression in the script it runs.
 PLAYING = "playing"
 
-BACKGROUND_DEFAULTS = BackgroundSettings()
-DETECTION_DEFAULTS = DetectionSettings()
-TRACKING_DEFAULTS = TrackingSettings()
-
-# The value Reset puts each slider back to, under the key naming it. Read off
-# the settings themselves, so a default changed there is the one Reset gives.
-SETTING_DEFAULTS: dict[str, float] = {
-    "foreground_sigma": DETECTION_DEFAULTS.foreground_sigma,
-    "detection_sigma": DETECTION_DEFAULTS.detection_sigma,
-    "min_pixels": DETECTION_DEFAULTS.min_pixels,
-    "min_consecutive_frames": TRACKING_DEFAULTS.min_consecutive_frames,
-    "max_movement_ratio": TRACKING_DEFAULTS.max_movement_ratio,
-    "min_movement_ratio": TRACKING_DEFAULTS.min_movement_ratio,
-    "max_missed_frames": TRACKING_DEFAULTS.max_missed_frames,
-    "min_trajectory_span_ratio": TRACKING_DEFAULTS.min_trajectory_span_ratio,
-    "mean_alpha": BACKGROUND_DEFAULTS.mean_alpha,
-    "variance_alpha": BACKGROUND_DEFAULTS.variance_alpha,
-}
+# Session keys for the file being read in and for what reading it did. The
+# uploader is named after the number of files taken so far, so taking one
+# empties the box and the same file can be read in again.
+SETTINGS_FILE = "settings_file"
+IMPORTS = "imports"
+IMPORT_REPORT = "import_report"
 
 PLAYBACK_HELP = (
     "The recording panel shows the frames as the detector sees them, with the timestamp corner masked out. "
@@ -107,6 +103,15 @@ DURATION_HELP = "Taken from the container until the recording has been run, and 
 RESET_HELP = (
     "Put the detection, tracking and background settings back to the values the detector ships with. "
     "Frame height, panels and device are left as they are."
+)
+EXPORT_HELP = (
+    "Write the detection, tracking and background settings to a file. "
+    "Frame height, panels and device are left out, the same ones Reset leaves alone."
+)
+IMPORT_HELP = (
+    "Read settings back from a file written by Export. "
+    "A setting the file does not name is left where it stands, and one outside what its slider offers is "
+    "brought to the nearest end."
 )
 DEVICE_HELP = (
     "Where the per-pixel work runs. Auto takes the graphics card when one answers, "
@@ -211,43 +216,51 @@ def _run_controls(*, videos: list[DevelopmentVideo], selected: DevelopmentVideo)
 
 def _settings_controls(device: Device) -> MovementSettings:
     _seed_settings()
+    foreground = SETTINGS["foreground_sigma"]
+    detection = SETTINGS["detection_sigma"]
+    pixels = SETTINGS["min_pixels"]
     with st.expander("Detection", expanded=True):
         foreground_sigma = st.slider(
             "Foreground sigma",
-            min_value=1.0,
-            max_value=15.0,
+            min_value=foreground.lowest,
+            max_value=foreground.highest,
             step=0.5,
             key="foreground_sigma",
             help="How far a pixel has to depart from its own background noise to join a blob.",
         )
         detection_sigma = st.slider(
             "Detection sigma",
-            min_value=5.0,
-            max_value=40.0,
+            min_value=detection.lowest,
+            max_value=detection.highest,
             step=0.5,
             key="detection_sigma",
             help="How far the brightest pixel of a blob has to depart before the blob is reported.",
         )
         min_pixels = st.slider(
             "Minimum pixels",
-            min_value=1,
-            max_value=50,
+            min_value=int(pixels.lowest),
+            max_value=int(pixels.highest),
             key="min_pixels",
             help="Smallest blob the detector reports.",
         )
 
+    consecutive = SETTINGS["min_consecutive_frames"]
+    furthest = SETTINGS["max_movement_ratio"]
+    least = SETTINGS["min_movement_ratio"]
+    missed = SETTINGS["max_missed_frames"]
+    span = SETTINGS["min_trajectory_span_ratio"]
     with st.expander("Tracking"):
         min_consecutive_frames = st.slider(
             "Minimum consecutive frames",
-            min_value=1,
-            max_value=20,
+            min_value=int(consecutive.lowest),
+            max_value=int(consecutive.highest),
             key="min_consecutive_frames",
             help="How many frames in a row a detection has to be matched before the track is confirmed.",
         )
         max_movement_ratio = st.slider(
             "Maximum movement ratio",
-            min_value=0.002,
-            max_value=0.100,
+            min_value=furthest.lowest,
+            max_value=furthest.highest,
             step=0.002,
             format="%.3f",
             key="max_movement_ratio",
@@ -255,8 +268,8 @@ def _settings_controls(device: Device) -> MovementSettings:
         )
         min_movement_ratio = st.slider(
             "Minimum movement ratio",
-            min_value=0.0000,
-            max_value=0.0100,
+            min_value=least.lowest,
+            max_value=least.highest,
             step=0.0005,
             format="%.4f",
             key="min_movement_ratio",
@@ -264,41 +277,43 @@ def _settings_controls(device: Device) -> MovementSettings:
         )
         max_missed_frames = st.slider(
             "Maximum missed frames",
-            min_value=0,
-            max_value=30,
+            min_value=int(missed.lowest),
+            max_value=int(missed.highest),
             key="max_missed_frames",
             help="How long a track may go unmatched and still take up a later detection.",
         )
         min_trajectory_span_ratio = st.slider(
             "Minimum trajectory span ratio",
-            min_value=0.000,
-            max_value=0.100,
+            min_value=span.lowest,
+            max_value=span.highest,
             step=0.005,
             format="%.3f",
             key="min_trajectory_span_ratio",
             help="Least ground a track has to cover before it is confirmed, as a ratio of the larger frame dimension.",
         )
 
+    mean = SETTINGS["mean_alpha"]
+    variance = SETTINGS["variance_alpha"]
     with st.expander("Background"):
         mean_alpha = st.slider(
             "Mean alpha",
-            min_value=0.05,
-            max_value=1.00,
+            min_value=mean.lowest,
+            max_value=mean.highest,
             step=0.05,
             key="mean_alpha",
             help="Rate at which the background mean follows the frame.",
         )
         variance_alpha = st.slider(
             "Variance alpha",
-            min_value=0.005,
-            max_value=0.500,
+            min_value=variance.lowest,
+            max_value=variance.highest,
             step=0.005,
             format="%.3f",
             key="variance_alpha",
             help="Rate at which the per-pixel noise estimate follows the frame.",
         )
 
-    st.button("Reset", width="stretch", on_click=_restore_defaults, help=RESET_HELP)
+    _settings_file_controls()
 
     return MovementSettings(
         background=BackgroundSettings(mean_alpha=mean_alpha, variance_alpha=variance_alpha),
@@ -318,6 +333,70 @@ def _settings_controls(device: Device) -> MovementSettings:
     )
 
 
+def _settings_file_controls() -> None:
+    """Draw the controls that put the settings back, write them out and read
+    them in.
+
+    The uploader carries the number of files taken so far in its name,
+    so taking one draws an empty box next time. A box left holding the
+    file it has already taken would say nothing about whether the
+    sliders still stand where that file put them.
+    """
+    restore, export = st.columns(2)
+    with restore:
+        st.button("Reset", width="stretch", on_click=_restore_defaults, help=RESET_HELP)
+    with export:
+        st.download_button(
+            "Export",
+            data=as_file({key: st.session_state[key] for key in SETTINGS}),
+            file_name=FILE_NAME,
+            mime="application/json",
+            width="stretch",
+            help=EXPORT_HELP,
+        )
+
+    taken = st.session_state.get(IMPORTS, 0)
+    st.file_uploader(
+        "Import",
+        type=["json"],
+        key=f"{SETTINGS_FILE}_{taken}",
+        on_change=_read_settings_file,
+        help=IMPORT_HELP,
+    )
+    report = st.session_state.get(IMPORT_REPORT)
+    if report:
+        st.caption(report)
+
+
+def _read_settings_file() -> None:
+    """Take the settings an uploaded file holds into the sliders.
+
+    Streamlit refuses to set a widget from the script once that widget
+    has been drawn, so this runs as the uploader's own callback, the way
+    Reset does.
+    """
+    taken = st.session_state.get(IMPORTS, 0)
+    uploaded = st.session_state.get(f"{SETTINGS_FILE}_{taken}")
+    if uploaded is None:
+        st.session_state[IMPORT_REPORT] = ""
+        return
+
+    reading = from_file(uploaded.getvalue())
+    st.session_state[IMPORT_REPORT] = _reading_text(reading)
+    if reading.settings:
+        st.session_state.update(reading.settings)
+        st.session_state[IMPORTS] = taken + 1
+
+
+def _reading_text(reading: Reading) -> str:
+    if reading.problem:
+        return reading.problem
+    taken = _count(len(reading.settings), "setting")
+    if reading.held:
+        return f"Took {taken}, {reading.held} of them held to what the slider offers."
+    return f"Took {taken}."
+
+
 def _seed_settings() -> None:
     """Put each setting in the session before its slider is drawn.
 
@@ -325,9 +404,9 @@ def _seed_settings() -> None:
     Streamlit report that the two disagree, so the value is kept in the
     session alone and the sliders read it from there.
     """
-    for key, default in SETTING_DEFAULTS.items():
+    for key, setting in SETTINGS.items():
         if key not in st.session_state:
-            st.session_state[key] = default
+            st.session_state[key] = setting.default
 
 
 def _restore_defaults() -> None:
@@ -337,7 +416,8 @@ def _restore_defaults() -> None:
     has been drawn, so this runs as the button's own callback, which it
     takes before the page is drawn again.
     """
-    st.session_state.update(SETTING_DEFAULTS)
+    st.session_state.update(defaults())
+    st.session_state[IMPORT_REPORT] = ""
 
 
 def _execute(videos: list[DevelopmentVideo], *, view: _RunView) -> None:
