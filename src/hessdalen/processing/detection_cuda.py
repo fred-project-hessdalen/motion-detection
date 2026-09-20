@@ -85,6 +85,7 @@ class CudaDetectionStage:
         self._close_kernel = cp.asarray(shape.astype(bool))
         self._noise_floor_variance = float(background.noise_floor) ** 2
         self._updates = 0
+        self._buffers: _FrameBuffers | None = None
         self._state: _DeviceState | None = None
 
     def detections(self, gray: np.ndarray) -> list[Detection]:
@@ -201,15 +202,33 @@ class CudaDetectionStage:
         Asking CuPy for floats would cast the frame on the host and send
         four times the bytes.
         """
-        source = cp.asarray(gray)
-        height, width = gray.shape
-        smoothed = cp.empty(gray.shape, dtype=cp.float32)
+        if self._buffers is None:
+            self._buffers = _FrameBuffers(gray.shape)
+        source = self._buffers.source
+        source.set(np.ascontiguousarray(gray))
+
         radius = int(self.background.smoothing_size) // 2
         if radius < 1:
             return source.astype(cp.float32)
 
-        _BOX(source, np.int32(height), np.int32(width), np.int32(radius), smoothed)
-        return smoothed
+        height, width = gray.shape
+        _BOX(source, np.int32(height), np.int32(width), np.int32(radius), self._buffers.smoothed)
+        return self._buffers.smoothed
+
+
+class _FrameBuffers:
+    """Device memory the frame is read into and smoothed in.
+
+    A buffer the driver has already mapped takes the frame half again as
+    fast as one allocated for it, and the frame moves every time the
+    detector is handed one.
+    """
+
+    __slots__ = ("smoothed", "source")
+
+    def __init__(self, shape: tuple[int, ...]) -> None:
+        self.source = cp.empty(shape, dtype=cp.uint8)
+        self.smoothed = cp.empty(shape, dtype=cp.float32)
 
 
 class _DeviceState:
