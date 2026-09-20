@@ -1,5 +1,6 @@
 import queue
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Generator, Iterator, Protocol, TypeVar
 
@@ -19,6 +20,19 @@ LUMA_FIRST_FORMATS = frozenset({"gray", "yuv420p", "yuvj420p", "yuv422p", "yuvj4
 """Decoded formats whose first plane already holds the grayscale."""
 
 Frame = TypeVar("Frame")
+
+
+@dataclass(frozen=True, slots=True)
+class FrameRegion:
+    """A rectangle of a frame, in pixels."""
+
+    top: int
+    left: int
+    bottom: int
+    right: int
+
+    def blank(self, frame: np.ndarray) -> None:
+        frame[self.top : self.bottom, self.left : self.right] = 0
 
 
 class FrameSource(Protocol):
@@ -107,7 +121,8 @@ class VideoStream:
             raise ValueError("target_height must be a positive integer")
 
         self._frame_shape: tuple[int, int] | None = None
-        self.mask: np.ndarray | None = self._build_mask(mask_coords) if mask_coords is not None else None
+        self.timestamp_corner = None if mask_coords is None else self._corner(mask_coords)
+        self.mask = None if self.timestamp_corner is None else self._build_mask(self.timestamp_corner)
 
     @property
     def frame_shape(self) -> tuple[int, int]:
@@ -143,29 +158,42 @@ class VideoStream:
         height, width = self._resize_frame(frame).shape[:2]
         return int(height), int(width)
 
-    def _build_mask(self, mask_coords: tuple[float, float, float, float]) -> np.ndarray:
+    def _corner(self, mask_coords: tuple[float, float, float, float]) -> FrameRegion:
+        height, width = self.frame_shape
+        return FrameRegion(
+            top=int(height * mask_coords[1]),
+            left=int(width * mask_coords[0]),
+            bottom=int(height * mask_coords[3]),
+            right=int(width * mask_coords[2]),
+        )
+
+    def _build_mask(self, corner: FrameRegion) -> np.ndarray:
         height, width = self.frame_shape
         mask = np.full((height, width), 255, dtype=np.uint8)
-        x1 = int(width * mask_coords[0])
-        y1 = int(height * mask_coords[1])
-        x2 = int(width * mask_coords[2])
-        y2 = int(height * mask_coords[3])
-        mask[y1:y2, x1:x2] = 0
+        corner.blank(mask)
         return mask
 
     def _colour_frames(self) -> Iterator[VideoFrame]:
         for frame_number, frame in enumerate(self.source.colour_frames()):
             frame = self._resize_frame(frame)
-            if self.mask is not None:
-                frame = cv2.bitwise_and(frame, frame, mask=self.mask)
+            if self.timestamp_corner is not None:
+                self.timestamp_corner.blank(frame)
             yield VideoFrame(frame_number=frame_number, frame=frame)
 
     def _gray_frames(self) -> Iterator[VideoFrame]:
+        """The frames the detector measures, with the timestamp blanked out.
+
+        Blanking writes into the frame, and the source hands over memory
+        the decoder still owns, so a frame the resize passed through
+        untouched is copied first.
+        """
         for frame_number, gray in enumerate(self.source.gray_frames()):
-            gray = self._resize_frame(gray)
-            if self.mask is not None:
-                gray = cv2.bitwise_and(gray, self.mask)
-            yield VideoFrame(frame_number=frame_number, frame=gray)
+            prepared = self._resize_frame(gray)
+            if prepared is gray:
+                prepared = gray.copy()
+            if self.timestamp_corner is not None:
+                self.timestamp_corner.blank(prepared)
+            yield VideoFrame(frame_number=frame_number, frame=prepared)
 
     def _resize_frame(self, frame: np.ndarray) -> np.ndarray:
         if self.target_height is None:
