@@ -11,13 +11,39 @@ from __future__ import annotations
 import cupy as cp  # type: ignore[import-not-found]
 import cv2
 import numpy as np
-from cupyx.scipy.ndimage import uniform_filter  # type: ignore[import-not-found]
+from cupyx.scipy.ndimage import binary_dilation, binary_erosion  # type: ignore[import-not-found]
 
 from hessdalen.processing.background import BackgroundSettings
 from hessdalen.processing.detection import Detection, DetectionSettings
 
-SMOOTHING_BORDER = "mirror"
-"""Edge handling that matches the box filter the host stage uses."""
+_BOX = cp.ElementwiseKernel(
+    "raw uint8 source, int32 height, int32 width, int32 radius",
+    "float32 smoothed",
+    """
+    const int row = i / width;
+    const int column = i % width;
+    float total = 0.0f;
+    for (int dy = -radius; dy <= radius; ++dy) {
+        int y = row + dy;
+        if (y < 0) { y = -y; }
+        if (y >= height) { y = 2 * (height - 1) - y; }
+        for (int dx = -radius; dx <= radius; ++dx) {
+            int x = column + dx;
+            if (x < 0) { x = -x; }
+            if (x >= width) { x = 2 * (width - 1) - x; }
+            total += (float)source[y * width + x];
+        }
+    }
+    const int side = 2 * radius + 1;
+    smoothed = total / (float)(side * side);
+    """,
+    "movement_box_filter",
+)
+"""Box filter reading the frame as it was uploaded, in bytes.
+
+Out-of-frame reads mirror without repeating the edge pixel, which is
+what the host filter does.
+"""
 
 _STEP = cp.ElementwiseKernel(
     "float32 smoothed, float32 variance_alpha, float32 mean_alpha, float32 noise_floor_variance, "
@@ -55,7 +81,8 @@ class CudaDetectionStage:
         self.settings = detection
         self.background = background
         self.timestamp_mask = timestamp_mask
-        self._close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (detection.close_size, detection.close_size))
+        shape = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (detection.close_size, detection.close_size))
+        self._close_kernel = cp.asarray(shape.astype(bool))
         self._noise_floor_variance = float(background.noise_floor) ** 2
         self._updates = 0
         self._state: _DeviceState | None = None
@@ -114,7 +141,7 @@ class CudaDetectionStage:
         deviations = cp.asnumpy(state.deviation[rows, columns])
         peak_rows = cp.asnumpy(rows)
         peak_columns = cp.asnumpy(columns)
-        foreground = self._closed(cp.asnumpy(state.foreground))
+        foreground = self._closed(state.foreground)
 
         component_count, labels, stats, _centroids = cv2.connectedComponentsWithStats(foreground, connectivity=8)
         strongest = self._strongest_per_component(
@@ -159,17 +186,30 @@ class CudaDetectionStage:
                 strongest[blob] = index
         return strongest
 
-    def _closed(self, foreground: np.ndarray) -> np.ndarray:
+    def _closed(self, foreground: cp.ndarray) -> np.ndarray:
+        """Close the mask on the card and hand the host the bytes it labels."""
         if self.settings.close_size <= 1:
-            return foreground
-        return cv2.morphologyEx(foreground, cv2.MORPH_CLOSE, self._close_kernel)
+            return cp.asnumpy(foreground)
+
+        filled = binary_dilation(foreground > 0, structure=self._close_kernel, border_value=0)
+        closed = binary_erosion(filled, structure=self._close_kernel, border_value=1)
+        return cp.asnumpy(closed.astype(cp.uint8) * 255)
 
     def _smoothed(self, gray: np.ndarray) -> cp.ndarray:
-        device_gray = cp.asarray(gray, dtype=cp.float32)
-        size = int(self.background.smoothing_size)
-        if size <= 1:
-            return device_gray
-        return uniform_filter(device_gray, size=size, mode=SMOOTHING_BORDER)
+        """Upload the frame as bytes and smooth it into floats on the card.
+
+        Asking CuPy for floats would cast the frame on the host and send
+        four times the bytes.
+        """
+        source = cp.asarray(gray)
+        height, width = gray.shape
+        smoothed = cp.empty(gray.shape, dtype=cp.float32)
+        radius = int(self.background.smoothing_size) // 2
+        if radius < 1:
+            return source.astype(cp.float32)
+
+        _BOX(source, np.int32(height), np.int32(width), np.int32(radius), smoothed)
+        return smoothed
 
 
 class _DeviceState:

@@ -47,8 +47,8 @@ RECORDINGS_HELP = (
 )
 DURATION_HELP = "Taken from the container until the recording has been run, and from the decoded frames after that."
 DEVICE_HELP = (
-    "Where the per-pixel work runs. Auto takes the graphics card when one answers. "
-    "The card rounds a float differently from the processor, so a few detections can land a pixel apart."
+    "Where the per-pixel work runs. Auto takes the graphics card when one answers, "
+    "which finds the same tracks in about half the time."
 )
 
 

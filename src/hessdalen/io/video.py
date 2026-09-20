@@ -1,7 +1,7 @@
 import queue
 import threading
 from pathlib import Path
-from typing import Generator, Iterator, Protocol
+from typing import Generator, Iterator, Protocol, TypeVar
 from itertools import count
 
 import cv2
@@ -13,7 +13,9 @@ TIMESTAMP_MASK_COORDS = (0.8, 0.8, 1.0, 1.0)
 """Corner the cameras burn their timestamp into, in relative coordinates."""
 
 PREFETCH_DEPTH = 4
-"""Frames the decoder may run ahead of the caller."""
+"""Frames a worker may run ahead of the caller."""
+
+Frame = TypeVar("Frame")
 
 
 class FrameSource(Protocol):
@@ -112,7 +114,7 @@ class VideoStream:
 
     def stream_frames(self) -> Generator[VideoFrame, None, None]:
         """Stream video frames."""
-        yield from prefetched(self._colour_frames())
+        yield from prefetched(self._colour_frames(prefetched(self._decoded_frames())))
 
     def stream_gray_frames(self) -> Generator[VideoFrame, None, None]:
         """Stream the frames as the grayscale the detector measures.
@@ -121,22 +123,28 @@ class VideoStream:
         masking three colour channels does, and gives the same pixels,
         because the conversion is linear and reads black as zero.
         """
-        yield from prefetched(self._gray_frames())
+        yield from prefetched(self._gray_frames(prefetched(self._decoded_frames())))
 
-    def _colour_frames(self) -> Iterator[VideoFrame]:
-        for frame_number, frame in self._decoded_frames():
+    def _colour_frames(self, decoded: Iterator[tuple[int, np.ndarray]]) -> Iterator[VideoFrame]:
+        for frame_number, frame in decoded:
+            frame = self._resize_frame(frame)
             if self.mask is not None:
                 frame = cv2.bitwise_and(frame, frame, mask=self.mask)
             yield VideoFrame(frame_number=frame_number, frame=frame)
 
-    def _gray_frames(self) -> Iterator[VideoFrame]:
-        for frame_number, frame in self._decoded_frames():
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    def _gray_frames(self, decoded: Iterator[tuple[int, np.ndarray]]) -> Iterator[VideoFrame]:
+        for frame_number, frame in decoded:
+            gray = cv2.cvtColor(self._resize_frame(frame), cv2.COLOR_BGR2GRAY)
             if self.mask is not None:
                 gray = cv2.bitwise_and(gray, self.mask)
             yield VideoFrame(frame_number=frame_number, frame=gray)
 
     def _decoded_frames(self) -> Iterator[tuple[int, np.ndarray]]:
+        """The frames as the decoder hands them over, at their own size.
+
+        Resizing stays with the caller so it runs on a thread of its
+        own, which leaves this one doing nothing but decoding.
+        """
         cap = self.source.open()
         frame_number = count()
         try:
@@ -145,7 +153,7 @@ class VideoStream:
                 if not ret:
                     break
 
-                yield next(frame_number), self._resize_frame(frame)
+                yield next(frame_number), frame
         finally:
             cap.release()
 
@@ -154,14 +162,15 @@ def stream_frames_from_file(video_path: Path, *, target_height: int | None = Non
     return VideoStream(FileFrameSource(video_path), target_height=target_height).stream_frames()
 
 
-def prefetched(frames: Iterator[VideoFrame]) -> Generator[VideoFrame, None, None]:
-    """Yield frames a worker thread has decoded ahead of the caller.
+def prefetched(frames: Iterator[Frame]) -> Generator[Frame, None, None]:
+    """Yield frames a worker thread has prepared ahead of the caller.
 
     Decoding, resizing and colour conversion all release the interpreter
     lock, so the worker keeps the queue filled while the caller works on
-    the frame it already holds.
+    the frame it already holds. Chaining two of these puts decoding and
+    the work that follows it on separate threads.
     """
-    pending: queue.Queue[VideoFrame | None] = queue.Queue(maxsize=PREFETCH_DEPTH)
+    pending: queue.Queue[Frame | None] = queue.Queue(maxsize=PREFETCH_DEPTH)
     stop = threading.Event()
 
     def produce() -> None:

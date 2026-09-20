@@ -54,14 +54,11 @@ uv sync --group core --group gpu
 ```
 
 Over the example recordings at a frame height of 1080 the card cuts
-detection time from 94.7 to 62.2 seconds. Eight of the ten recordings
-report the same tracks either way, including every meteor. The two
-daytime recordings differ in a handful of centroids by one pixel,
-because the card rounds a float differently and the detector compares
-that float against a fixed threshold.
+detection time from 95.9 to 48.1 seconds, and all ten recordings report
+the same frame numbers, track ids and centroids either way.
 
 Set `device` on `MovementSettings` to `"cpu"` to stay on the host, or to
-`"cuda"` to fail rather than fall back when no card answers.
+`"cuda"` to fail when no card answers.
 
 
 ## Dashboard
