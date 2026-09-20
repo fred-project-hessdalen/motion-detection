@@ -54,7 +54,7 @@ uv sync --group core --group gpu
 ```
 
 Over the example recordings at a frame height of 1080 the card cuts
-detection time from 95.9 to 48.1 seconds, and all ten recordings report
+detection time from 74.0 to 21.1 seconds, and all ten recordings report
 the same frame numbers, track ids and centroids either way.
 
 Set `device` on `MovementSettings` to `"cpu"` to stay on the host, or to
