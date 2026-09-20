@@ -65,8 +65,8 @@ def test_a_frame_height_nothing_offers_is_refused(tmp_path):
 
 def test_a_panel_choice_the_dashboard_does_not_draw_is_refused(tmp_path):
     path = tmp_path / "detector.toml"
-    write_config(read_config(CONFIG_PATH), path)
-    path.write_text(path.read_text().replace('panels = "both"', 'panels = "sideways"'))
+    held = read_config(CONFIG_PATH)
+    write_config(replace(held, panels="sideways"), path)
 
     with pytest.raises(ValueError, match="panels"):
         read_config(path)
@@ -74,8 +74,8 @@ def test_a_panel_choice_the_dashboard_does_not_draw_is_refused(tmp_path):
 
 def test_a_device_the_detector_cannot_use_is_refused(tmp_path):
     path = tmp_path / "detector.toml"
-    write_config(read_config(CONFIG_PATH), path)
-    path.write_text(path.read_text().replace('device = "auto"', 'device = "quantum"'))
+    held = read_config(CONFIG_PATH)
+    write_config(replace(held, settings=replace(held.settings, device="quantum")), path)
 
     with pytest.raises(ValueError, match="device"):
         read_config(path)
