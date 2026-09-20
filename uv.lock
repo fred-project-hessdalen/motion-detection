@@ -1282,6 +1282,7 @@ core = [
     { name = "av" },
     { name = "funcy" },
     { name = "opencv-python" },
+    { name = "pyarrow" },
     { name = "pydantic" },
     { name = "tomli-w" },
 ]
@@ -1311,6 +1312,7 @@ core = [
     { name = "av", specifier = ">=18.1.0" },
     { name = "funcy", specifier = ">=2.0" },
     { name = "opencv-python", specifier = ">=4.13.0.92" },
+    { name = "pyarrow", specifier = ">=25.0.1" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "tomli-w", specifier = ">=1.0" },
 ]

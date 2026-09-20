@@ -21,6 +21,7 @@ core = [
     "av>=18.1.0",
     "funcy>=2.0",
     "opencv-python>=4.13.0.92",
+    "pyarrow>=25.0.1",
     "pydantic>=2.12.5",
     "tomli-w>=1.0",
 ]
