@@ -44,13 +44,16 @@ def write_tracks(
     path: Path,
     *,
     recording: str,
-    target_height: int,
+    frame_height: int,
+    frame_width: int,
     settings: MovementSettings,
     events: Iterable[MovementEvent],
 ) -> int:
     """Write every track the events report, and return how many rows."""
     table = pa.Table.from_pylist(rows_from_events(events, recording=recording), schema=SCHEMA)
-    described = table.replace_schema_metadata(provenance(target_height=target_height, settings=settings))
+    described = table.replace_schema_metadata(
+        provenance(frame_height=frame_height, frame_width=frame_width, settings=settings)
+    )
 
     path.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(described, path)
@@ -83,10 +86,15 @@ def rows_from_events(events: Iterable[MovementEvent], *, recording: str) -> list
     return sorted(found, key=lambda row: (row["track_id"], row["frame_number"]))
 
 
-def provenance(*, target_height: int, settings: MovementSettings) -> dict[bytes, bytes]:
+def provenance(*, frame_height: int, frame_width: int, settings: MovementSettings) -> dict[bytes, bytes]:
     """Everything the detector was told, including the settings no control
-    offers, so two runs that differ anywhere can be told apart."""
+    offers, so two runs that differ anywhere can be told apart.
+
+    The frame is measured after resizing, because the rows give positions
+    in its pixels and analysis reads them as ratios of its larger side.
+    """
     return {
-        b"hessdalen_target_height": str(target_height).encode(),
+        b"hessdalen_frame_height": str(frame_height).encode(),
+        b"hessdalen_frame_width": str(frame_width).encode(),
         b"hessdalen_settings": json.dumps(asdict(settings), sort_keys=True).encode(),
     }

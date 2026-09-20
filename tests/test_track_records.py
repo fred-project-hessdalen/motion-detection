@@ -11,7 +11,7 @@ from hessdalen.io.tracks import write_tracks
 from synthetic import blob_measurement
 
 RECORDING = "Cam1_2025-02-20__11-40-00_018.mkv"
-TARGET_HEIGHT = 1080
+FRAME_HEIGHT, FRAME_WIDTH = 1080, 1920
 
 
 def test_a_frame_without_movement_writes_no_row(tmp_path) -> None:
@@ -65,7 +65,8 @@ def test_the_file_says_what_the_detector_was_told(tmp_path) -> None:
     _write(path, [_movement(4, 1)])
 
     metadata = pq.read_table(path).schema.metadata
-    assert metadata[b"hessdalen_target_height"] == str(TARGET_HEIGHT).encode()
+    assert metadata[b"hessdalen_frame_height"] == str(FRAME_HEIGHT).encode()
+    assert metadata[b"hessdalen_frame_width"] == str(FRAME_WIDTH).encode()
     written = json.loads(metadata[b"hessdalen_settings"])
     assert written["detection"]["detection_sigma"] == config().settings.detection.detection_sigma
     assert written["background"]["noise_floor"] == config().settings.background.noise_floor
@@ -84,7 +85,8 @@ def _write(path, events) -> int:
     return write_tracks(
         path,
         recording=RECORDING,
-        target_height=TARGET_HEIGHT,
+        frame_height=FRAME_HEIGHT,
+        frame_width=FRAME_WIDTH,
         settings=config().settings,
         events=events,
     )
