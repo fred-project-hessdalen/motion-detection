@@ -8,7 +8,8 @@ implementation plugs into.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from functools import partial
+from typing import Callable, Protocol
 
 import cv2
 import numpy as np
@@ -23,6 +24,9 @@ FOREGROUND = 255
 MEASURED = 128
 """Value the fill leaves on a blob whose pixels have been counted."""
 
+SCALE_LADDER = (1.0, 1.25, 1.5625, 1.953125, 2.44140625, 3.0517578125)
+"""Multipliers a frame's deviation may be divided by, each a quarter up."""
+
 
 @dataclass(frozen=True, slots=True)
 class Detection:
@@ -36,14 +40,16 @@ class DetectionSettings:
     """What a blob has to be before it is reported.
 
     The first three are set from the dashboard and come from the config,
-    so they are asked of the caller. The closing size has no control of
-    its own and keeps its value here.
+    so they are asked of the caller. The ones below them have no control
+    of their own and keep their values here.
     """
 
     foreground_sigma: float
     detection_sigma: float
     min_pixels: int
     close_size: int = 5
+    foreground_budget: float = 1.5
+    budget_rate: float = 0.05
 
 
 class DetectionStage(Protocol):
@@ -69,11 +75,17 @@ class CpuDetectionStage:
         self.settings = detection
         self.timestamp_mask = timestamp_mask
         self._background = BackgroundModel(background)
+        self._budget = ForegroundBudget(detection)
         self._close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (detection.close_size, detection.close_size))
         self._deviation = np.zeros((1, 1), dtype=np.float32)
 
     def detections(self, gray: np.ndarray) -> list[Detection]:
-        self._deviation = self._background.deviation(gray)
+        deviation = self._background.deviation(gray)
+        scale = self._budget.scale(partial(count_over, deviation))
+
+        if scale != 1.0:
+            deviation = np.divide(deviation, np.float32(scale), dtype=np.float32)
+        self._deviation = deviation
         return self._extract_detections(self._deviation)
 
     def deviation_image(self) -> np.ndarray:
@@ -107,6 +119,50 @@ class CpuDetectionStage:
         if self.settings.close_size <= 1:
             return mask
         return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self._close_kernel)
+
+
+class ForegroundBudget:
+    """How far a frame's deviation is divided down to hold its foreground count
+    near the level the recording keeps returning to.
+
+    An H.264 encoder repeats more than half the picture verbatim between
+    keyframes, and a pixel it repeated carries a residual of exactly
+    zero, which no threshold reaches. Every keyframe hands all of those
+    pixels a residual again, so the count of pixels over the threshold
+    jumps several times over however the deviation is scaled. Dividing
+    the frame down until the count is back near that level is the one
+    thing that holds it, because the count is what the keyframe changes.
+
+    The level is tracked by stepping up when a frame is above it and
+    down when it is below, so it settles in the middle of recent frames
+    and one frame in twenty-five cannot carry it.
+    """
+
+    def __init__(self, settings: DetectionSettings) -> None:
+        self.settings = settings
+        self._typical: float | None = None
+
+    def scale(self, count_above: Callable[[float], int]) -> float:
+        plain = count_above(self.settings.foreground_sigma)
+        if self._typical is None:
+            if plain > 0:
+                self._typical = float(plain)
+            return 1.0
+
+        allowed = self.settings.foreground_budget * self._typical
+        rate = self.settings.budget_rate
+        self._typical *= 1.0 + (rate if plain > self._typical else -rate)
+        if plain <= allowed:
+            return 1.0
+
+        for step in SCALE_LADDER[1:]:
+            if count_above(self.settings.foreground_sigma * step) <= allowed:
+                return step
+        return SCALE_LADDER[-1]
+
+
+def count_over(deviation: np.ndarray, threshold: float) -> int:
+    return cv2.countNonZero(threshold_mask(deviation, threshold, cv2.CMP_GT))
 
 
 def blobs_around_peaks(

@@ -66,6 +66,17 @@ down foliage and a wind-blown horizon, where the same pixels move again
 and again. The one over the neighbourhood is what holds down a recoded
 picture, where everything moves at once.
 
+Dividing by noise does not finish the keyframe, because a keyframe hands
+a residual to pixels that had none rather than making the noise louder.
+Between keyframes more than half the picture carries a residual of
+exactly zero, which no threshold reaches, so the count of pixels over the
+threshold jumps several times over however the deviation is scaled. Each
+frame's deviation is therefore divided down a step at a time, by at most
+three, until that count is back near the level the recording keeps
+returning to. `foreground_budget` on `DetectionSettings` sets how far
+above that level a frame may sit before its threshold moves, and on the
+example recordings one frame in seven moves.
+
 `--detection-sigma` sets how far a blob's brightest pixel has to depart
 from the background to be reported, and it is the first parameter to
 reach for. Values between 12 and 20 all work on the example recordings.
@@ -85,7 +96,7 @@ uv sync --group core --group gpu
 ```
 
 Over the example recordings at a frame height of 1080 the card cuts
-detection time from 98.0 to 25.2 seconds, and all ten recordings report
+detection time from 112.7 to 28.0 seconds, and all ten recordings report
 the same frame numbers, track ids and centroids either way.
 
 Set `device` on `MovementSettings` to `"cpu"` to stay on the host, or to

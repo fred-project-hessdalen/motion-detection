@@ -8,6 +8,7 @@ and never the deviation frame.
 from __future__ import annotations
 
 import math
+from functools import partial
 
 import cupy as cp  # type: ignore[import-not-found]
 import cv2
@@ -15,7 +16,12 @@ import numpy as np
 from cupyx.scipy.ndimage import binary_dilation, binary_erosion  # type: ignore[import-not-found]
 
 from hessdalen.processing.background import BackgroundSettings
-from hessdalen.processing.detection import Detection, DetectionSettings, blobs_around_peaks
+from hessdalen.processing.detection import (
+    Detection,
+    DetectionSettings,
+    ForegroundBudget,
+    blobs_around_peaks,
+)
 
 _BOX = cp.ElementwiseKernel(
     "raw uint8 source, int32 height, int32 width, int32 radius",
@@ -109,8 +115,8 @@ blocks mirror without repeating the edge block.
 _STEP = cp.ElementwiseKernel(
     "float32 smoothed, raw float32 spread, int32 width, int32 shift, int32 blocks_columns, "
     "float32 variance_alpha, float32 mean_alpha, float32 noise_floor_variance, "
-    "float32 outlier_sigma, float32 foreground_sigma, float32 detection_sigma, uint8 timestamp_mask",
-    "float32 mean, float32 variance, float32 deviation, uint8 foreground, uint8 peaks",
+    "float32 outlier_sigma",
+    "float32 mean, float32 variance, float32 deviation",
     """
     const float value = smoothed;
     const float residual = value - mean;
@@ -121,8 +127,6 @@ _STEP = cp.ElementwiseKernel(
     const float distance = fabsf(residual) / noise;
 
     deviation = distance;
-    foreground = (distance > foreground_sigma && timestamp_mask != 0) ? 255 : 0;
-    peaks = distance >= detection_sigma ? 255 : 0;
 
     if (distance <= outlier_sigma) {
         variance += variance_alpha * (residual * residual - variance);
@@ -130,6 +134,23 @@ _STEP = cp.ElementwiseKernel(
     mean += mean_alpha * (value - mean);
     """,
     "movement_step",
+)
+
+_DIVIDE = cp.ElementwiseKernel(
+    "float32 scale",
+    "float32 deviation",
+    "deviation /= scale;",
+    "movement_divide",
+)
+
+_MASKS = cp.ElementwiseKernel(
+    "float32 deviation, float32 foreground_sigma, float32 detection_sigma, uint8 timestamp_mask",
+    "uint8 foreground, uint8 peaks",
+    """
+    foreground = (deviation > foreground_sigma && timestamp_mask != 0) ? 255 : 0;
+    peaks = deviation >= detection_sigma ? 255 : 0;
+    """,
+    "movement_masks",
 )
 
 
@@ -150,6 +171,7 @@ class CudaDetectionStage:
         self._close_kernel = cp.asarray(shape.astype(bool))
         self._noise_floor_variance = float(background.noise_floor) ** 2
         self._halvings = round(math.log2(int(background.noise_block)))
+        self._budget = ForegroundBudget(detection)
         self._updates = 0
         self._buffers: _FrameBuffers | None = None
         self._state: _DeviceState | None = None
@@ -180,12 +202,19 @@ class CudaDetectionStage:
             cp.float32(self.background.mean_alpha),
             cp.float32(self._noise_floor_variance),
             cp.float32(self.background.outlier_sigma),
-            cp.float32(self.settings.foreground_sigma),
-            cp.float32(self.settings.detection_sigma),
-            state.timestamp_mask,
             state.mean,
             state.variance,
             state.deviation,
+        )
+
+        scale = self._budget.scale(partial(self._count_over, state.deviation))
+        if scale != 1.0:
+            _DIVIDE(cp.float32(scale), state.deviation)
+        _MASKS(
+            state.deviation,
+            cp.float32(self.settings.foreground_sigma),
+            cp.float32(self.settings.detection_sigma),
+            state.timestamp_mask,
             state.foreground,
             state.peaks,
         )
@@ -219,6 +248,9 @@ class CudaDetectionStage:
             deviations=cp.asnumpy(state.deviation[rows, columns]),
             min_pixels=self.settings.min_pixels,
         )
+
+    def _count_over(self, deviation: cp.ndarray, threshold: float) -> int:
+        return int(cp.count_nonzero(deviation > cp.float32(threshold)))
 
     def _closed(self, foreground: cp.ndarray) -> np.ndarray:
         """Close the mask on the card and hand the host the bytes it labels."""
