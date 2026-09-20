@@ -64,9 +64,11 @@ Set `device` on `MovementSettings` to `"cpu"` to stay on the host, or to
 ## Dashboard
 
 A debugging dashboard lists the recordings under `data/examples`, runs the
-detector over one or all of them, and plays the result as two panels. The
-recording sits above, the deviation it was measured against below, and
-both carry the tracks.
+detector over one or all of them, and plays the result with the tracks
+drawn on it. The sidebar chooses the panels a run draws: the recording,
+the deviation it was measured against, or both stacked. Each panel costs
+its own pass over the recording, so one panel runs in about half the time
+of both.
 
 ```bash
 uv run --group dashboard --group gpu streamlit run src/hessdalen/dashboard/app.py

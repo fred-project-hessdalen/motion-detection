@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
@@ -17,7 +18,15 @@ from streamlit.delta_generator import DeltaGenerator
 from streamlit.typing import DataframeState
 
 from hessdalen.dashboard.catalog import DevelopmentVideo, Label, development_videos
-from hessdalen.dashboard.runs import DetectionRun, VideoProbe, load_run, probe, run_detection
+from hessdalen.dashboard.runs import (
+    PANEL_CHOICES,
+    DetectionRun,
+    Panels,
+    VideoProbe,
+    load_run,
+    probe,
+    run_detection,
+)
 from hessdalen.processing.background import BackgroundSettings
 from hessdalen.processing.devices import DEVICES, Device
 from hessdalen.processing.movement import (
@@ -36,19 +45,17 @@ DETECTION_DEFAULTS = DetectionSettings()
 TRACKING_DEFAULTS = TrackingSettings()
 
 PLAYBACK_HELP = (
-    "Above, the recording as the detector sees it, with the timestamp corner masked out. "
-    "Below, how far each pixel stands from its own background, with the detection threshold at full white. "
+    "The recording panel shows the frames as the detector sees them, with the timestamp corner masked out. "
+    "The deviation panel shows how far each pixel stands from its own background, "
+    "with the detection threshold at full white. "
     "Each confirmed track carries a box on the frames it was seen in and the trail it has travelled so far. "
     "The number beside a box is the track id."
 )
 TRACKS_HELP = "One row per track the detector confirmed, in the order the tracks were opened."
-PANELS_HELP = "Which panel of the video the player shows. All three are the same run, so switching costs nothing."
-BOTH_PANELS = "Both"
-PLAYER_KEY = "player"
-# How far the video is lifted in the player, for each choice of panel. A bare
-# string here would be a docstring in any other module and a paragraph on the
-# page in this one, which Streamlit renders from every loose expression.
-PANELS: dict[str, str | None] = {BOTH_PANELS: None, "Recording": "0", "Deviation": "-50%"}
+PANELS_HELP = (
+    "Which panels the run draws. Each one costs a pass over the recording and its share of the encode, "
+    "so one panel takes about half as long as both."
+)
 RECORDINGS_HELP = (
     "Click a row to show that recording below. "
     "Tracks and run time are filled in once a recording has been run with the settings in the sidebar."
@@ -77,6 +84,13 @@ def main() -> None:
             value=1080,
             help="Frames are resized to this height before detection. A lower value runs faster.",
         )
+        panels = st.segmented_control(
+            "Panels",
+            options=PANEL_CHOICES,
+            default="both",
+            format_func=str.capitalize,
+            help=PANELS_HELP,
+        )
         device = st.radio(
             "Device",
             options=DEVICES,
@@ -85,14 +99,34 @@ def main() -> None:
         )
         settings = _settings_controls(device)
 
-    selected = _recordings_table(videos, settings=settings, target_height=target_height)
+    view = _RunView(settings=settings, target_height=target_height, panels=panels or "both")
+    selected = _recordings_table(videos, view=view)
 
     with run_controls:
         queued = _run_controls(videos=videos, selected=selected)
     if queued:
-        _execute(queued, settings=settings, target_height=target_height)
+        _execute(queued, view=view)
 
-    _playback(selected, settings=settings, target_height=target_height)
+    _playback(selected, view=view)
+
+
+@dataclass(frozen=True, slots=True)
+class _RunView:
+    """What the sidebar asks a run to produce, which also addresses it on
+    disk."""
+
+    settings: MovementSettings
+    target_height: int
+    panels: Panels
+
+    def stored(self, video: Path) -> DetectionRun | None:
+        return load_run(
+            video,
+            settings=self.settings,
+            target_height=self.target_height,
+            panels=self.panels,
+            output_dir=OUTPUT_DIR,
+        )
 
 
 def _examples_dir() -> Path:
@@ -230,13 +264,14 @@ def _settings_controls(device: Device) -> MovementSettings:
     )
 
 
-def _execute(videos: list[DevelopmentVideo], *, settings: MovementSettings, target_height: int) -> None:
+def _execute(videos: list[DevelopmentVideo], *, view: _RunView) -> None:
     progress = st.progress(0.0)
     for index, video in enumerate(videos):
         run_detection(
             video.path,
-            settings=settings,
-            target_height=target_height,
+            settings=view.settings,
+            target_height=view.target_height,
+            panels=view.panels,
             output_dir=OUTPUT_DIR,
             on_progress=_progress_reporter(progress, index=index, total=len(videos), name=video.name),
         )
@@ -264,15 +299,10 @@ def _progress_reporter(
     return report
 
 
-def _recordings_table(
-    videos: list[DevelopmentVideo],
-    *,
-    settings: MovementSettings,
-    target_height: int,
-) -> DevelopmentVideo:
+def _recordings_table(videos: list[DevelopmentVideo], *, view: _RunView) -> DevelopmentVideo:
     """Draw the list of recordings and return the one whose row is picked."""
     st.subheader("Recordings", help=RECORDINGS_HELP)
-    rows = [_recording_row(video, settings=settings, target_height=target_height) for video in videos]
+    rows = [_recording_row(video, view=view) for video in videos]
 
     state = st.dataframe(
         pd.DataFrame(rows),
@@ -294,14 +324,9 @@ def _picked_rows(state: DeltaGenerator | DataframeState) -> list[int]:
     return []
 
 
-def _recording_row(
-    video: DevelopmentVideo,
-    *,
-    settings: MovementSettings,
-    target_height: int,
-) -> dict[str, object]:
+def _recording_row(video: DevelopmentVideo, *, view: _RunView) -> dict[str, object]:
     details = _probe_cached(video.path)
-    run = load_run(video.path, settings=settings, target_height=target_height, output_dir=OUTPUT_DIR)
+    run = view.stored(video.path)
     frame_count = run.frame_count if run is not None else details.frame_count
     return {
         "File": video.name,
@@ -329,55 +354,19 @@ def _label_text(labels: tuple[Label, ...]) -> str:
     return ", ".join(f"{label.name} {label.begin_s:.0f}-{label.end_s:.0f} s" for label in labels)
 
 
-def _playback(video: DevelopmentVideo, *, settings: MovementSettings, target_height: int) -> None:
+def _playback(video: DevelopmentVideo, *, view: _RunView) -> None:
     st.subheader("Playback", help=PLAYBACK_HELP)
-    run = load_run(video.path, settings=settings, target_height=target_height, output_dir=OUTPUT_DIR)
+    run = view.stored(video.path)
     if run is None:
         st.info("This recording has not been run with the current settings. Press Run in the sidebar.")
         return
 
     player, tracks = st.columns([1, 1])
     with player:
-        panels = st.segmented_control(
-            "Panels",
-            options=list(PANELS),
-            default=BOTH_PANELS,
-            help=PANELS_HELP,
-        )
-        _show_panels(panels or BOTH_PANELS, aspect=_probe_cached(video.path))
-        with st.container(key=PLAYER_KEY):
-            st.video(str(run.annotated_video), start_time=_start_time(video.labels))
+        st.video(str(run.annotated_video), start_time=_start_time(video.labels))
         st.caption(f"{_count(len(run.trajectories), 'track')} over {run.frame_count} frames.")
     with tracks:
         _tracks_table(run)
-
-
-def _show_panels(panels: str, *, aspect: VideoProbe) -> None:
-    """Crop the player to the chosen panel.
-
-    Both panels are encoded as one frame, so the choice is which half of
-    that frame the player shows and costs no second run. The player is
-    held to the shape of a single panel, which leaves the video inside
-    it twice as tall as the player, and the lower panel is reached by
-    lifting the video by half its own height. A translation measures
-    that half against the video, where a top offset would measure it
-    against whichever box Streamlit wraps the video in.
-    """
-    offset = PANELS[panels]
-    if offset is None:
-        return
-
-    st.html(
-        f"""
-        <style>
-        .st-key-{PLAYER_KEY} {{
-            overflow: hidden;
-            aspect-ratio: {aspect.width} / {aspect.height};
-        }}
-        .st-key-{PLAYER_KEY} video {{ transform: translateY({offset}); }}
-        </style>
-        """
-    )
 
 
 def _count(number: int, noun: str) -> str:

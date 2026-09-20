@@ -16,13 +16,14 @@ from bisect import bisect_right
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import asdict, dataclass
 from functools import cache
+from itertools import repeat
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, get_args
 
 import cv2
 import numpy as np
 
-from hessdalen.domain.models import MovementEvent
+from hessdalen.domain.models import MovementEvent, VideoFrame
 from hessdalen.io.video import TIMESTAMP_MASK_COORDS, FileFrameSource, VideoStream
 from hessdalen.processing.debug import track_color
 from hessdalen.processing.devices import detection_stage
@@ -34,6 +35,11 @@ FALLBACK_FPS = 25.0
 PHASES = 2
 DETECTOR_PACKAGES = ("domain", "io", "processing")
 ENCODER_PIXEL_FORMAT = "yuv420p"
+
+RECORDING = "recording"
+DEVIATION = "deviation"
+Panels = Literal["recording", "deviation", "both"]
+PANEL_CHOICES: tuple[Panels, ...] = get_args(Panels)
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,13 +92,14 @@ def run_detection(
     *,
     settings: MovementSettings,
     target_height: int,
+    panels: Panels,
     output_dir: Path,
     on_progress: Callable[[float], None],
 ) -> DetectionRun:
     """Detect movement in a recording and write the annotated video and the
     track record under output_dir."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    paths = _run_paths(video, settings=settings, target_height=target_height, output_dir=output_dir)
+    paths = _run_paths(video, settings=settings, target_height=target_height, panels=panels, output_dir=output_dir)
     details = probe(video)
     phase = _phase_progress(on_progress, expected_frames=max(1, details.frame_count))
 
@@ -104,6 +111,7 @@ def run_detection(
         video,
         settings=settings,
         target_height=target_height,
+        panels=panels,
         frames_per_second=details.frames_per_second,
         trajectories=trajectories,
         output=paths.video,
@@ -140,11 +148,12 @@ def load_run(
     *,
     settings: MovementSettings,
     target_height: int,
+    panels: Panels,
     output_dir: Path,
 ) -> DetectionRun | None:
     """The stored run for these settings, or None when the recording has not
     been run with them."""
-    paths = _run_paths(video, settings=settings, target_height=target_height, output_dir=output_dir)
+    paths = _run_paths(video, settings=settings, target_height=target_height, panels=panels, output_dir=output_dir)
     if not (paths.record.is_file() and paths.video.is_file()):
         return None
 
@@ -222,27 +231,36 @@ def _render(
     *,
     settings: MovementSettings,
     target_height: int,
+    panels: Panels,
     frames_per_second: float,
     trajectories: tuple[Trajectory, ...],
     output: Path,
     on_frame: Callable[[int], None],
 ) -> int:
-    """Draw every track onto the recording and onto the deviation behind it,
-    and encode the pair as one frame.
+    """Draw every track onto the panels asked for and encode them as one frame.
 
-    The deviation is measured again here from the same grayscale the
-    detector read, which is what makes the lower panel the picture the
-    detections were taken from. Returns the number of frames written.
-    Some containers declare a frame count their stream does not hold, so
-    this is the count that was decoded.
+    The deviation panel is measured again here from the same grayscale
+    the detector read, which is what makes it the picture the detections
+    were taken from. A panel costs a decode of the recording and its
+    share of the encode, and a panel left out costs neither, so asking
+    for one is about half the work of asking for both. Returns the
+    number of frames written. Some containers declare a frame count
+    their stream does not hold, so this is the count that was decoded.
     """
-    colour_stream = _stream(video, target_height=target_height)
-    gray_stream = _stream(video, target_height=target_height)
-    height, width = colour_stream.frame_shape
+    layout = _layout(panels)
+    height, width = _stream(video, target_height=target_height).frame_shape
     panel_height, panel_width = _even(height), _even(width)
 
     overlays = _overlays(trajectories)
-    box_size = max(MIN_BOX_SIZE, int(BOX_RATIO * max(height, width)))
+    box_size = max(MIN_BOX_SIZE, int(BOX_RATIO * max(panel_height, panel_width)))
+
+    stacked = np.empty((panel_height * len(layout), panel_width, 3), dtype=np.uint8)
+    views = {name: stacked[index * panel_height : (index + 1) * panel_height] for index, name in enumerate(layout)}
+    planar = np.empty((panel_height * len(layout) * 3 // 2, panel_width), dtype=np.uint8)
+
+    colour_frames = _recording_frames(video, target_height=target_height, wanted=RECORDING in layout)
+    gray_stream = _stream(video, target_height=target_height)
+    gray_frames: Iterator[VideoFrame | None] = gray_stream.stream_gray_frames() if DEVIATION in layout else repeat(None)
     stage = detection_stage(
         device=settings.device,
         background=settings.background,
@@ -253,32 +271,31 @@ def _render(
     encoder = _open_encoder(
         output,
         width=panel_width,
-        height=panel_height * 2,
+        height=panel_height * len(layout),
         frames_per_second=frames_per_second if frames_per_second > 0 else FALLBACK_FPS,
     )
     stdin = encoder.stdin
     if stdin is None:
         raise RuntimeError("ffmpeg was started without an input pipe.")
 
-    stacked = np.empty((panel_height * 2, panel_width, 3), dtype=np.uint8)
-    recording, deviation = stacked[:panel_height], stacked[panel_height:]
-    planar = np.empty((panel_height * 3, panel_width), dtype=np.uint8)
-
     frames_written = 0
     try:
-        for colour, gray in zip(colour_stream.stream_frames(), gray_stream.stream_gray_frames()):
-            stage.detections(gray.frame)
-            np.copyto(recording, colour.frame[:panel_height, :panel_width])
-            cv2.cvtColor(stage.deviation_image()[:panel_height, :panel_width], cv2.COLOR_GRAY2BGR, dst=deviation)
+        for frame_number, (colour, gray) in enumerate(zip(colour_frames, gray_frames)):
+            if colour is not None:
+                np.copyto(views[RECORDING], colour.frame[:panel_height, :panel_width])
+            if gray is not None:
+                stage.detections(gray.frame)
+                view = views[DEVIATION]
+                cv2.cvtColor(stage.deviation_image()[:panel_height, :panel_width], cv2.COLOR_GRAY2BGR, dst=view)
 
-            for panel in (recording, deviation):
-                _draw_overlays(panel, overlays=overlays, frame_number=colour.frame_number, box_size=box_size)
-            _draw_frame_number(recording, colour.frame_number)
+            for panel in views.values():
+                _draw_overlays(panel, overlays=overlays, frame_number=frame_number, box_size=box_size)
+            _draw_frame_number(views[layout[0]], frame_number)
 
             cv2.cvtColor(stacked, cv2.COLOR_BGR2YUV_I420, dst=planar)
             stdin.write(planar)
             frames_written += 1
-            on_frame(colour.frame_number)
+            on_frame(frame_number)
     finally:
         stdin.close()
         encoder.wait()
@@ -286,6 +303,17 @@ def _render(
     if encoder.returncode != 0:
         raise RuntimeError(f"ffmpeg exited with status {encoder.returncode}.")
     return frames_written
+
+
+def _layout(panels: Panels) -> tuple[str, ...]:
+    """The panels to stack, from top to bottom."""
+    return (RECORDING, DEVIATION) if panels == "both" else (panels,)
+
+
+def _recording_frames(video: Path, *, target_height: int, wanted: bool) -> Iterator[VideoFrame | None]:
+    if not wanted:
+        return repeat(None)
+    return _stream(video, target_height=target_height).stream_frames()
 
 
 def _even(size: int) -> int:
@@ -397,15 +425,27 @@ class _RunPaths:
     record: Path
 
 
-def _run_paths(video: Path, *, settings: MovementSettings, target_height: int, output_dir: Path) -> _RunPaths:
-    digest = _digest(settings=settings, target_height=target_height)
+def _run_paths(
+    video: Path,
+    *,
+    settings: MovementSettings,
+    target_height: int,
+    panels: Panels,
+    output_dir: Path,
+) -> _RunPaths:
+    digest = _digest(settings=settings, target_height=target_height, panels=panels)
     stem = f"{video.stem}__{digest}"
     return _RunPaths(video=output_dir / f"{stem}.mp4", record=output_dir / f"{stem}.json")
 
 
-def _digest(*, settings: MovementSettings, target_height: int) -> str:
+def _digest(*, settings: MovementSettings, target_height: int, panels: Panels) -> str:
     payload = json.dumps(
-        {"settings": asdict(settings), "target_height": target_height, "code": _code_digest()},
+        {
+            "settings": asdict(settings),
+            "target_height": target_height,
+            "panels": panels,
+            "code": _code_digest(),
+        },
         sort_keys=True,
     )
     return hashlib.sha1(payload.encode()).hexdigest()[:10]
