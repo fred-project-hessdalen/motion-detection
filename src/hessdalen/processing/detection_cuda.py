@@ -222,7 +222,7 @@ class CudaDetectionStage:
         rows, columns = cp.nonzero(state.peaks)
         if rows.size == 0:
             return []
-        return self._blobs(state, rows=rows, columns=columns)
+        return self._blobs(state, gray=gray, rows=rows, columns=columns)
 
     def deviation_image(self) -> np.ndarray:
         """Scale the deviation for the debug video, with the detection
@@ -234,14 +234,21 @@ class CudaDetectionStage:
         scaled = state.deviation * cp.float32(255.0 / self.settings.detection_sigma)
         return cp.asnumpy(cp.clip(scaled, 0.0, 255.0).astype(cp.uint8))
 
-    def _blobs(self, state: _DeviceState, *, rows: cp.ndarray, columns: cp.ndarray) -> list[Detection]:
+    def _blobs(
+        self, state: _DeviceState, *, gray: np.ndarray, rows: cp.ndarray, columns: cp.ndarray
+    ) -> list[Detection]:
         """One detection per blob, placed at the strongest of its peak pixels.
 
         A blob is reported only when its strongest pixel reaches the
         detection threshold, so that pixel is always in the peak mask
         and the blob's maximum is found among those pixels alone.
+
+        The blob's brightness is summed from the frame as it arrived,
+        which is the same array the host stage sums, so neither device
+        reads the other's smoothing.
         """
         return blobs_around_peaks(
+            gray=gray,
             foreground=self._closed(state.foreground),
             rows=cp.asnumpy(rows),
             columns=cp.asnumpy(columns),

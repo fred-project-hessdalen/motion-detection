@@ -7,6 +7,7 @@ implementation plugs into.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from functools import partial
 from typing import Callable, Protocol
@@ -24,15 +25,35 @@ FOREGROUND = 255
 MEASURED = 128
 """Value the fill leaves on a blob whose pixels have been counted."""
 
+FILLED = 1
+"""Value the fill leaves in its own mask, which holds one blob at a time."""
+
 SCALE_LADDER = (1.0, 1.25, 1.5625, 1.953125, 2.44140625, 3.0517578125)
 """Multipliers a frame's deviation may be divided by, each a quarter up."""
 
 
 @dataclass(frozen=True, slots=True)
 class Detection:
+    """One blob, as the frame it was found in measured it.
+
+    The tracker matches on the pixel count and the peak deviation. The
+    brightness and the axes describe the blob's appearance. A track
+    carries them as a series, and that series is what separates a
+    wingbeat from a meteor's decay.
+    """
+
     centroid: Centroid
     pixel_count: int
     peak_deviation: float
+    brightness: float
+    major_axis: float
+    minor_axis: float
+
+
+@dataclass(frozen=True, slots=True)
+class BlobAxes:
+    major: float
+    minor: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,7 +107,7 @@ class CpuDetectionStage:
         if scale != 1.0:
             deviation = np.divide(deviation, np.float32(scale), dtype=np.float32)
         self._deviation = deviation
-        return self._extract_detections(self._deviation)
+        return self._extract_detections(gray, self._deviation)
 
     def deviation_image(self) -> np.ndarray:
         """Scale the deviation for the debug video, with the detection
@@ -94,7 +115,7 @@ class CpuDetectionStage:
         scaled = self._deviation * (255.0 / self.settings.detection_sigma)
         return np.clip(scaled, 0.0, 255.0).astype(np.uint8)
 
-    def _extract_detections(self, deviation: np.ndarray) -> list[Detection]:
+    def _extract_detections(self, gray: np.ndarray, deviation: np.ndarray) -> list[Detection]:
         peaks = cv2.findNonZero(self._peak_mask(deviation))
         if peaks is None:
             return []
@@ -102,6 +123,7 @@ class CpuDetectionStage:
         rows = peaks[:, 0, 1]
         columns = peaks[:, 0, 0]
         return blobs_around_peaks(
+            gray=gray,
             foreground=self._foreground_mask(deviation),
             rows=rows,
             columns=columns,
@@ -167,6 +189,7 @@ def count_over(deviation: np.ndarray, threshold: float) -> int:
 
 def blobs_around_peaks(
     *,
+    gray: np.ndarray,
     foreground: np.ndarray,
     rows: np.ndarray,
     columns: np.ndarray,
@@ -184,9 +207,14 @@ def blobs_around_peaks(
     took its peaks with it when it was filled, and the peaks arrive in
     row order, so a blob whose strongest value appears more than once is
     placed at the first of them.
+
+    The fill also marks its own pixels in a mask of its own, because a
+    blob's bounding box can hold pixels an earlier blob left MEASURED,
+    and those would otherwise be weighed and summed as this blob's.
     """
     found: list[Detection] = []
     claimed = np.zeros(rows.size, dtype=bool)
+    fill = np.zeros((foreground.shape[0] + 2, foreground.shape[1] + 2), dtype=np.uint8)
 
     for index in range(rows.size):
         if claimed[index]:
@@ -195,9 +223,18 @@ def blobs_around_peaks(
         if foreground[rows[index], columns[index]] != FOREGROUND:
             continue
 
-        pixel_count, _image, _mask, _rect = cv2.floodFill(
-            foreground, None, (int(columns[index]), int(rows[index])), MEASURED, flags=cv2.FLOODFILL_FIXED_RANGE | 8
+        pixel_count, _image, _mask, rect = cv2.floodFill(
+            foreground,
+            fill,
+            (int(columns[index]), int(rows[index])),
+            MEASURED,
+            flags=cv2.FLOODFILL_FIXED_RANGE | cv2.FLOODFILL_MASK_ONLY | (FILLED << 8) | 8,
         )
+        left, top, width, height = rect
+        blob = fill[top + 1 : top + 1 + height, left + 1 : left + 1 + width] == FILLED
+        fill[top + 1 : top + 1 + height, left + 1 : left + 1 + width] = 0
+        foreground[top : top + height, left : left + width][blob] = MEASURED
+
         members = [index] + [
             other
             for other in range(index + 1, rows.size)
@@ -208,14 +245,40 @@ def blobs_around_peaks(
             continue
 
         strongest = max(members, key=lambda member: deviations[member])
+        axes = blob_axes(blob)
         found.append(
             Detection(
                 centroid=(float(columns[strongest]), float(rows[strongest])),
                 pixel_count=pixel_count,
                 peak_deviation=float(deviations[strongest]),
+                brightness=float(gray[top : top + height, left : left + width][blob].sum(dtype=np.float64)),
+                major_axis=axes.major,
+                minor_axis=axes.minor,
             )
         )
     return found
+
+
+def blob_axes(blob: np.ndarray) -> BlobAxes:
+    """The axis lengths of the ellipse with the blob's second moments.
+
+    A meteor's streak and a bird of the same area part company here and
+    nowhere else in the detection, because a pixel count cannot tell a
+    long thin shape from a round one.
+    """
+    moments = cv2.moments(blob.astype(np.uint8), binaryImage=True)
+    area = moments["m00"]
+    if area <= 0.0:
+        return BlobAxes(major=0.0, minor=0.0)
+
+    across = moments["mu20"] / area
+    down = moments["mu02"] / area
+    diagonal = moments["mu11"] / area
+    spread = math.sqrt(max(4.0 * diagonal * diagonal + (across - down) ** 2, 0.0))
+    return BlobAxes(
+        major=2.0 * math.sqrt(max(2.0 * (across + down + spread), 0.0)),
+        minor=2.0 * math.sqrt(max(2.0 * (across + down - spread), 0.0)),
+    )
 
 
 def threshold_mask(image: np.ndarray, threshold: float, comparison: int) -> np.ndarray:
