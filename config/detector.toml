@@ -4,12 +4,12 @@
 # closing size and the noise floor, stay with the settings they belong to.
 
 frame_height = 1080
-panels = "both"
+panels = "deviation"
 device = "auto"
 
 [detection]
-foreground_sigma = 5.0
-detection_sigma = 15.0
+foreground_sigma = 2.5
+detection_sigma = 9.5
 min_pixels = 3
 
 [background]
@@ -17,8 +17,8 @@ mean_alpha = 0.5
 variance_alpha = 0.02
 
 [tracking]
-min_consecutive_frames = 6
+min_consecutive_frames = 10
 max_movement_ratio = 0.02
-min_movement_ratio = 0.001
+min_movement_ratio = 0.0005
 max_missed_frames = 8
 min_trajectory_span_ratio = 0.02
