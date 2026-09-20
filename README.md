@@ -170,19 +170,7 @@ uv run docformatter . --recursive
 
 ## Data Management
 
-The recordings come from the Project Hessdalen `cameras` folder on
-Google Drive:
-
-<https://drive.google.com/drive/folders/1ZgBdcY2WFDaCpwQCXlTdw7DKfkEapD4s>
-
-It holds the camera archive in dated subfolders, alongside
-`Observations`, `trainingData`, `UFO arkiv Norge` and a `ReadMe`.
-Reading it needs a Google account the folder has been shared with.
-
-`data/examples` holds the selection this project works on: whole
-recordings, the clips cut out of them, and the labels for them in
-`data/examples/metadata.csv`. DVC (Data Version Control) tracks that
-directory.
+This project uses DVC (Data Version Control) for managing example data and test datasets.
 
 ```bash
 # Pull data from remote storage
