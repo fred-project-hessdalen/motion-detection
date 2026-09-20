@@ -14,7 +14,7 @@ import numpy as np
 from cupyx.scipy.ndimage import binary_dilation, binary_erosion  # type: ignore[import-not-found]
 
 from hessdalen.processing.background import BackgroundSettings
-from hessdalen.processing.detection import Detection, DetectionSettings
+from hessdalen.processing.detection import Detection, DetectionSettings, blobs_around_peaks
 
 _BOX = cp.ElementwiseKernel(
     "raw uint8 source, int32 height, int32 width, int32 radius",
@@ -139,53 +139,13 @@ class CudaDetectionStage:
         detection threshold, so that pixel is always in the peak mask
         and the blob's maximum is found among those pixels alone.
         """
-        deviations = cp.asnumpy(state.deviation[rows, columns])
-        peak_rows = cp.asnumpy(rows)
-        peak_columns = cp.asnumpy(columns)
-        foreground = self._closed(state.foreground)
-
-        component_count, labels, stats, _centroids = cv2.connectedComponentsWithStats(foreground, connectivity=8)
-        strongest = self._strongest_per_component(
-            labels=labels,
-            component_count=component_count,
-            peak_rows=peak_rows,
-            peak_columns=peak_columns,
-            deviations=deviations,
+        return blobs_around_peaks(
+            foreground=self._closed(state.foreground),
+            rows=cp.asnumpy(rows),
+            columns=cp.asnumpy(columns),
+            deviations=cp.asnumpy(state.deviation[rows, columns]),
+            min_pixels=self.settings.min_pixels,
         )
-        return [
-            Detection(
-                centroid=(float(peak_columns[index]), float(peak_rows[index])),
-                pixel_count=int(stats[component][cv2.CC_STAT_AREA]),
-                peak_deviation=float(deviations[index]),
-            )
-            for component, index in sorted(strongest.items())
-            if int(stats[component][cv2.CC_STAT_AREA]) >= self.settings.min_pixels
-        ]
-
-    def _strongest_per_component(
-        self,
-        *,
-        labels: np.ndarray,
-        component_count: int,
-        peak_rows: np.ndarray,
-        peak_columns: np.ndarray,
-        deviations: np.ndarray,
-    ) -> dict[int, int]:
-        """Index of the strongest peak pixel of each blob that holds one.
-
-        The peaks arrive in row order, and a later pixel has to beat the
-        one held to replace it, so a blob whose strongest value appears
-        more than once keeps the first of them.
-        """
-        strongest: dict[int, int] = {}
-        for index, component in enumerate(labels[peak_rows, peak_columns]):
-            blob = int(component)
-            if blob == 0 or blob >= component_count:
-                continue
-            leader = strongest.get(blob)
-            if leader is None or deviations[index] > deviations[leader]:
-                strongest[blob] = index
-        return strongest
 
     def _closed(self, foreground: cp.ndarray) -> np.ndarray:
         """Close the mask on the card and hand the host the bytes it labels."""

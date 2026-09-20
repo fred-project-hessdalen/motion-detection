@@ -17,6 +17,12 @@ from hessdalen.processing.background import BackgroundModel, BackgroundSettings
 
 Centroid = tuple[float, float]
 
+FOREGROUND = 255
+"""Value a mask carries where the pixel belongs to a blob."""
+
+MEASURED = 128
+"""Value the fill leaves on a blob whose pixels have been counted."""
+
 
 @dataclass(frozen=True, slots=True)
 class Detection:
@@ -70,25 +76,19 @@ class CpuDetectionStage:
         return np.clip(scaled, 0.0, 255.0).astype(np.uint8)
 
     def _extract_detections(self, deviation: np.ndarray) -> list[Detection]:
-        """Report the blob around every pixel that reaches the detection
-        threshold.
-
-        A blob holding no such pixel cannot be reported, so finding the
-        pixels first leaves a handful of blobs to measure out of the
-        hundreds the foreground threshold raises on a textured scene.
-        """
         peaks = cv2.findNonZero(self._peak_mask(deviation))
         if peaks is None:
             return []
 
-        foreground = self._foreground_mask(deviation)
-        component_count, labels, stats, _centroids = cv2.connectedComponentsWithStats(foreground, connectivity=8)
-        return [
-            detection
-            for component in np.unique(labels[peaks[:, 0, 1], peaks[:, 0, 0]])
-            if 0 < component < component_count
-            and (detection := self._component_to_detection(int(component), labels, stats, deviation)) is not None
-        ]
+        rows = peaks[:, 0, 1]
+        columns = peaks[:, 0, 0]
+        return blobs_around_peaks(
+            foreground=self._foreground_mask(deviation),
+            rows=rows,
+            columns=columns,
+            deviations=deviation[rows, columns],
+            min_pixels=self.settings.min_pixels,
+        )
 
     def _peak_mask(self, deviation: np.ndarray) -> np.ndarray:
         return threshold_mask(deviation, self.settings.detection_sigma, cv2.CMP_GE)
@@ -101,30 +101,59 @@ class CpuDetectionStage:
             return mask
         return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self._close_kernel)
 
-    def _component_to_detection(
-        self,
-        component: int,
-        labels: np.ndarray,
-        stats: np.ndarray,
-        deviation: np.ndarray,
-    ) -> Detection | None:
-        x, y, width, height, pixel_count = (int(value) for value in stats[component])
-        if pixel_count < self.settings.min_pixels:
-            return None
 
-        window = np.where(
-            labels[y : y + height, x : x + width] == component, deviation[y : y + height, x : x + width], 0.0
-        )
-        peak_deviation = float(window.max())
-        if peak_deviation < self.settings.detection_sigma:
-            return None
+def blobs_around_peaks(
+    *,
+    foreground: np.ndarray,
+    rows: np.ndarray,
+    columns: np.ndarray,
+    deviations: np.ndarray,
+    min_pixels: int,
+) -> list[Detection]:
+    """Report the blob around every pixel that reaches the detection
+    threshold.
 
-        peak_y, peak_x = np.unravel_index(int(np.argmax(window)), window.shape)
-        return Detection(
-            centroid=(float(x + int(peak_x)), float(y + int(peak_y))),
-            pixel_count=pixel_count,
-            peak_deviation=peak_deviation,
+    A blob holding no such pixel cannot be reported, so filling out from
+    the pixels that did leaves a handful of blobs to measure out of the
+    hundreds the foreground threshold raises on a textured scene.
+
+    The fill writes MEASURED over the blob it has just counted, so the
+    peaks standing on MEASURED are that blob's own. Every earlier blob
+    took its peaks with it when it was filled, and the peaks arrive in
+    row order, so a blob whose strongest value appears more than once
+    is placed at the first of them.
+    """
+    found: list[Detection] = []
+    claimed = np.zeros(rows.size, dtype=bool)
+
+    for index in range(rows.size):
+        if claimed[index]:
+            continue
+        claimed[index] = True
+        if foreground[rows[index], columns[index]] != FOREGROUND:
+            continue
+
+        pixel_count, _image, _mask, _rect = cv2.floodFill(
+            foreground, None, (int(columns[index]), int(rows[index])), MEASURED, flags=cv2.FLOODFILL_FIXED_RANGE | 8
         )
+        members = [index] + [
+            other
+            for other in range(index + 1, rows.size)
+            if not claimed[other] and foreground[rows[other], columns[other]] == MEASURED
+        ]
+        claimed[members] = True
+        if pixel_count < min_pixels:
+            continue
+
+        strongest = max(members, key=lambda member: deviations[member])
+        found.append(
+            Detection(
+                centroid=(float(columns[strongest]), float(rows[strongest])),
+                pixel_count=pixel_count,
+                peak_deviation=float(deviations[strongest]),
+            )
+        )
+    return found
 
 
 def threshold_mask(image: np.ndarray, threshold: float, comparison: int) -> np.ndarray:
