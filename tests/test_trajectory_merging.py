@@ -88,6 +88,35 @@ def test_trajectory_merging_with_gap():
     assert len(events) >= 8, f"Expected at least 8 events, got {len(events)}"
 
 
+def test_a_merge_leaves_the_other_tracks_of_the_frame_to_be_taken_through():
+    """Merging a track into an earlier one changes which tracks are open, while
+    the frame it happens on is still taking the rest of them through."""
+    width, height = 200, 200
+    frames = []
+
+    def frame_with(*dots: tuple[int, int]) -> np.ndarray:
+        canvas = np.zeros((height, width, 3), dtype=np.uint8)
+        for x, y in dots:
+            canvas |= create_frame_with_dot(width, height, x, y)
+        return canvas
+
+    # One dot carries on throughout, so tracks stay open either side of the
+    # one that goes missing and comes back to merge.
+    for step in range(6):
+        frames.append(frame_with((20 + step * 3, 20), (150 + step * 4, 150)))
+    for step in range(2):
+        frames.append(frame_with((38 + step * 3, 20)))
+    for step in range(5):
+        frames.append(frame_with((44 + step * 3, 20), (176 + step * 4, 150)))
+
+    stream = VideoStream(MockFrameSource(frames), target_height=height)
+    detector = MovementDetector(stream=stream, settings=MERGING_SETTINGS)
+
+    events = [event for event in detector.detect() if event.centroid is not None]
+
+    assert len({event.track_id for event in events}) >= 2
+
+
 def test_trajectory_no_merge_when_too_far():
     """Test that trajectories don't merge when spatially too far apart."""
     width, height = 200, 200

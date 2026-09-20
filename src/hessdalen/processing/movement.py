@@ -147,11 +147,12 @@ class MovementDetector:
             return []
 
         matches, assigned_detection_indexes = self._match_tracks_to_detections(detections)
+        open_tracks = list(self._tracks.values())
         updated_track_events = lmapcat(
             lambda track: self._update_track_from_match(
                 frame_number=frame_number, detections=detections, matches=matches, track=track
             ),
-            self._tracks.values(),
+            open_tracks,
         )
 
         self._delete_expired_tracks()
@@ -248,6 +249,16 @@ class MovementDetector:
         matches: dict[int, int],
         track: Track,
     ) -> list[MovementEvent]:
+        """Take this track to the detection it was matched with.
+
+        Confirming a track earlier in the round can merge it into this
+        one's id, which leaves this one holding an id that now names the
+        track it was merged with. Reporting it here would report that id
+        twice for the one frame.
+        """
+        if self._tracks.get(track.track_id) is not track:
+            return []
+
         detection_index = matches.get(track.track_id)
         if detection_index is None:
             self._mark_track_missed(track)
