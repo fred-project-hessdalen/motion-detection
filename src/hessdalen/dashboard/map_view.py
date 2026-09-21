@@ -3,12 +3,14 @@
 Every track of the corpus is a point, placed and coloured by the map the
 analysis step writes. The page reads that file and the track files and
 never detects anything, so a click costs a pass over the frames ahead of
-the track and a drawing of its stretch.
+the track and a drawing of its stretch. A track whose video the sift did
+not keep has its video fetched from the archive first.
 """
 
 from __future__ import annotations
 
 import json
+import subprocess
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -21,11 +23,22 @@ import streamlit as st
 
 from hessdalen.dashboard.runs import VideoProbe, probe
 from hessdalen.dashboard.track_clip import StoredTrack, Stretch, build_track_clip, stretch_around, track_clip_path
+from hessdalen.dashboard.video_cache import (
+    MIN_FREE_BYTES,
+    archive_video,
+    cached_video,
+    fetch_seconds,
+    fetch_video,
+    free_bytes,
+    room_to_fetch,
+)
+from hessdalen.io.drive import ArchiveVideo
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MAP_PATH = REPO_ROOT / "data" / "out" / "analysis" / "track-map.parquet"
 TRACKS_DIR = REPO_ROOT / "data" / "corpus" / "tracks"
 VIDEOS_DIR = REPO_ROOT / "data" / "corpus" / "videos"
+FETCHED_DIR = REPO_ROOT / "data" / "out" / "dashboard" / "videos"
 CLIPS_DIR = REPO_ROOT / "data" / "out" / "dashboard" / "tracks"
 LEDGERS = (
     REPO_ROOT / "data" / "out" / "sift" / "ledger.jsonl",
@@ -51,9 +64,17 @@ MAP_HELP = (
     "Every track the corpus holds, placed so that tracks with similar descriptors sit close together. "
     "Grey points are tracks the clustering left out of every cluster. Click a point to play its track."
 )
-UNKEPT_TEXT = (
-    "The video behind this track was not kept after detection, so it cannot be played here. "
-    "Its track file is kept, which is why the point is on the map."
+AUTO_FETCH_BYTES = 100 * 1024**2
+"""Largest video a click fetches without being asked.
+
+The one-minute cuts are about 30 MB and arrive in under a minute. A
+whole 20-minute recording takes several minutes, and the page can do
+nothing else meanwhile, so that fetch waits for a press.
+"""
+
+UNSOURCED_TEXT = (
+    "The video behind this track was not kept after detection, and no ledger says where in the archive "
+    "it came from, so it cannot be fetched."
 )
 
 
@@ -133,7 +154,6 @@ def _picked_key(event: Any) -> str | None:
 
 
 def _play(track: pd.Series) -> None:
-    video = VIDEOS_DIR / str(track["recording"])
     stored = _stored_track(
         TRACKS_DIR / str(track["label"]) / str(track["event"]) / f"{track['clip']}.parquet",
         track_id=int(track["track_id"]),
@@ -141,11 +161,8 @@ def _play(track: pd.Series) -> None:
 
     st.subheader(f"Track {int(track['track_id'])} in {track['clip']}")
     st.caption(_facts(track))
-    if not video.is_file():
-        st.info(UNKEPT_TEXT)
-        link = _drive_links(_ledger_stamp()).get(str(track["recording"]))
-        if link:
-            st.link_button("Open on Drive", link)
+    video = _video(str(track["recording"]))
+    if video is None:
         return
 
     details = _probe_cached(video)
@@ -161,6 +178,53 @@ def _play(track: pd.Series) -> None:
         f"{stored.first_frame / rate:.1f} to {stored.last_frame / rate:.1f} s into the recording"
     )
     st.video(str(clip), loop=True, autoplay=True, muted=True)
+
+
+def _video(recording: str) -> Path | None:
+    """The recording on disk, fetched from the archive when the sift did not
+    keep it, or None when it cannot be had now."""
+    kept = VIDEOS_DIR / recording
+    if kept.is_file():
+        return kept
+
+    entry = _ledger_entries(_ledger_stamp()).get(recording)
+    if entry is None:
+        st.info(UNSOURCED_TEXT)
+        return None
+
+    archived = archive_video(entry)
+    return cached_video(FETCHED_DIR, video=archived) or _fetch(archived, link=str(entry.get("url", "")))
+
+
+def _fetch(video: ArchiveVideo, *, link: str) -> Path | None:
+    """Fetch the video when there is room for it and, for a large one, when
+    asked to."""
+    megabytes = video.size_bytes / 1e6
+    free = free_bytes(FETCHED_DIR)
+    if not room_to_fetch(video, free_bytes=free):
+        st.warning(
+            f"Fetching this {megabytes:.0f} MB video would leave {(free - video.size_bytes) / 1e9:.1f} GB free, "
+            f"under the {MIN_FREE_BYTES / 1024**3:.0f} GB the archive sift needs to keep fetching."
+        )
+        if link:
+            st.link_button("Open on Drive", link)
+        return None
+
+    minutes = fetch_seconds(video) / 60.0
+    asked = video.size_bytes <= AUTO_FETCH_BYTES or st.button(
+        "Fetch video",
+        help=f"The sift did not keep this {megabytes:.0f} MB recording. Fetching it takes about "
+        f"{minutes:.0f} minutes, and the page waits until it has arrived.",
+    )
+    if not asked:
+        return None
+
+    try:
+        with st.spinner(f"Fetching {megabytes:.0f} MB from the archive"):
+            return fetch_video(FETCHED_DIR, video=video)
+    except (OSError, subprocess.CalledProcessError) as failure:
+        st.error(f"The fetch failed: {failure}")
+        return None
 
 
 def _build(video: Path, *, track: StoredTrack, stretch: Stretch, frames_per_second: float, clip: Path) -> None:
@@ -222,13 +286,15 @@ def _ledger_stamp() -> tuple[float, ...]:
 
 
 @st.cache_data(show_spinner=False)
-def _drive_links(stamp: tuple[float, ...]) -> dict[str, str]:
-    """The Drive link of every video the ledgers name.
+def _ledger_entries(stamp: tuple[float, ...]) -> dict[str, dict[str, Any]]:
+    """What the sift ledgers record about every video they name, by the video's
+    file name.
 
     A ledger another run is still appending to can end on a line that is
-    only half written, and such a line is passed over.
+    only half written, and such a line is passed over. The stamp holds
+    the ledgers' modification times, and is what the cache is keyed on.
     """
-    links: dict[str, str] = {}
+    entries: dict[str, dict[str, Any]] = {}
     for path in LEDGERS:
         if not path.is_file():
             continue
@@ -237,8 +303,8 @@ def _drive_links(stamp: tuple[float, ...]) -> dict[str, str]:
                 entry = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            links[str(entry.get("name"))] = str(entry.get("url", ""))
-    return links
+            entries[str(entry.get("name"))] = entry
+    return entries
 
 
 @st.cache_data(show_spinner=False)
