@@ -56,8 +56,8 @@ MAP_COMMAND = "uv run --group analysis python scripts/dev/map_tracks.py"
 UNASSIGNED_NAME = "none"
 UNASSIGNED_COLOR = "#b8b8b8"
 CLUSTER_COLORS = ("#4c78a8", "#f58518", "#54a24b", "#e45756", "#72b7b2", "#eeca3b", "#b279a2", "#ff9da6", "#9d755d")
-COLOUR_CHOICES = ("Cluster", "Label", "Camera")
-COLOUR_COLUMNS = {"Cluster": "cluster", "Label": "label", "Camera": "camera"}
+COLOUR_CHOICES = ("Cluster", "Side", "Label", "Camera")
+COLOUR_COLUMNS = {"Cluster": "cluster", "Side": "side", "Label": "label", "Camera": "camera"}
 SELECTED_CLUSTER = "Selected track's cluster"
 SELECTION = "track"
 GALLERY_SIZE = 30
@@ -72,9 +72,11 @@ other clip meanwhile, so that fetch waits for a press.
 """
 
 COLOUR_HELP = (
-    "What the points are coloured by. Clusters come from the descriptors alone. A label is the folder "
-    "the recording was filed under, which names the whole recording, so most tracks under a label are "
-    "that scene's background activity and not the thing the folder is named for."
+    "What the points are coloured by. Clusters come from the descriptors alone. The side says whether a "
+    "track moves evenly from step to step, as a clean path does, or hops about as clutter does, and "
+    "each side is clustered on its own. A label is the folder the recording was filed under, which names "
+    "the whole recording, so most tracks under a label are that scene's background activity and not the "
+    "thing the folder is named for."
 )
 LABELS_HELP = "Show only the tracks of recordings filed under these labels."
 GALLERY_CHOICE_HELP = "The cluster the gallery below the map draws a sample of."
@@ -163,6 +165,7 @@ def _scatter(tracks: pd.DataFrame, *, colour_column: str) -> alt.Chart:
             tooltip=[
                 alt.Tooltip("label:N", title="Label"),
                 alt.Tooltip("cluster:N", title="Cluster"),
+                alt.Tooltip("side:N", title="Side"),
                 alt.Tooltip("clip:N", title="Recording"),
                 alt.Tooltip("track_id:Q", title="Track"),
                 alt.Tooltip("frames:Q", title="Frames"),
@@ -358,8 +361,10 @@ def _facts(track: pd.Series) -> str:
     parts = [
         f"Label {track['label']}",
         "no cluster" if cluster == UNASSIGNED_NAME else f"cluster {cluster}",
+        f"{track['side']} side",
         f"camera {track['camera']}",
         f"straightness {track['straightness']:.2f}",
+        f"roughness {track['roughness']:.2f}",
         f"peak deviation {track['peak_deviation_max']:.1f}",
     ]
     return " · ".join(parts)
