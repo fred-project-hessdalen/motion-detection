@@ -2,6 +2,7 @@
 
 import io
 import urllib.error
+from pathlib import Path
 
 import pytest
 
@@ -68,6 +69,34 @@ def test_a_short_arrival_raises_and_leaves_nothing(tmp_path, monkeypatch) -> Non
         drive.fetch(video, target)
 
     assert list(tmp_path.iterdir()) == []
+
+
+def test_a_refused_fetch_raises_with_what_the_store_said(tmp_path, monkeypatch) -> None:
+    page = b"<!DOCTYPE html><html><head><title>Quota exceeded</title></head><body>later</body></html>"
+    monkeypatch.setattr(drive.urllib.request, "urlopen", _answering(page))
+
+    with pytest.raises(OSError, match="Quota exceeded"):
+        drive.fetch(_video(CLIP), tmp_path / "clip.mkv")
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_remote_fetch_asks_for_the_path_under_the_archive_root(tmp_path, monkeypatch) -> None:
+    video = _video(CLIP, size_bytes=4)
+    asked = []
+
+    def run(command, check):
+        asked.append(command)
+        Path(command[3]).write_bytes(b"abcd")
+        return None
+
+    monkeypatch.setattr(drive.subprocess, "run", run)
+    target = tmp_path / "clip.mkv"
+
+    drive.fetch_through("hessdalen:", video, target)
+
+    assert asked[0][:3] == ["rclone", "copyto", "hessdalen:" + CLIP.split("/", 1)[1]]
+    assert target.read_bytes() == b"abcd"
 
 
 def test_a_fetch_that_fails_once_is_tried_again(tmp_path, monkeypatch) -> None:

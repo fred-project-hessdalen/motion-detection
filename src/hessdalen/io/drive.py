@@ -10,7 +10,9 @@ files with an empty body and no length.
 from __future__ import annotations
 
 import csv
+import re
 import shutil
+import subprocess
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -103,11 +105,47 @@ def fetch(video: ArchiveVideo, target: Path) -> Path:
 
     written = _download(video.file_id, partial)
     if written != video.size_bytes:
+        refusal = _refusal(partial)
         partial.unlink(missing_ok=True)
-        raise OSError(f"{video.name} arrived as {written} bytes against the {video.size_bytes} the listing gives")
+        raise OSError(
+            refusal or f"{video.name} arrived as {written} bytes against the {video.size_bytes} the listing gives"
+        )
 
     partial.replace(target)
     return target
+
+
+def fetch_through(remote: str, video: ArchiveVideo, target: Path) -> Path:
+    """Write the video to target, pulling it through an rclone remote.
+
+    The remote is rooted at the archive, so the first segment of a
+    listing path names that root and is dropped. Going through an
+    account rather than the public endpoint is what keeps a long run
+    alive: the public endpoint stops serving a file once enough of it
+    has been handed out, for as long as a day.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    source = remote + video.path.split("/", 1)[1]
+
+    subprocess.run(["rclone", "copyto", source, str(target)], check=True)
+    if target.stat().st_size != video.size_bytes:
+        raise OSError(f"{video.name} arrived as {target.stat().st_size} bytes against the {video.size_bytes} listed")
+    return target
+
+
+def _refusal(partial: Path) -> str:
+    """What the store said instead of sending the video, if it said
+    anything.
+
+    A refusal arrives as an HTML page under a 200, so the only sign that
+    it is not a video is the body itself.
+    """
+    head = partial.read_bytes()[:4096] if partial.exists() else b""
+    if not head.lstrip().lower().startswith(b"<!doctype html"):
+        return ""
+
+    title = re.search(rb"<title>(.*?)</title>", head, re.S)
+    return title.group(1).decode("utf-8", errors="replace").strip() if title else "the store answered with a web page"
 
 
 def _download(file_id: str, partial: Path) -> int:
