@@ -36,6 +36,23 @@ VELOCITY_TERMS = 2
 ACCELERATION_TERMS = 3
 """Coefficients a steady-acceleration fit solves for, per axis."""
 
+ROUGHNESS_SPACINGS = (1, 2, 4, 8)
+"""Frame spacings a track's smoothness is read at, keeping the smoothest.
+
+A slow object moves less per frame than its blob's centre jitters, so
+read frame by frame it looks as rough as clutter. Read every few frames,
+its motion outgrows the jitter, which stays the same size at every
+spacing, while clutter stays rough at all of them.
+"""
+
+ROUGHNESS_POINTS = 5
+"""Positions a spacing needs before its reading counts."""
+
+MIN_TYPICAL_STEP = 0.25
+"""Smallest usual step, in pixels a frame, that a track's steps are
+measured against, so a track that barely moves does not divide by
+nothing."""
+
 TRACK_COLUMNS = (
     "frame_number",
     "centre_x",
@@ -75,6 +92,8 @@ class TrackDescriptor:
     line_residual: float
     velocity_residual: float
     acceleration_residual: float
+    roughness: float
+    jump: float
 
     start_edge: float
     end_edge: float
@@ -142,6 +161,7 @@ def describe(rows: TrackRows, *, frame: Frame) -> TrackDescriptor:
     displacement = float(np.hypot(rows.centre_x[-1] - rows.centre_x[0], rows.centre_y[-1] - rows.centre_y[0]))
     displacement /= frame.reach
     flicker = _flicker(rows)
+    smoothness = _smoothness(rows)
     area = rows.pixel_count.astype(np.float64)
 
     return TrackDescriptor(
@@ -160,6 +180,8 @@ def describe(rows: TrackRows, *, frame: Frame) -> TrackDescriptor:
         line_residual=_line_residual(rows, reach=frame.reach),
         velocity_residual=_curve_residual(rows, reach=frame.reach, terms=VELOCITY_TERMS),
         acceleration_residual=_curve_residual(rows, reach=frame.reach, terms=ACCELERATION_TERMS),
+        roughness=smoothness.roughness,
+        jump=smoothness.jump,
         start_edge=_edge_distance(rows.centre_x[0], rows.centre_y[0], frame=frame),
         end_edge=_edge_distance(rows.centre_x[-1], rows.centre_y[-1], frame=frame),
         elevation=float(rows.centre_y.mean() / frame.height),
@@ -294,6 +316,48 @@ def _curve_residual(rows: TrackRows, *, reach: float, terms: int) -> float:
     powers = np.stack([elapsed**power for power in range(terms)], axis=1)
     squared = sum(_fit_error(powers, axis.astype(np.float64)) for axis in (rows.centre_x, rows.centre_y))
     return math.sqrt(squared / float(rows.centre_x.size)) / reach
+
+
+@dataclass(frozen=True, slots=True)
+class Smoothness:
+    """How evenly a track moves from one step to the next, and its largest
+    step against its usual one."""
+
+    roughness: float
+    jump: float
+
+
+def _smoothness(rows: TrackRows) -> Smoothness:
+    """The smoothest the track reads at any frame spacing, and its largest
+    step read frame by frame.
+
+    Roughness is the median change between consecutive steps over the
+    usual step. A path moving evenly, straight or curving, changes its
+    step little and reads near zero. Clutter hops about and reads near
+    one or more. Over the example corpus the two sit either side of a
+    trough at about 0.6.
+
+    Jump is the largest step over the usual one. A clean track the
+    tracker has linked to a noise blob far away shows one step many times
+    its usual length.
+    """
+    readings = [
+        _step_changes(rows.centre_x[::spacing], rows.centre_y[::spacing], rows.frame_number[::spacing])
+        for spacing in ROUGHNESS_SPACINGS
+        if rows.frame_number[::spacing].size >= ROUGHNESS_POINTS
+    ]
+    if not readings:
+        return Smoothness(roughness=0.0, jump=1.0)
+    return Smoothness(roughness=min(reading.roughness for reading in readings), jump=readings[0].jump)
+
+
+def _step_changes(x: np.ndarray, y: np.ndarray, frames: np.ndarray) -> Smoothness:
+    elapsed = np.maximum(np.diff(frames), 1).astype(np.float64)
+    steps = np.column_stack([np.diff(x), np.diff(y)]) / elapsed[:, None]
+    lengths = np.hypot(steps[:, 0], steps[:, 1])
+    usual = max(float(np.median(lengths)), MIN_TYPICAL_STEP)
+    changes = np.hypot(*np.diff(steps, axis=0).T)
+    return Smoothness(roughness=float(np.median(changes)) / usual, jump=float(lengths.max()) / usual)
 
 
 def _fit_error(powers: np.ndarray, axis: np.ndarray) -> float:

@@ -96,6 +96,44 @@ def test_missed_frames_are_counted_and_speed_is_per_frame() -> None:
     assert described.speed_max == pytest.approx(10.0 / REACH)
 
 
+def test_an_evenly_moving_track_reads_as_smooth_whether_straight_or_curving() -> None:
+    elapsed = np.arange(40, dtype=np.float64)
+    straight = describe(_rows(x=100.0 + elapsed * 6.0, y=np.full(40, 500.0)), frame=FRAME)
+    curving = describe(
+        _rows(x=500.0 + 200.0 * np.cos(elapsed / 20.0), y=500.0 + 200.0 * np.sin(elapsed / 20.0)), frame=FRAME
+    )
+
+    assert straight.roughness == pytest.approx(0.0, abs=1e-9)
+    assert curving.roughness < 0.1
+    assert straight.jump == pytest.approx(1.0)
+
+
+def test_a_track_hopping_about_reads_as_rough() -> None:
+    rng = np.random.default_rng(0)
+    rows = _rows(x=500.0 + rng.normal(0.0, 8.0, 40), y=500.0 + rng.normal(0.0, 8.0, 40))
+
+    assert describe(rows, frame=FRAME).roughness > 0.6
+
+
+def test_a_slow_track_reads_as_smooth_once_its_motion_outgrows_its_jitter() -> None:
+    """A slow object moves less per frame than its blob's centre jitters, so
+    frame by frame it looks as rough as clutter, and every few frames it
+    does not."""
+    rng = np.random.default_rng(1)
+    elapsed = np.arange(64, dtype=np.float64)
+    rows = _rows(x=100.0 + elapsed * 1.0 + rng.normal(0.0, 0.6, 64), y=500.0 + rng.normal(0.0, 0.6, 64))
+
+    assert describe(rows, frame=FRAME).roughness < 0.6
+
+
+def test_one_far_step_reads_as_a_jump() -> None:
+    """A clean track the tracker linked to a noise blob far away shows one
+    step many times its usual length."""
+    x = np.concatenate([100.0 + np.arange(30) * 4.0, [100.0 + 29 * 4.0 + 120.0]])
+
+    assert describe(_rows(x=x, y=np.full(31, 500.0)), frame=FRAME).jump == pytest.approx(30.0)
+
+
 def _rows(*, x, y, frame_number=None, brightness=None) -> TrackRows:
     count = x.size
     frames = np.arange(count, dtype=np.int64) if frame_number is None else frame_number
