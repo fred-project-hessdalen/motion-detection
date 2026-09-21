@@ -1,3 +1,7 @@
 # Add patterns of files dvc should ignore, which could improve
 # the performance. Learn more at
 # https://dvc.org/doc/user-guide/dvcignore
+
+# The full recordings the sifting pass keeps are refetchable from the
+# archive; data/cuts holds the tracked copies cut down to the event.
+/data/corpus/videos/
