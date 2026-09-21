@@ -19,6 +19,7 @@ from streamlit.delta_generator import DeltaGenerator
 from streamlit.typing import DataframeState
 
 from hessdalen.config import CONFIG_PATH, FRAME_HEIGHTS, Config, config, write_config
+from hessdalen.dashboard import map_view
 from hessdalen.dashboard.catalog import DevelopmentVideo, Label, development_videos
 from hessdalen.dashboard.encoder import playback_rate
 from hessdalen.dashboard.live import BuiltSegment, Progress, Segment, build_segment, load_segment
@@ -119,8 +120,17 @@ DEVICE_HELP = (
 )
 
 
-def main() -> None:
+def run() -> None:
     st.set_page_config(page_title="Movement detection", layout="wide")
+    st.navigation(
+        [
+            st.Page(main, title="Recordings", default=True),
+            st.Page(map_view.page, title="Track map", url_path="track-map"),
+        ]
+    ).run()
+
+
+def main() -> None:
     st.title("Movement detection")
 
     videos = development_videos(_examples_dir())
@@ -721,4 +731,4 @@ def _tracks_table(run: DetectionRun) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run()

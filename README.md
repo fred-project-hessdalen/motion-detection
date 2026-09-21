@@ -152,6 +152,27 @@ under `data/out/dashboard/live`, which can be deleted at any time.
 A stored run and a live clip are both written through `ffmpeg` with
 `libx264`, which has to be on PATH.
 
+### Track map
+
+The Track map page shows every track of the corpus under `data/corpus`
+as a point. Tracks with similar descriptors sit close together, and the
+colour gives the cluster they fell into. Clicking a point plays that
+track's stretch of its recording, from a second before it starts to a
+second after it ends, with its path drawn on. The page reads the stored
+track and runs no detection. A track whose video was not kept after the
+sift is on the map but cannot be played, and the page offers its Drive
+link.
+
+The map is written by a separate step, which needs the analysis group:
+
+```bash
+uv run --group analysis python scripts/dev/map_tracks.py
+```
+
+The corpus keeps growing while the sift runs, and the map holds the
+tracks that existed when this step ran, so run it again to take in new
+ones. Built track clips are kept under `data/out/dashboard/tracks`.
+
 
 ## Development
 
