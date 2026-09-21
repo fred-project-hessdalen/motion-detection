@@ -5,6 +5,14 @@ recording, and most tracks of a recording are its background activity,
 so they are read afterwards to name what landed where and to check that
 the grouping means something.
 
+The tracks are first split by how evenly they move from step to step.
+That split sits in a trough between two peaks of the corpus, and drawn
+out, the tracks either side of it are clean paths on one side and
+clutter on the other. Each side is then clustered on its own. Clustered
+together, the clutter outnumbers the clean paths two to one and draws
+their neighbourhoods, so a clean track that shares the clutter's small
+blobs and low contrast is filed with it.
+
 Each descriptor becomes a normal score among the tracks of its own
 camera before anything else happens. Without that, the site is the first
 thing any clustering separates on, because two cameras differ in sky,
@@ -14,17 +22,37 @@ lens and framing more than a bird differs from a branch.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 import numpy as np
 import pyarrow as pa
 from sklearn.cluster import HDBSCAN  # type: ignore[import-not-found]
-from sklearn.decomposition import PCA  # type: ignore[import-not-found]
-from sklearn.manifold import TSNE  # type: ignore[import-not-found]
 from sklearn.preprocessing import QuantileTransformer  # type: ignore[import-not-found]
+from umap import UMAP  # type: ignore[import-not-found]
 
-from hessdalen.analysis.corpus import PLACE_COLUMNS
+FEATURES = (
+    "frames",
+    "straightness",
+    "line_residual",
+    "velocity_residual",
+    "acceleration_residual",
+    "turn_mean",
+    "speed_mean",
+    "speed_deviation",
+    "area_mean",
+    "area_variation",
+    "elongation_mean",
+    "brightness_variation",
+    "peak_deviation_max",
+    "flicker",
+    "roughness",
+    "jump",
+)
+"""The descriptors the clustering reads.
 
-NOT_DESCRIPTORS = frozenset({*PLACE_COLUMNS, "recording", "track_id"})
+Where a track sits in its frame and how bright its scene is are left
+out, because both say more about the site than about what moved.
+"""
 
 CAMERA = re.compile(r"^(Cam\d+)")
 
@@ -35,48 +63,138 @@ A camera with fewer is scored against the whole corpus, because a rank
 among a handful of tracks says almost nothing.
 """
 
-COMPONENTS = 6
-"""Principal components the clustering runs in.
+SMOOTH_BELOW = 0.6
+"""Roughness under which a track counts as a clean path, from the trough
+between the two peaks of roughness over the corpus."""
 
-The 27 descriptors lean on each other heavily, and density clustering in
-all of them finds one blob. Six components carry about four fifths of
-the variance of the example corpus.
+NEIGHBOURS = 15
+EMBEDDED = 5
+LAYOUT_SPREAD = 0.1
+
+CONSENSUS_SEEDS = (0, 1, 2, 3, 4)
+"""UMAP seeds a side is clustered under before the runs are agreed.
+
+A single embedding depends on its seed. Over the example corpus, the
+clusters of the smooth side agreed between seeds 0, 1 and 2 only by an
+adjusted Rand index of 0.36 to 0.68, though each run looked coherent
+drawn out. The clusters that come back under many seeds are the ones
+that belong to the tracks.
 """
 
-MIN_CLUSTER_SIZE = 10
+TOGETHER = 0.5
+"""Share of runs in which two tracks shared a cluster, at which the
+agreement counts them as close."""
+
+NEAREST = 0.01
+"""Least distance between two tracks the agreement hands on.
+
+Tracks that shared a cluster in every run would otherwise be nothing
+apart, and the density clustering reads a distance of nothing as an
+infinite density, which leaves it no way to weigh one cluster against
+another.
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class Side:
+    """One side of the roughness split, and how finely it is clustered."""
+
+    name: str
+    min_cluster_size: int
+
+
+SMOOTH = Side(name="smooth", min_cluster_size=15)
+ROUGH = Side(name="rough", min_cluster_size=40)
+"""The rough side is clustered coarsely. Split finely, its clusters look
+alike when drawn, which is what clutter of one kind does."""
+
 MIN_SAMPLES = 5
-PERPLEXITY = 30.0
-LAYOUT_SEED = 0
 
 UNASSIGNED = -1
 """The cluster of a track the clustering left out of every cluster."""
 
 
-def map_corpus(tracks: pa.Table) -> pa.Table:
-    """The corpus with a place on the map and a cluster added to every
-    track."""
-    scores = standing_within_camera(tracks)
-    components = PCA(n_components=min(COMPONENTS, *scores.shape)).fit_transform(scores)
-    clusters = HDBSCAN(min_cluster_size=MIN_CLUSTER_SIZE, min_samples=MIN_SAMPLES, copy=True).fit_predict(components)
-    layout = TSNE(
-        n_components=2,
-        perplexity=min(PERPLEXITY, float(tracks.num_rows - 1) / 3.0),
-        init="pca",
-        random_state=LAYOUT_SEED,
-    ).fit_transform(components)
+def map_corpus(tracks: pa.Table, *, seeds: tuple[int, ...]) -> pa.Table:
+    """The corpus with a side, a cluster and a place on the map added to
+    every track.
 
+    Each side is clustered under every seed and the runs are agreed.
+    Clusters are numbered across both sides, the smooth side's first,
+    and the map is laid out under the first seed.
+    """
+    smooth = np.asarray(tracks.column("roughness").to_numpy()) < SMOOTH_BELOW
+    clusters = np.full(tracks.num_rows, UNASSIGNED, dtype=np.int32)
+    taken = 0
+    for side, held in ((SMOOTH, smooth), (ROUGH, ~smooth)):
+        found = _agreed_clusters(tracks.filter(pa.array(held)), side=side, seeds=seeds)
+        clusters[held] = np.where(found >= 0, found + taken, UNASSIGNED)
+        taken += int(found.max()) + 1 if (found >= 0).any() else 0
+
+    layout = _layout(standing_within_camera(tracks, names=FEATURES), seed=seeds[0])
     return (
         tracks.append_column("camera", pa.array([camera_of(clip) for clip in tracks.column("clip").to_pylist()]))
+        .append_column("side", pa.array([SMOOTH.name if held else ROUGH.name for held in smooth]))
         .append_column("x", pa.array(layout[:, 0], type=pa.float32()))
         .append_column("y", pa.array(layout[:, 1], type=pa.float32()))
         .append_column("cluster", pa.array(clusters, type=pa.int32()))
     )
 
 
-def standing_within_camera(tracks: pa.Table) -> np.ndarray:
-    """Every descriptor as a normal score among the tracks of its own camera,
-    one column per name descriptor_names gives, in that order."""
-    names = descriptor_names(tracks)
+def _agreed_clusters(tracks: pa.Table, *, side: Side, seeds: tuple[int, ...]) -> np.ndarray:
+    """The clusters of one side's tracks that its runs under every seed agree
+    on.
+
+    Two tracks are as far apart as the share of runs that did not put them
+    in one cluster, and those distances are clustered once more. A track
+    most runs left out of every cluster stays out. Kept in, it would be
+    the same distance from every other track, and a set of tracks all the
+    same distance apart reads to the clustering as a cluster of its own.
+    """
+    if tracks.num_rows <= max(NEIGHBOURS, side.min_cluster_size):
+        return np.full(tracks.num_rows, UNASSIGNED, dtype=np.int32)
+
+    scores = standing_within_camera(tracks, names=FEATURES)
+    runs = np.array([_one_run(scores, side=side, seed=seed) for seed in seeds])
+    held = np.mean(runs >= 0, axis=0) >= TOGETHER
+    agreed = np.full(tracks.num_rows, UNASSIGNED, dtype=np.int32)
+    if held.sum() <= side.min_cluster_size:
+        return agreed
+
+    kept = runs[:, held]
+    together = np.mean([(run[:, None] == run[None, :]) & (run[:, None] >= 0) for run in kept], axis=0)
+    apart = np.maximum(np.where(together >= TOGETHER, 1.0 - together, 1.0), NEAREST)
+    np.fill_diagonal(apart, 0.0)
+    agreed[held] = HDBSCAN(
+        min_cluster_size=side.min_cluster_size, min_samples=MIN_SAMPLES, metric="precomputed", copy=True
+    ).fit_predict(apart)
+    return agreed
+
+
+def _one_run(scores: np.ndarray, *, side: Side, seed: int) -> np.ndarray:
+    embedded = UMAP(n_neighbors=NEIGHBOURS, min_dist=0.0, n_components=EMBEDDED, random_state=seed).fit_transform(
+        scores
+    )
+    return np.asarray(
+        HDBSCAN(min_cluster_size=side.min_cluster_size, min_samples=MIN_SAMPLES, copy=True).fit_predict(embedded)
+    )
+
+
+def _layout(scores: np.ndarray, *, seed: int) -> np.ndarray:
+    """Two dimensions for the map, over every track, so neighbours on the map
+    are neighbours in the descriptors."""
+    return np.asarray(
+        UMAP(
+            n_neighbors=min(NEIGHBOURS, scores.shape[0] - 1),
+            min_dist=LAYOUT_SPREAD,
+            n_components=2,
+            random_state=seed,
+        ).fit_transform(scores)
+    )
+
+
+def standing_within_camera(tracks: pa.Table, *, names: tuple[str, ...]) -> np.ndarray:
+    """The named descriptors as normal scores among the tracks of each one's
+    own camera, a column per name in the order given."""
     values = np.column_stack([np.asarray(tracks.column(name).to_numpy(), dtype=np.float64) for name in names])
     cameras = np.array([camera_of(clip) for clip in tracks.column("clip").to_pylist()])
 
@@ -86,11 +204,6 @@ def standing_within_camera(tracks: pa.Table) -> np.ndarray:
             held = cameras == camera
             scores[held] = _normal_scores(values[held], among=values[held])
     return scores
-
-
-def descriptor_names(tracks: pa.Table) -> list[str]:
-    """The columns of a corpus table that describe a track, in table order."""
-    return [name for name in tracks.column_names if name not in NOT_DESCRIPTORS]
 
 
 def camera_of(clip: str) -> str:
