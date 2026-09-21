@@ -77,6 +77,12 @@ def test_a_video_in_a_date_folder_is_labelled_by_its_own_name() -> None:
     assert video.label == "Meteorit"
 
 
+def test_a_video_nothing_names_is_labelled_as_such() -> None:
+    video = _video("cameras/2025/2025-12/2025-12-22/Cam2/Cam2_2025-12-22__00-00-01_UTC_p.mkv")
+
+    assert video.label == drive.UNLABELLED
+
+
 def test_cuts_share_their_recording_and_a_folder_can_hold_two() -> None:
     folder = "cameras/2025/2025-06/2025-06-19"
     first = _video(f"{folder}/Cam2_2025-06-19__11-40-00_rod_000.mkv")

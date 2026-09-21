@@ -40,6 +40,13 @@ RECORDING_START = re.compile(r"cam\d+[_-]\d{4}-?\d{2}-?\d{2}[_-]+\d{2}[-_]?\d{2}
 """The camera and start time a recording's name opens with, which every
 cut of it repeats."""
 
+UNLABELLED = "unlabelled"
+"""The label of a video no folder or file name describes.
+
+It stands in for an empty label, which would drop a level out of any
+path built from it.
+"""
+
 UNLABELLED_WORDS = frozenset({"utc", "p", "crop", "diff", "video", "videos", "sdr"})
 """Words in the archive's names that describe the file or the folder
 layout and say nothing about what was filmed."""
@@ -84,7 +91,7 @@ class ArchiveVideo:
         The training branch files every video under a class folder, and
         that folder is the label. Elsewhere the label is the name of the
         nearest folder above the video that says more than a camera, a
-        date or a time, or else the video's own name.
+        date or a time, or else the video's own name, or else UNLABELLED.
         """
         parts = self.path.split("/")
         if parts[1] == TRAINING_BRANCH:
@@ -94,7 +101,7 @@ class ArchiveVideo:
             words = label_words(name)
             if words:
                 return words
-        return ""
+        return UNLABELLED
 
     @property
     def recording(self) -> str:
