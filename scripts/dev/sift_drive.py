@@ -6,8 +6,8 @@ one recording at a time, running the detector over it, writing its track
 file and deleting the video. What is left behind is a track file for
 every recording and a ledger line saying what the detector found.
 
-The recordings whose tracks scored highest in their event folder are
-then fetched again into the corpus, where the dashboard and the tests
+The cuts whose tracks scored highest among the cuts of their recording
+are then fetched again into the corpus, where the dashboard and the tests
 can reach them. Scoring is a placeholder for the classifier being built
 beside this: it reads the written track files and nothing else, so
 --rescore re-decides a finished run without fetching anything twice.
@@ -44,7 +44,7 @@ from hessdalen.processing.movement import MovementDetector, MovementSettings
 
 METADATA_COLUMNS = ("file", "movement", "label", "begin_s", "end_s")
 CLIPPER = Path(__file__).resolve().parent / "extract_example_clips.py"
-TABLE_COLUMNS = ("score", "kept", "category", "event", "name", "track_count", "frame_count", "url")
+TABLE_COLUMNS = ("score", "kept", "label", "category", "event", "name", "track_count", "frame_count", "url")
 
 
 @dataclass(frozen=True, slots=True)
@@ -259,7 +259,7 @@ def measure(video: ArchiveVideo, path: Path, *, args: argparse.Namespace, frozen
     stream = masked_stream(path, target_height=args.target_height)
     height, width = stream.frame_shape
 
-    tracks_path = args.tracks / video.category / video.event / f"{Path(video.name).stem}.parquet"
+    tracks_path = args.tracks / video.label / video.event / f"{Path(video.name).stem}.parquet"
     write_tracks(
         tracks_path,
         recording=video.name,
@@ -367,14 +367,14 @@ def collect(args: argparse.Namespace) -> None:
 
 
 def winners(findings: list[Finding], *, margin: float) -> list[Finding]:
-    """The best-scoring recording of every event folder, and the ones
-    close behind it."""
-    folders: dict[str, list[Finding]] = {}
+    """The best-scoring cut of every recording, and the ones close behind
+    it."""
+    recordings: dict[str, list[Finding]] = {}
     for finding in findings:
-        folders.setdefault(f"{finding.category}/{finding.event}", []).append(finding)
+        recordings.setdefault(as_video(finding).recording, []).append(finding)
 
     kept: list[Finding] = []
-    for siblings in folders.values():
+    for siblings in recordings.values():
         top = max(finding.score for finding in siblings)
         if top <= 0.0:
             continue
@@ -385,14 +385,14 @@ def winners(findings: list[Finding], *, margin: float) -> list[Finding]:
 def recording_label(finding: Finding, *, videos: Path) -> LabelRow:
     """Describe a kept recording the way the example set is described.
 
-    The label is the folder the archive filed the recording under and
-    the seconds are where the best track ran, so a row is what the
-    detector claims rather than what a person confirmed.
+    The label is what the archive calls the recording and the seconds
+    are where the best track ran, so a row is what the detector claims
+    rather than what a person confirmed.
     """
     fps = probe(videos / finding.name).frames_per_second
     return LabelRow(
         file=finding.name,
-        label=finding.category,
+        label=as_video(finding).label,
         begin_s=finding.first_frame / fps,
         end_s=finding.last_frame / fps,
     )
@@ -479,6 +479,7 @@ def write_table(path: Path, findings: list[Finding], *, keeping: list[Finding]) 
                 (
                     f"{finding.score:.3f}",
                     int(finding.file_id in kept),
+                    as_video(finding).label,
                     finding.category,
                     finding.event,
                     finding.name,
@@ -519,7 +520,11 @@ def free_gigabytes(path: Path) -> float:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Fetch archive recordings, detect over them and keep what moved")
+    parser = argparse.ArgumentParser(
+        description="Fetch archive recordings, detect over them and keep what moved",
+        epilog="@FILE reads further arguments from FILE, one per line, so a long selection keeps its spaces.",
+        fromfile_prefix_chars="@",
+    )
     parser.add_argument("--inventory", type=Path, required=True, help="CSV listing of the archive")
     parser.add_argument("--remote", default="", help="rclone remote rooted at the archive, such as hessdalen:")
     parser.add_argument("--select", nargs="+", default=["cameras/trainingData"], help="Archive path patterns to walk")

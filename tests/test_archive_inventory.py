@@ -49,6 +49,38 @@ def test_a_recording_with_no_cuts_beside_it_is_kept() -> None:
     assert drive.cut_out(videos) == videos
 
 
+def test_a_training_video_is_labelled_by_its_class_folder() -> None:
+    video = _video(
+        "cameras/trainingData/birds/Cam2_2025-05-02__09-40-00_Kreisvogel/Cam2_2025-05-02__09-40-00_Kreisvogel_016.mkv"
+    )
+
+    assert video.label == "birds"
+
+
+def test_a_video_elsewhere_is_labelled_by_the_nearest_folder_that_names_something() -> None:
+    event = _video("cameras/2025/2025-06/2025-06-24/Cam2_2025-06-24__19-40-00_dragon/Cam2_2025-06-24__19-40-00_003.mkv")
+    crop = _video("cameras/2025/2025-12-25_ascendingLight/02_videos/2025-12-25__14_20_00-UTC_crop_black.mp4")
+
+    assert event.label == "dragon"
+    assert crop.label == "ascendingLight"
+
+
+def test_a_video_in_a_date_folder_is_labelled_by_its_own_name() -> None:
+    video = _video("cameras/2025/2025-02/2025-02-27/Cam2_2025-02-27__03-40-00_Meteorit_004.mkv")
+
+    assert video.label == "Meteorit"
+
+
+def test_cuts_share_their_recording_and_a_folder_can_hold_two() -> None:
+    folder = "cameras/2025/2025-06/2025-06-19"
+    first = _video(f"{folder}/Cam2_2025-06-19__11-40-00_rod_000.mkv")
+    second = _video(f"{folder}/Cam2_2025-06-19__11-40-00_rod_001.mkv")
+    other = _video(f"{folder}/Cam1_2025-06-19__20-00-00_DownwardsLight.mkv")
+
+    assert first.recording == second.recording
+    assert first.recording != other.recording
+
+
 def test_a_fetch_leaves_the_video_and_no_part_file(tmp_path, monkeypatch) -> None:
     video = _video(CLIP, size_bytes=4)
     monkeypatch.setattr(drive.urllib.request, "urlopen", _answering(b"abcd"))

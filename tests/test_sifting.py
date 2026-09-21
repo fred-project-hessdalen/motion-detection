@@ -50,17 +50,33 @@ def test_a_recording_with_no_track_scores_nothing(sift, tmp_path) -> None:
     assert score.track_count == 0
 
 
-def test_the_best_of_an_event_folder_is_kept_with_its_close_siblings(sift) -> None:
+def test_the_best_cut_of_a_recording_is_kept_with_its_close_siblings(sift) -> None:
+    morning = "Cam1_2025-02-20__11-40-00"
     findings = [
-        _finding(sift, "birds", "morning", "a.mkv", score=10.0),
-        _finding(sift, "birds", "morning", "b.mkv", score=6.0),
-        _finding(sift, "birds", "morning", "c.mkv", score=1.0),
-        _finding(sift, "meteors", "night", "d.mkv", score=4.0),
+        _finding(sift, "birds", morning, f"{morning}_000.mkv", score=10.0),
+        _finding(sift, "birds", morning, f"{morning}_001.mkv", score=6.0),
+        _finding(sift, "birds", morning, f"{morning}_002.mkv", score=1.0),
+        _finding(sift, "meteors", "night", "Cam2_2024-12-15__04-40-00_000.mkv", score=4.0),
     ]
 
     kept = sift.winners(findings, margin=0.5)
 
-    assert [finding.name for finding in kept] == ["a.mkv", "b.mkv", "d.mkv"]
+    assert [finding.name for finding in kept] == [
+        f"{morning}_000.mkv",
+        f"{morning}_001.mkv",
+        "Cam2_2024-12-15__04-40-00_000.mkv",
+    ]
+
+
+def test_two_recordings_in_one_folder_are_judged_apart(sift) -> None:
+    findings = [
+        _finding(sift, "2025-06", "2025-06-19", "Cam2_2025-06-19__11-40-00_rod.mkv", score=10.0),
+        _finding(sift, "2025-06", "2025-06-19", "Cam1_2025-06-19__20-00-00_DownwardsLight.mkv", score=1.0),
+    ]
+
+    kept = sift.winners(findings, margin=0.5)
+
+    assert len(kept) == 2
 
 
 def test_an_event_folder_where_nothing_moved_keeps_nothing(sift) -> None:

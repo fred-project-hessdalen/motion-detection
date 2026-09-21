@@ -34,6 +34,16 @@ next one in 26, so the store hands out a single stream slowly.
 
 CHUNK = 1 << 20
 
+TRAINING_BRANCH = "trainingData"
+
+RECORDING_START = re.compile(r"cam\d+[_-]\d{4}-?\d{2}-?\d{2}[_-]+\d{2}[-_]?\d{2}[-_]?\d{2}", re.IGNORECASE)
+"""The camera and start time a recording's name opens with, which every
+cut of it repeats."""
+
+UNLABELLED_WORDS = frozenset({"utc", "p", "crop", "diff", "video", "videos", "sdr"})
+"""Words in the archive's names that describe the file or the folder
+layout and say nothing about what was filmed."""
+
 
 @dataclass(frozen=True, slots=True)
 class ArchiveVideo:
@@ -66,6 +76,49 @@ class ArchiveVideo:
     def stem(self) -> str:
         """The archive path without the file's suffix."""
         return self.path.rsplit(".", 1)[0]
+
+    @property
+    def label(self) -> str:
+        """What the archive calls the thing this video shows.
+
+        The training branch files every video under a class folder, and
+        that folder is the label. Elsewhere the label is the name of the
+        nearest folder above the video that says more than a camera, a
+        date or a time, or else the video's own name.
+        """
+        parts = self.path.split("/")
+        if parts[1] == TRAINING_BRANCH:
+            return parts[2]
+
+        for name in [*reversed(parts[1:-1]), self.name.rsplit(".", 1)[0]]:
+            words = label_words(name)
+            if words:
+                return words
+        return ""
+
+    @property
+    def recording(self) -> str:
+        """The recording this video was cut from, as its folder and the
+        camera and start time its name opens with.
+
+        A folder can hold several recordings, and a name that opens some
+        other way stands for a recording of its own.
+        """
+        folder = self.path.rsplit("/", 1)[0]
+        start = RECORDING_START.match(self.name)
+        return f"{folder}/{start.group(0) if start else self.name}"
+
+
+def label_words(name: str) -> str:
+    """The words of a name that say what was filmed, joined by
+    underscores."""
+    return "_".join(word for word in re.split(r"[_\-\s]+", name) if word and not unlabelled(word))
+
+
+def unlabelled(word: str) -> bool:
+    return (
+        word.isdigit() or word.lower() in UNLABELLED_WORDS or re.fullmatch(r"cam\d+", word, re.IGNORECASE) is not None
+    )
 
 
 def read_inventory(path: Path) -> list[ArchiveVideo]:
