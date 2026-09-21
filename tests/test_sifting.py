@@ -1,0 +1,161 @@
+"""What the sifting run keeps, and what it writes down about the rest."""
+
+import argparse
+import importlib.util
+from pathlib import Path
+
+import pytest
+
+from hessdalen.config import config
+from hessdalen.domain.models import BlobMeasurement, DetectedMovement
+from hessdalen.io.tracks import write_tracks
+
+SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "dev" / "sift_drive.py"
+EMPTY_BLOB = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+FRAME_HEIGHT, FRAME_WIDTH = 1080, 1920
+
+
+@pytest.fixture(scope="module")
+def sift():
+    spec = importlib.util.spec_from_file_location("sift_drive", SCRIPT_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_a_travelling_track_outscores_flicker(sift, tmp_path) -> None:
+    crossing = _written(sift, tmp_path / "crossing.parquet", _crossing())
+    flicker = _written(sift, tmp_path / "flicker.parquet", _flicker())
+
+    assert crossing.value > flicker.value
+    assert crossing.first_frame == 0
+    assert crossing.last_frame == 50
+
+
+def test_a_recording_with_no_track_scores_nothing(sift, tmp_path) -> None:
+    path = tmp_path / "quiet.parquet"
+    write_tracks(
+        path,
+        recording="quiet.mkv",
+        frame_height=FRAME_HEIGHT,
+        frame_width=FRAME_WIDTH,
+        settings=config().settings,
+        events=[],
+    )
+
+    score = sift.score_tracks(path, frame_shape=(FRAME_HEIGHT, FRAME_WIDTH), settings=config().settings)
+
+    assert score.value == 0.0
+    assert score.track_count == 0
+
+
+def test_the_best_of_an_event_folder_is_kept_with_its_close_siblings(sift) -> None:
+    findings = [
+        _finding(sift, "birds", "morning", "a.mkv", score=10.0),
+        _finding(sift, "birds", "morning", "b.mkv", score=6.0),
+        _finding(sift, "birds", "morning", "c.mkv", score=1.0),
+        _finding(sift, "meteors", "night", "d.mkv", score=4.0),
+    ]
+
+    kept = sift.winners(findings, margin=0.5)
+
+    assert [finding.name for finding in kept] == ["a.mkv", "b.mkv", "d.mkv"]
+
+
+def test_an_event_folder_where_nothing_moved_keeps_nothing(sift) -> None:
+    findings = [_finding(sift, "birds", "morning", "a.mkv", score=0.0)]
+
+    assert sift.winners(findings, margin=0.5) == []
+
+
+def test_the_ledger_reads_back_what_was_appended(sift, tmp_path) -> None:
+    ledger = tmp_path / "ledger.jsonl"
+    finding = _finding(sift, "birds", "morning", "a.mkv", score=3.5)
+
+    sift.append(ledger, finding)
+    sift.append(ledger, _finding(sift, "birds", "morning", "b.mkv", score=1.0))
+
+    assert sift.read_ledger(ledger) == [finding, _finding(sift, "birds", "morning", "b.mkv", score=1.0)]
+
+
+def test_a_recording_the_ledger_holds_is_not_fetched_again(sift, tmp_path) -> None:
+    inventory = tmp_path / "inventory.csv"
+    inventory.write_text(
+        "path,name,id,mime,modified,bytes\n"
+        "cameras/trainingData/birds/morning/a.mkv,a.mkv,one,video/x-matroska,02/20/25,10\n"
+        "cameras/trainingData/birds/morning/b.mkv,b.mkv,two,video/x-matroska,02/20/25,10\n"
+    )
+    ledger = tmp_path / "ledger.jsonl"
+    sift.append(ledger, _finding(sift, "birds", "morning", "a.mkv", score=3.5, file_id="one"))
+
+    waiting = sift.pending(argparse.Namespace(inventory=inventory, ledger=ledger, select=["trainingData"], limit=None))
+
+    assert [video.name for video in waiting] == ["b.mkv"]
+
+
+def test_the_blob_hash_is_the_one_git_would_give(sift, tmp_path) -> None:
+    path = tmp_path / "empty"
+    path.write_bytes(b"")
+
+    assert sift.blob_hash(path) == EMPTY_BLOB
+
+
+def _written(sift, path: Path, events: list[DetectedMovement]):
+    write_tracks(
+        path,
+        recording=path.name,
+        frame_height=FRAME_HEIGHT,
+        frame_width=FRAME_WIDTH,
+        settings=config().settings,
+        events=events,
+    )
+    return sift.score_tracks(path, frame_shape=(FRAME_HEIGHT, FRAME_WIDTH), settings=config().settings)
+
+
+def _crossing() -> list[DetectedMovement]:
+    """A bright object crossing half the frame over two seconds."""
+    return [_movement(frame, track_id=1, x=200.0 + 10.0 * frame, peak=40.0) for frame in range(51)]
+
+
+def _flicker() -> list[DetectedMovement]:
+    """Three short tracks that stay where they started."""
+    return [
+        _movement(frame, track_id=track, x=600.0 + frame, peak=11.0)
+        for track in (1, 2, 3)
+        for frame in range(track * 10, track * 10 + 3)
+    ]
+
+
+def _movement(frame: int, *, track_id: int, x: float, peak: float) -> DetectedMovement:
+    blob = BlobMeasurement(
+        pixel_count=9,
+        peak_deviation=peak,
+        brightness=900.0,
+        centre_x=x,
+        centre_y=500.0,
+        major_axis=3.0,
+        minor_axis=3.0,
+    )
+    return DetectedMovement(frame_number=frame, track_id=track_id, centroid=(x, 500.0), blob=blob)
+
+
+def _finding(sift, category: str, event: str, name: str, *, score: float, file_id: str = "one"):
+    return sift.Finding(
+        file_id=file_id,
+        url=f"https://example.invalid/{file_id}",
+        archive_path=f"cameras/trainingData/{category}/{event}/{name}",
+        name=name,
+        event=event,
+        category=category,
+        size_bytes=10,
+        frame_count=1500,
+        detection_seconds=5.0,
+        target_height=FRAME_HEIGHT,
+        config_blob=EMPTY_BLOB,
+        tracks_path=f"data/corpus/tracks/{category}/{event}/{Path(name).stem}.parquet",
+        track_count=3,
+        score=score,
+        first_frame=0,
+        last_frame=50,
+    )
