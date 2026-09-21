@@ -141,6 +141,25 @@ def test_a_rescore_reads_the_score_back_off_the_track_file(sift, tmp_path) -> No
     assert (finding.first_frame, finding.last_frame) == (0, 50)
 
 
+def test_a_scan_only_run_keeps_nothing(sift, tmp_path, monkeypatch) -> None:
+    inventory = tmp_path / "inventory.csv"
+    inventory.write_text(
+        "path,name,id,mime,modified,bytes\n"
+        "cameras/trainingData/birds/morning/a.mkv,a.mkv,one,video/x-matroska,02/20/25,10\n"
+    )
+    ledger = tmp_path / "ledger.jsonl"
+    sift.append(ledger, _finding(sift, "birds", "morning", "a.mkv", score=3.5, file_id="one"))
+    monkeypatch.setattr(sift, "collect", lambda args: pytest.fail("a scan-only run collected"))
+
+    sift.main(
+        argparse.Namespace(
+            rescore=False, scan_only=True, ledger=ledger, inventory=inventory, select=["trainingData"], limit=None
+        )
+    )
+
+    assert len(sift.read_ledger(ledger)) == 1
+
+
 def test_the_blob_hash_is_the_one_git_would_give(sift, tmp_path) -> None:
     path = tmp_path / "empty"
     path.write_bytes(b"")

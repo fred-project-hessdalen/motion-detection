@@ -11,6 +11,10 @@ are then fetched again into the corpus, where the dashboard and the tests
 can reach them. Scoring is a placeholder for the classifier being built
 beside this: it reads the written track files and nothing else, so
 --rescore re-decides a finished run without fetching anything twice.
+
+--scan-only stops after the track files and the ledger. It is for a
+selection whose keep decision waits on a better score than this one,
+such as whole recordings with no sibling cuts to be judged against.
 """
 
 import argparse
@@ -104,7 +108,8 @@ def main(args: argparse.Namespace) -> None:
     else:
         scan(args, frozen=blob_hash(CONFIG_PATH))
 
-    collect(args)
+    if not args.scan_only:
+        collect(args)
 
 
 def rescore(ledger: Path) -> None:
@@ -541,6 +546,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-free-gb", type=float, default=8.0, help="Free space the run refuses to go below")
     parser.add_argument("--limit", type=int, help="Stop after this many recordings")
     parser.add_argument("--rescore", action="store_true", help="Re-decide from the written track files, fetching none")
+    parser.add_argument(
+        "--scan-only",
+        action="store_true",
+        help="Stop after the track files and the ledger lines",
+    )
     return parser.parse_args()
 
 
