@@ -23,7 +23,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from functools import partial
 from hashlib import sha1
 from pathlib import Path
@@ -99,11 +99,38 @@ class LabelRow:
 
 
 def main(args: argparse.Namespace) -> None:
-    frozen = blob_hash(CONFIG_PATH)
-    if not args.rescore:
-        scan(args, frozen=frozen)
+    if args.rescore:
+        rescore(args.ledger)
+    else:
+        scan(args, frozen=blob_hash(CONFIG_PATH))
 
     collect(args)
+
+
+def rescore(ledger: Path) -> None:
+    """Score every recording in the ledger again from its track file,
+    fetching nothing."""
+    settings = config().settings
+    findings = [rescored(finding, settings=settings) for finding in read_ledger(ledger)]
+
+    partial = ledger.with_suffix(ledger.suffix + ".part")
+    partial.write_text("".join(json.dumps(asdict(finding)) + "\n" for finding in findings))
+    partial.replace(ledger)
+
+
+def rescored(finding: Finding, *, settings: MovementSettings) -> Finding:
+    path = Path(finding.tracks_path)
+    held = pq.read_schema(path).metadata
+    frame_shape = (int(held[b"hessdalen_frame_height"]), int(held[b"hessdalen_frame_width"]))
+
+    score = score_tracks(path, frame_shape=frame_shape, settings=settings)
+    return replace(
+        finding,
+        score=score.value,
+        track_count=score.track_count,
+        first_frame=score.first_frame,
+        last_frame=score.last_frame,
+    )
 
 
 def fetcher(args: argparse.Namespace) -> Callable[[ArchiveVideo, Path], Path]:

@@ -110,6 +110,21 @@ def test_a_label_running_past_the_clip_stops_at_its_end(sift) -> None:
     assert (rows[0].begin_s, rows[0].end_s) == (1.0, 30.0)
 
 
+def test_a_rescore_reads_the_score_back_off_the_track_file(sift, tmp_path) -> None:
+    tracks = tmp_path / "crossing.parquet"
+    expected = _written(sift, tracks, _crossing())
+    ledger = tmp_path / "ledger.jsonl"
+    stale = _finding(sift, "birds", "morning", "crossing.mkv", score=0.0)
+    sift.append(ledger, sift.replace(stale, tracks_path=str(tracks), track_count=0))
+
+    sift.rescore(ledger)
+
+    [finding] = sift.read_ledger(ledger)
+    assert finding.score == expected.value
+    assert finding.track_count == 1
+    assert (finding.first_frame, finding.last_frame) == (0, 50)
+
+
 def test_the_blob_hash_is_the_one_git_would_give(sift, tmp_path) -> None:
     path = tmp_path / "empty"
     path.write_bytes(b"")
