@@ -5,9 +5,10 @@ objects and follows them across frames. The open question is how to sort
 the resulting trajectories into recurring classes and flag the ones no
 class explains.
 
-The per-track record, the writer that stores it and the fixed-length
-descriptor are built. The recurrence prior, the clustering and both
-anomaly rankings are still a design.
+The per-track record, the writer that stores it, the fixed-length
+descriptor and the clustering are built, and the dashboard's Track map
+page draws the clusters. The recurrence prior and both anomaly rankings
+are still a design.
 
 
 ## Corpus
@@ -83,7 +84,7 @@ cluster in that space. Comparability is solved by construction and every
 axis is readable, which matters when the output has to be defended to a
 domain expert.
 
-`hessdalen.analysis.descriptors` builds 27 of them per track, and
+`hessdalen.analysis.descriptors` builds 29 of them per track, and
 `scripts/dev/describe_tracks.py` writes one row per track for a
 directory of track files. Grouped by what they separate:
 
@@ -94,6 +95,9 @@ directory of track files. Grouped by what they separate:
 - Shape: mean and largest heading change, the residual of a
   straight-line fit, and the residuals of a steady-heading and a
   steady-acceleration fit.
+- Smoothness: roughness, the change from one step to the next against
+  the usual step, read at spacings up to eight frames and keeping the
+  smoothest, and jump, the largest step against the usual one.
 - Frame geometry: how far the first and last point sit from the nearest
   frame edge, and the elevation band. A track that crosses the frame
   and a track that appears and vanishes inside it are different
@@ -114,6 +118,45 @@ far the track moved to make them.
 
 Still missing from the list: a correlated random walk in the model
 library, and the rise and fall asymmetry of the light curve.
+
+### Clustering as built
+
+`hessdalen.analysis.track_map` clusters the corpus and
+`scripts/dev/map_tracks.py` writes the map the dashboard reads. What
+the tuning found, drawing each candidate's clusters and reading them by
+eye, in the order it mattered:
+
+- The first split the eye makes is a clean path against clutter, and
+  none of the first 27 descriptors carried it, because each residual
+  fits one line or curve to a whole track and a bird curving smoothly
+  scores as badly as noise. Roughness does. Over the corpus it has two
+  peaks with a trough near 0.6, and tracks are split there before
+  anything is clustered.
+- Each side is clustered on its own. Clustered together, the clutter
+  outnumbers the clean paths two to one and sets their neighbourhoods,
+  and a clean track sharing its small blobs and low contrast is filed
+  with it. The rough side is clustered coarsely, since split finely its
+  clusters look alike drawn out.
+- Density clustering needs a UMAP embedding. On principal components it
+  put 46 percent of the tracks in no cluster and most of the rest in
+  one, with clean paths and clutter in both.
+- A single embedding depends on its seed. Measured on one fixed
+  embedding, the clusters looked perfectly stable, and refitted under
+  another seed the smooth side's clusters agreed only by an adjusted
+  Rand index of 0.36 to 0.68. Each side is therefore clustered under
+  five seeds and the runs are agreed, which brings two disjoint sets of
+  five seeds to 0.66 to 0.75. What still moves is the boundary between
+  neighbouring kinds of smooth path, slow straight lines against slow
+  jittering ones, and medium curves against long ones.
+
+Over 1291 tracks this gives 14 clusters and leaves 68 out. The clutter
+is one cluster of 762 and dense jitter one of 55 under every seed set
+tried. The smooth side holds long meandering flights, medium curves,
+straight lines sparse and dense, fast hooked streaks and short fast
+straight streaks, and the four labelled meteors fall in the straight
+ones. The clusters are a way to browse the corpus for labelling. A
+classifier learns from the labels, so the boundaries that still move
+matter less than whether a cluster reads as one kind when drawn.
 
 ### Elastic distance measures
 
