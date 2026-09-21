@@ -68,11 +68,40 @@ def corpus_clips(root: Path) -> list[ClipPath]:
     ]
 
 
+PATH_COLUMNS = ("track_id", "frame_number", "x", "y", "centre_x", "centre_y", "pixel_count", "brightness")
+"""What a track did frame by frame, as its track file holds it."""
+
+
+def gather_paths(clips: list[ClipPath]) -> pa.Table:
+    """Every track's frames from every clip, in one table.
+
+    Each row carries its clip's three names and the size of the frame
+    its positions are pixels of, so a track can be drawn from this table
+    alone.
+    """
+    tables = [_path_rows(clip) for clip in clips]
+    return pa.concat_tables([table for table in tables if table.num_rows > 0])
+
+
 def write_corpus(path: Path, corpus: Corpus) -> int:
     """Write the gathered tracks out, and return how many rows."""
     path.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(corpus.tracks, path)
     return corpus.tracks.num_rows
+
+
+def _path_rows(clip: ClipPath) -> pa.Table:
+    held = pq.read_table(clip.path, columns=list(PATH_COLUMNS))
+    metadata = held.schema.metadata or {}
+    count = held.num_rows
+    return (
+        held.append_column("label", pa.array([clip.label] * count, type=pa.string()))
+        .append_column("event", pa.array([clip.event] * count, type=pa.string()))
+        .append_column("clip", pa.array([clip.clip] * count, type=pa.string()))
+        .append_column("frame_width", pa.array([int(metadata[b"hessdalen_frame_width"])] * count, type=pa.int32()))
+        .append_column("frame_height", pa.array([int(metadata[b"hessdalen_frame_height"])] * count, type=pa.int32()))
+        .replace_schema_metadata(None)
+    )
 
 
 def _rows_for_clip(clip: ClipPath) -> list[dict[str, object]]:

@@ -13,12 +13,15 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
-from hessdalen.analysis.corpus import read_corpus
+from hessdalen.analysis.corpus import gather_paths, read_corpus
 from hessdalen.analysis.track_map import UNASSIGNED, map_corpus
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TRACKS = REPO_ROOT / "data" / "corpus" / "tracks"
 MAP = REPO_ROOT / "data" / "out" / "analysis" / "track-map.parquet"
+PATHS_NAME = "track-paths.parquet"
+"""The file beside the map holding every mapped track frame by frame, which the
+dashboard draws a track from without opening its track file."""
 
 
 def main(args: argparse.Namespace) -> None:
@@ -28,6 +31,7 @@ def main(args: argparse.Namespace) -> None:
 
     mapped = map_corpus(corpus.tracks)
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(gather_paths(corpus.clips), args.output.with_name(PATHS_NAME))
     pq.write_table(mapped, args.output)
 
     clusters = mapped.column("cluster").to_pylist()

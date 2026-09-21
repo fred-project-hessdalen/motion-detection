@@ -156,14 +156,26 @@ A stored run and a live clip are both written through `ffmpeg` with
 
 The Track map page shows every track of the corpus under `data/corpus`
 as a point. Tracks with similar descriptors sit close together, and the
-colour gives the cluster they fell into. Clicking a point plays that
-track's stretch of its recording, from a second before it starts to a
-second after it ends, with its path drawn on. The page reads the stored
-track and runs no detection. A track whose video was not kept after the
-sift is on the map but cannot be played, and the page offers its Drive
-link.
+colour gives the cluster they fell into.
 
-The map is written by a separate step, which needs the analysis group:
+Clicking a point draws that track at once from its stored path: where it
+was in the frame, its shape fitted to a box of its own, and its
+brightness and size frame by frame. Drawing it on its recording, from a
+second before it starts to a second after it ends, runs in the
+background, because it has to pass every frame of the recording ahead of
+the track, and the clip plays once it is built. A gallery below the map
+draws 30 tracks of the selected track's cluster, or of any cluster
+chosen in the sidebar, from their stored paths alone.
+
+The page runs no detection. A track whose video the sift did not keep
+has its video fetched from the archive into `data/out/dashboard/videos`
+before it is drawn. A one-minute cut is fetched on the click, and a
+whole 20-minute recording waits for a press of Fetch video. No fetch is
+made that would leave less than 12 GB free on the disk, which the
+archive sift needs to keep running.
+
+The map and the paths it draws from are written by a separate step,
+which needs the analysis group:
 
 ```bash
 uv run --group analysis python scripts/dev/map_tracks.py
