@@ -18,8 +18,8 @@ import pandas as pd
 
 FRAME_WIDTH_PIXELS = 420
 CLOSE_UP_PIXELS = 240
-PANEL_PIXELS = 130
-GALLERY_COLUMNS = 6
+PANEL_PIXELS = 120
+GALLERY_COLUMNS = 5
 CLOSE_UP_MARGIN = 0.55
 """Half the side of a fitted track's box, in units of the track's larger
 extent, so a path fills most of its panel and never touches the edge."""

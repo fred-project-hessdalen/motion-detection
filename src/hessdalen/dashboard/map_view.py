@@ -140,15 +140,14 @@ def page() -> None:
             key="track_map",
             width="stretch",
         )
+        picked = _picked(shown, event)
+        _gallery(shown, paths, cluster=_gallery_cluster(str(chosen_cluster), picked=picked))
 
-    picked = _picked(shown, event)
     with track_column:
         if picked is None:
             st.caption("No track selected.")
         else:
             _selected(picked, points=_points(paths, key=str(picked["key"])))
-
-    _gallery(shown, paths, cluster=_gallery_cluster(str(chosen_cluster), picked=picked))
 
 
 def _scatter(tracks: pd.DataFrame, *, colour_column: str) -> alt.Chart:
