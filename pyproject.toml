@@ -17,6 +17,9 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [dependency-groups]
+analysis = [
+    "scikit-learn>=1.7",
+]
 core = [
     "av>=18.1.0",
     "funcy>=2.0",
