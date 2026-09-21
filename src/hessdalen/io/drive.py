@@ -25,6 +25,13 @@ USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Ge
 ATTEMPTS = 3
 """Tries a fetch gets before the caller sees the failure."""
 
+STREAMS = 4
+"""Connections one fetch through an account opens.
+
+One stream carried a 31 MB recording in 58 seconds and four carried the
+next one in 26, so the store hands out a single stream slowly.
+"""
+
 CHUNK = 1 << 20
 
 
@@ -127,7 +134,7 @@ def fetch_through(remote: str, video: ArchiveVideo, target: Path) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
     source = remote + video.path.split("/", 1)[1]
 
-    subprocess.run(["rclone", "copyto", source, str(target)], check=True)
+    subprocess.run(["rclone", "copyto", "--multi-thread-streams", str(STREAMS), source, str(target)], check=True)
     if target.stat().st_size != video.size_bytes:
         raise OSError(f"{video.name} arrived as {target.stat().st_size} bytes against the {video.size_bytes} listed")
     return target

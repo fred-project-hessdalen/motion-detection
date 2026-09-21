@@ -87,7 +87,7 @@ def test_a_remote_fetch_asks_for_the_path_under_the_archive_root(tmp_path, monke
 
     def run(command, check):
         asked.append(command)
-        Path(command[3]).write_bytes(b"abcd")
+        Path(command[-1]).write_bytes(b"abcd")
         return None
 
     monkeypatch.setattr(drive.subprocess, "run", run)
@@ -95,7 +95,8 @@ def test_a_remote_fetch_asks_for_the_path_under_the_archive_root(tmp_path, monke
 
     drive.fetch_through("hessdalen:", video, target)
 
-    assert asked[0][:3] == ["rclone", "copyto", "hessdalen:" + CLIP.split("/", 1)[1]]
+    assert asked[0][:2] == ["rclone", "copyto"]
+    assert asked[0][-2:] == ["hessdalen:" + CLIP.split("/", 1)[1], str(target)]
     assert target.read_bytes() == b"abcd"
 
 
