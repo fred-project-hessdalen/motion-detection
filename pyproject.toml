@@ -19,6 +19,7 @@ build-backend = "setuptools.build_meta"
 [dependency-groups]
 analysis = [
     "scikit-learn>=1.7",
+    "umap-learn>=0.5",
 ]
 core = [
     "av>=18.1.0",
