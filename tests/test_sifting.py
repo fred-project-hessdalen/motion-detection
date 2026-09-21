@@ -2,6 +2,7 @@
 
 import argparse
 import importlib.util
+import threading
 from pathlib import Path
 
 import pytest
@@ -158,6 +159,26 @@ def test_a_scan_only_run_keeps_nothing(sift, tmp_path, monkeypatch) -> None:
     )
 
     assert len(sift.read_ledger(ledger)) == 1
+
+
+def test_a_recording_the_decoder_cannot_read_is_skipped(sift, tmp_path, capsys) -> None:
+    staged = tmp_path / "edit.mov"
+    staged.write_bytes(b"not a video")
+    video = sift.ArchiveVideo(path="cameras/2025/edit.mov", name="edit.mov", file_id="one", size_bytes=11)
+    ledger = tmp_path / "ledger.jsonl"
+    room = threading.Semaphore(0)
+
+    sift.take(
+        sift.Arrival(video, staged, None),
+        args=argparse.Namespace(ledger=ledger, target_height=FRAME_HEIGHT),
+        frozen=sift.blob_hash(sift.CONFIG_PATH),
+        room=room,
+    )
+
+    assert "edit.mov not read" in capsys.readouterr().out
+    assert not staged.exists()
+    assert not ledger.exists()
+    assert room.acquire(blocking=False)
 
 
 def test_the_blob_hash_is_the_one_git_would_give(sift, tmp_path) -> None:

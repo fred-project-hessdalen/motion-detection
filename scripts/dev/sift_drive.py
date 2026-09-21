@@ -36,6 +36,7 @@ from typing import Any, Callable
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from av.error import FFmpegError
 
 from hessdalen.config import CONFIG_PATH, config
 from hessdalen.dashboard.catalog import CLIP_NAME, VIDEO_SUFFIXES
@@ -225,8 +226,10 @@ def stage(
 def take(arrival: Arrival, *, args: argparse.Namespace, frozen: str, room: threading.Semaphore) -> None:
     """Detect over an arrival, write its ledger line and drop the video.
 
-    A recording that did not arrive is reported and left out of the
-    ledger, so the next run fetches it again.
+    A recording that did not arrive, or that arrived in a form the
+    decoder cannot read, is reported and left out of the ledger, so the
+    next run fetches it again. Any other failure stops the run, since it
+    would fail every recording after it too.
     """
     if arrival.path is None:
         print(f"{arrival.video.name} not fetched: {arrival.failure}", flush=True)
@@ -235,6 +238,9 @@ def take(arrival: Arrival, *, args: argparse.Namespace, frozen: str, room: threa
 
     try:
         finding = measure(arrival.video, arrival.path, args=args, frozen=frozen)
+    except (ValueError, OSError, FFmpegError) as failure:
+        print(f"{arrival.video.name} not read: {failure}", flush=True)
+        return
     finally:
         arrival.path.unlink(missing_ok=True)
         room.release()
