@@ -10,6 +10,11 @@ from pathlib import Path
 
 import cv2
 
+BITEXACT = ("-fflags", "+bitexact", "-flags:v", "+bitexact", "-flags:a", "+bitexact")
+"""Keep ffmpeg from stamping a random segment id and its own version into
+the output, so cutting the same clip twice gives the same bytes and a
+tracked folder of clips does not change when it is rebuilt."""
+
 
 @dataclass(frozen=True)
 class TimeRangeColumns:
@@ -75,6 +80,7 @@ def _run_ffmpeg(*, input_path: Path, output_path: Path, start_s: float, end_s: f
         f"{end_s:.3f}",
         "-c",
         "copy",
+        *BITEXACT,
         str(output_path),
     ]
     subprocess.run(cmd, check=True)
@@ -104,6 +110,7 @@ def _run_ffmpeg_reencode(*, input_path: Path, output_path: Path, start_s: float,
         "18",
         "-movflags",
         "+faststart",
+        *BITEXACT,
         str(output_path),
     ]
     subprocess.run(cmd, check=True)
