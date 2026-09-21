@@ -29,7 +29,7 @@ dashboard = [
     "streamlit>=1.64.0",
 ]
 data = [
-    "dvc>=3.66.1",
+    "dvc[gdrive]>=3.66.1",
 ]
 dev = [
     "docformatter>=1.7.7",
