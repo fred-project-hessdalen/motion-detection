@@ -94,6 +94,22 @@ def test_a_recording_the_ledger_holds_is_not_fetched_again(sift, tmp_path) -> No
     assert [video.name for video in waiting] == ["b.mkv"]
 
 
+def test_a_clip_carries_its_recordings_label_in_its_own_time(sift) -> None:
+    recording = sift.LabelRow(file="a_018.mkv", label="birds", begin_s=32.9, end_s=55.0)
+
+    rows = sift.clip_labels(["a_018_clip_27.900_60.029.mkv"], {"a_018.mkv": recording})
+
+    assert rows == [sift.LabelRow(file="a_018_clip_27.900_60.029.mkv", label="birds", begin_s=5.0, end_s=27.1)]
+
+
+def test_a_label_running_past_the_clip_stops_at_its_end(sift) -> None:
+    recording = sift.LabelRow(file="a_018.mkv", label="birds", begin_s=1.0, end_s=60.0)
+
+    rows = sift.clip_labels(["a_018_clip_0.000_30.000.mkv"], {"a_018.mkv": recording})
+
+    assert (rows[0].begin_s, rows[0].end_s) == (1.0, 30.0)
+
+
 def test_the_blob_hash_is_the_one_git_would_give(sift, tmp_path) -> None:
     path = tmp_path / "empty"
     path.write_bytes(b"")

@@ -19,6 +19,7 @@ import json
 import math
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -33,6 +34,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from hessdalen.config import CONFIG_PATH, config
+from hessdalen.dashboard.catalog import CLIP_NAME, VIDEO_SUFFIXES
 from hessdalen.dashboard.runs import probe
 from hessdalen.domain.models import MovementEvent
 from hessdalen.io.drive import ArchiveVideo, cut_out, fetch, fetch_through, matching, read_inventory
@@ -41,6 +43,7 @@ from hessdalen.io.video import VideoStream, masked_stream
 from hessdalen.processing.movement import MovementDetector, MovementSettings
 
 METADATA_COLUMNS = ("file", "movement", "label", "begin_s", "end_s")
+CLIPPER = Path(__file__).resolve().parent / "extract_example_clips.py"
 TABLE_COLUMNS = ("score", "kept", "category", "event", "name", "track_count", "frame_count", "url")
 
 
@@ -83,6 +86,16 @@ class Arrival:
     video: ArchiveVideo
     path: Path | None
     failure: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class LabelRow:
+    """One labelled stretch of a video, as a metadata file lists it."""
+
+    file: str
+    label: str
+    begin_s: float
+    end_s: float
 
 
 def main(args: argparse.Namespace) -> None:
@@ -319,7 +332,9 @@ def collect(args: argparse.Namespace) -> None:
             pull(as_video(finding), target)
             print(f"kept {finding.category}/{finding.event}/{finding.name} at score {finding.score:.2f}", flush=True)
 
-    write_metadata(args.corpus / "metadata.csv", keeping, videos=videos)
+    labels = [recording_label(finding, videos=videos) for finding in keeping]
+    write_labels(args.corpus / "metadata.csv", labels)
+    cut(args, labels)
     if args.table:
         write_table(args.table, findings, keeping=keeping)
 
@@ -340,29 +355,88 @@ def winners(findings: list[Finding], *, margin: float) -> list[Finding]:
     return sorted(kept, key=lambda finding: -finding.score)
 
 
-def write_metadata(path: Path, keeping: list[Finding], *, videos: Path) -> None:
-    """Describe every kept recording the way the example set is
-    described.
+def recording_label(finding: Finding, *, videos: Path) -> LabelRow:
+    """Describe a kept recording the way the example set is described.
 
     The label is the folder the archive filed the recording under and
     the seconds are where the best track ran, so a row is what the
     detector claims rather than what a person confirmed.
     """
+    fps = probe(videos / finding.name).frames_per_second
+    return LabelRow(
+        file=finding.name,
+        label=finding.category,
+        begin_s=finding.first_frame / fps,
+        end_s=finding.last_frame / fps,
+    )
+
+
+def cut(args: argparse.Namespace, labels: list[LabelRow]) -> None:
+    """Cut a copy of every kept recording down to where its best track
+    ran, and describe the copies in a metadata file of their own.
+
+    The copies are the tracked product. They derive entirely from the
+    full recordings and their labels, so they are rebuilt from scratch
+    on every pass, which drops the copy of a recording a rescore no
+    longer keeps.
+    """
+    clips = args.cuts / "clips"
+    clips.mkdir(parents=True, exist_ok=True)
+    for stale in clips.iterdir():
+        if stale.suffix in VIDEO_SUFFIXES:
+            stale.unlink()
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(CLIPPER),
+            "--metadata",
+            str(args.corpus / "metadata.csv"),
+            "--videos-dir",
+            str(args.corpus / "videos"),
+            "--output-dir",
+            str(clips),
+            "--padding-seconds",
+            str(args.clip_margin),
+        ],
+        check=True,
+    )
+
+    names = sorted(path.name for path in clips.iterdir() if path.suffix in VIDEO_SUFFIXES)
+    write_labels(args.cuts / "metadata.csv", clip_labels(names, {label.file: label for label in labels}))
+
+
+def clip_labels(names: list[str], recordings: dict[str, LabelRow]) -> list[LabelRow]:
+    """The label of each clip's recording, moved into the clip's own
+    time."""
+    rows = []
+    for name in names:
+        path = Path(name)
+        clip = CLIP_NAME.match(path.stem)
+        if clip is None:
+            raise ValueError(f"{name} is not named the way a cut clip is")
+
+        start = float(clip["begin"])
+        length = float(clip["end"]) - start
+        recording = recordings[f"{clip['recording']}{path.suffix}"]
+        rows.append(
+            LabelRow(
+                file=name,
+                label=recording.label,
+                begin_s=max(recording.begin_s - start, 0.0),
+                end_s=min(recording.end_s - start, length),
+            )
+        )
+    return rows
+
+
+def write_labels(path: Path, rows: list[LabelRow]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(METADATA_COLUMNS)
-        for finding in keeping:
-            fps = probe(videos / finding.name).frames_per_second
-            writer.writerow(
-                (
-                    finding.name,
-                    1,
-                    finding.category,
-                    f"{finding.first_frame / fps:.1f}",
-                    f"{finding.last_frame / fps:.1f}",
-                )
-            )
+        for row in rows:
+            writer.writerow((row.file, 1, row.label, f"{row.begin_s:.1f}", f"{row.end_s:.1f}"))
 
 
 def write_table(path: Path, findings: list[Finding], *, keeping: list[Finding]) -> None:
@@ -426,6 +500,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--staging", type=Path, default=Path("data/out/sift"), help="Where a fetch lands")
     parser.add_argument("--corpus", type=Path, default=Path("data/corpus"), help="Where kept recordings go")
     parser.add_argument("--tracks", type=Path, default=Path("data/corpus/tracks"), help="Where track files go")
+    parser.add_argument("--cuts", type=Path, default=Path("data/cuts"), help="Where the cut copies go")
+    parser.add_argument("--clip-margin", type=float, default=5.0, help="Seconds kept either side of the best track")
     parser.add_argument("--table", type=Path, help="Write the ledger as a CSV table here")
     parser.add_argument("--target-height", type=int, default=config().frame_height, help="Frame height to detect at")
     parser.add_argument("--fetch-workers", type=int, default=3, help="Recordings fetched at once")
