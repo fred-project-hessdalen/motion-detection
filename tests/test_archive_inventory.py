@@ -35,6 +35,12 @@ def test_a_pattern_keeps_the_videos_whose_path_holds_it() -> None:
     assert [video.path for video in kept] == [CLIP]
 
 
+def test_a_path_listed_twice_is_walked_once() -> None:
+    first, second = _video(CLIP), ArchiveVideo(path=CLIP, name="copy", file_id="def456", size_bytes=1)
+
+    assert drive.distinct([first, second]) == [first]
+
+
 def test_a_recording_beside_its_own_cuts_is_dropped() -> None:
     videos = [_video(RECORDING), _video(CLIP)]
 

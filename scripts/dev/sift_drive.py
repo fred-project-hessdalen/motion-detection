@@ -37,7 +37,7 @@ from hessdalen.config import CONFIG_PATH, config
 from hessdalen.dashboard.catalog import CLIP_NAME, VIDEO_SUFFIXES
 from hessdalen.dashboard.runs import probe
 from hessdalen.domain.models import MovementEvent
-from hessdalen.io.drive import ArchiveVideo, cut_out, fetch, fetch_through, matching, read_inventory
+from hessdalen.io.drive import ArchiveVideo, cut_out, distinct, fetch, fetch_through, matching, read_inventory
 from hessdalen.io.tracks import write_tracks
 from hessdalen.io.video import VideoStream, masked_stream
 from hessdalen.processing.movement import MovementDetector, MovementSettings
@@ -184,7 +184,7 @@ def scan(args: argparse.Namespace, *, frozen: str) -> None:
 
 def pending(args: argparse.Namespace) -> list[ArchiveVideo]:
     """The selected recordings the ledger has no line for yet."""
-    listed = cut_out(matching(read_inventory(args.inventory), args.select))
+    listed = cut_out(distinct(matching(read_inventory(args.inventory), args.select)))
     done = {finding.file_id for finding in read_ledger(args.ledger)}
 
     waiting = sorted((video for video in listed if video.file_id not in done), key=lambda video: video.path)

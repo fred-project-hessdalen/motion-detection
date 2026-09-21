@@ -141,6 +141,18 @@ def matching(videos: list[ArchiveVideo], patterns: list[str]) -> list[ArchiveVid
     return [video for video in videos if any(pattern in video.path.lower() for pattern in lowered)]
 
 
+def distinct(videos: list[ArchiveVideo]) -> list[ArchiveVideo]:
+    """The first video listed under each path.
+
+    The store lets two files share a path, and a fetch by path can only
+    ask for one of them.
+    """
+    first: dict[str, ArchiveVideo] = {}
+    for video in videos:
+        first.setdefault(video.path, video)
+    return list(first.values())
+
+
 def cut_out(videos: list[ArchiveVideo]) -> list[ArchiveVideo]:
     """The videos that are cuts of another video in the listing.
 
