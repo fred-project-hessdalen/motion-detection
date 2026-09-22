@@ -67,6 +67,10 @@ COLOUR_CHOICES = ("Cluster", "Side", "Label", "Camera")
 COLOUR_COLUMNS = {"Cluster": "cluster", "Side": "side", "Label": "label", "Camera": "camera"}
 SELECTED_CLUSTER = "Selected track's cluster"
 SELECTION = "track"
+ZOOM = "zoom"
+MAP_LABEL_WIDTH = 36
+"""Pixels kept for the map's y labels, which the layout sizes once for the
+whole map and which grow a decimal place when it is zoomed in."""
 GALLERY_SIZE = 30
 POLL_SECONDS = 2.0
 
@@ -89,7 +93,8 @@ LABELS_HELP = "Show only the tracks of recordings filed under these labels."
 GALLERY_CHOICE_HELP = "The cluster the gallery below the map draws a sample of."
 MAP_HELP = (
     "Every track the corpus holds, placed so that tracks with similar descriptors sit close together. "
-    "Grey points are tracks the clustering left out of every cluster. Click a point to see its track."
+    "Grey points are tracks the clustering left out of every cluster. Click a point to see its track. "
+    "Scroll to zoom, drag to pan, and double-click to zoom back out."
 )
 PATH_HELP = (
     "The track drawn from its stored path through the blob's centre, which is what the descriptors "
@@ -146,6 +151,7 @@ def page() -> None:
         event = st.altair_chart(
             _scatter(shown, colour_column=COLOUR_COLUMNS[colour or "Cluster"]),
             on_select="rerun",
+            selection_mode=SELECTION,
             key="track_map",
             width="stretch",
         )
@@ -161,12 +167,15 @@ def page() -> None:
 
 def _scatter(tracks: pd.DataFrame, *, colour_column: str) -> alt.Chart:
     selection = alt.selection_point(name=SELECTION, fields=["key"], on="click")
+    zoom = alt.selection_interval(name=ZOOM, bind="scales")
     return (
         alt.Chart(tracks)
-        .mark_circle(size=45)
+        .mark_circle(size=45, clip=True)
         .encode(
-            x=alt.X("x:Q", axis=None),
-            y=alt.Y("y:Q", axis=None),
+            x=alt.X("x:Q", title=None, axis=alt.Axis(grid=True), scale=alt.Scale(zero=False)),
+            y=alt.Y(
+                "y:Q", title=None, axis=alt.Axis(grid=True, minExtent=MAP_LABEL_WIDTH), scale=alt.Scale(zero=False)
+            ),
             color=_colour(tracks, column=colour_column),
             opacity=alt.condition(selection, alt.value(0.95), alt.value(0.4)),
             tooltip=[
@@ -180,7 +189,7 @@ def _scatter(tracks: pd.DataFrame, *, colour_column: str) -> alt.Chart:
                 alt.Tooltip("peak_deviation_max:Q", title="Peak deviation", format=".1f"),
             ],
         )
-        .add_params(selection)
+        .add_params(selection, zoom)
         .properties(height=620)
     )
 
