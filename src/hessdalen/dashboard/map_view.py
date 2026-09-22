@@ -17,6 +17,7 @@ keep has its video fetched from the archive before it is drawn.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -83,6 +84,10 @@ NEIGHBOUR_RADIUS = 0.5
 SHUFFLE_KEY = "gallery_shuffle"
 MAP_KEY = "track_map"
 PICKED_KEY = "picked_track"
+SEARCH_KEY = "track_search"
+SEARCH_WORDS = ("track", "in")
+"""Words a search may carry around what it names, from the heading over a
+selected track."""
 SAMPLE_TITLE = "Cluster sample"
 NEAREST_TITLE = "Nearest tracks"
 SELECTED_TITLE = "Selected track"
@@ -112,6 +117,11 @@ COLOUR_HELP = (
     "each side is clustered on its own. A label is the folder the recording was filed under, which names "
     "the whole recording, so most tracks under a label are that scene's background activity and not the "
     "thing the folder is named for."
+)
+SEARCH_HELP = (
+    "Select a track by its number, by its recording, or by both, as the heading over a selected track "
+    'gives them. "Track 7484 in Cam1_2025-06-03__12-40-00_noInsect" and "7484" both work, and so does a '
+    "recording's name on its own. The first of the matching tracks is selected."
 )
 LABELS_HELP = "Show only the tracks of recordings filed under these labels."
 ROUGH_HELP = (
@@ -192,6 +202,9 @@ def page() -> None:
     tracks = _map_frame(MAP_PATH.stat().st_mtime)
     paths = _path_frame(PATHS_PATH.stat().st_mtime)
     with st.sidebar:
+        wanted = str(st.text_input("Search", key=SEARCH_KEY, on_change=_search, help=SEARCH_HELP))
+        if wanted.strip():
+            st.caption(f"{len(searched(tracks, wanted=wanted))} of {len(tracks)} tracks matched")
         colour = st.segmented_control("Colour", options=COLOUR_CHOICES, default="Cluster", help=COLOUR_HELP)
         labels = st.multiselect("Labels", options=sorted(tracks["label"].unique()), help=LABELS_HELP)
         rough = st.toggle("Rough tracks", value=True, help=ROUGH_HELP)
@@ -208,7 +221,7 @@ def page() -> None:
 
     shown = tracks if rough else tracks[tracks["side"] != ROUGH_SIDE]
     shown = shown[shown["label"].isin(labels)] if labels else shown
-    picked = _picked(shown, key=st.session_state.get(PICKED_KEY))
+    picked = _picked(shown, tracks=tracks, key=st.session_state.get(PICKED_KEY))
     cluster = _gallery_cluster(str(chosen_cluster), picked=picked)
     sample = shown.iloc[0:0] if cluster is None else _sample(shown, cluster=cluster)
     nearest = shown.iloc[0:0] if picked is None else _nearest(shown, track=picked, radius=float(radius))
@@ -248,8 +261,45 @@ def _remember_click() -> None:
         st.session_state[PICKED_KEY] = str(clicked)
 
 
-def _picked(shown: pd.DataFrame, *, key: str | None) -> pd.Series | None:
+def _search() -> None:
+    """Select the track a search names, before the page is drawn again.
+
+    A search selects from here rather than while the page is drawn, so
+    that text left standing in the box does not take the selection back
+    from a point clicked afterwards.
+    """
+    found = searched(_map_frame(MAP_PATH.stat().st_mtime), wanted=str(st.session_state[SEARCH_KEY]))
+    if not found.empty:
+        st.session_state[PICKED_KEY] = str(found.iloc[0]["key"])
+
+
+def searched(tracks: pd.DataFrame, *, wanted: str) -> pd.DataFrame:
+    """The tracks a search names, in the order the map holds them.
+
+    A search carries a track's number, part of its recording's name, or
+    both, as the heading over a selected track gives them. Each word of
+    it that is a number is read as the track's number, and every other
+    word as part of the recording's name.
+    """
+    words = [word for word in re.split(r"[\s,]+", wanted.strip()) if word and word.lower() not in SEARCH_WORDS]
+    if not words:
+        return tracks.iloc[0:0]
+
+    found = tracks
+    for word in words:
+        if word.isdigit():
+            found = found[found["track_id"] == int(word)]
+        else:
+            found = found[found["clip"].str.contains(word, case=False, regex=False)]
+    return found
+
+
+def _picked(shown: pd.DataFrame, *, tracks: pd.DataFrame, key: str | None) -> pd.Series | None:
+    """The selected track, taken from the whole corpus when the filters leave
+    out the track a search named."""
     held = shown.loc[shown["key"] == key]
+    if held.empty:
+        held = tracks.loc[tracks["key"] == key]
     return None if held.empty else held.iloc[0]
 
 

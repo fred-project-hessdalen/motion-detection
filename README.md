@@ -180,7 +180,10 @@ any cluster and within the neighbour radius set in the sidebar, and
 names the cluster of each. Tracks whose movement from step to step is
 uneven, which most clutter is, can be left out of the page with the
 Rough tracks switch in the sidebar, and the Video cached switch there
-draws the tracks whose recording is not on disk faintly. The map marks
+draws the tracks whose recording is not on disk faintly. Search in the
+sidebar selects a track by its number, by its recording or by both, in
+the form the heading over a selected track gives them, such as `Track
+7484 in Cam1_2025-06-03__12-40-00_noInsect`. The map marks
 the selected track with a star and rings the tracks of each gallery in
 the colour that gallery frames its panels in. The map is drawn by
 plotly.js, which the page loads from the jsDelivr CDN, so the page
