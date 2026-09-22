@@ -190,7 +190,7 @@ def _scatter(tracks: pd.DataFrame, *, colour_column: str) -> alt.Chart:
             ],
         )
         .add_params(selection, zoom)
-        .properties(height=620)
+        .properties(height=620, usermeta={"embedOptions": {"renderer": "canvas"}})
     )
 
 
