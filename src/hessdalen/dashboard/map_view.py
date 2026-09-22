@@ -95,6 +95,7 @@ selected track."""
 SAMPLE_TITLE = "Cluster sample"
 NEAREST_TITLE = "Nearest tracks"
 SELECTED_TITLE = "Selected track"
+NAMES_TITLE = "Cluster labels"
 WHOLE_TITLE = "In the frame"
 CLOSE_UP_TITLE = "Close up"
 SAMPLE_COLOR = "#e6007e"
@@ -102,6 +103,12 @@ NEAREST_COLOR = "#0091d5"
 SAMPLE_MARKER = {"color": SAMPLE_COLOR, "symbol": "circle-open", "size": 12, "line": {"width": 2}}
 NEAREST_MARKER = {"color": NEAREST_COLOR, "symbol": "diamond-open", "size": 12, "line": {"width": 2}}
 SELECTED_MARKER = {"color": "#ffd400", "symbol": "star", "size": 18, "line": {"width": 1, "color": "#333333"}}
+NAMES_FONT = {"size": 13}
+"""Size the name of a cluster is written at.
+
+The colour is left to the page's own text colour, which the plot is
+handed, so a name stays readable whichever theme the page is in.
+"""
 GRID_COLOR = "rgba(128, 128, 128, 0.25)"
 DIM_ALPHA = 0.2
 PANEL_CACHE_ENTRIES = 64
@@ -142,7 +149,8 @@ MAP_HELP = (
     "Grey points are tracks the clustering left out of every cluster. Click a point to see its track. "
     "Scroll to zoom, drag to pan, and double-click to zoom back out. Click an entry in the legend to hide "
     "or show its tracks. A star marks the selected track, and rings mark the tracks the galleries below "
-    "the map show."
+    "the map show. The name a cluster has been given stands over the middle of its points, and the "
+    f"{NAMES_TITLE} entry in the legend takes every name off the map."
 )
 PATH_HELP = (
     "The track drawn from its stored path through the blob's centre, which is what the descriptors "
@@ -251,7 +259,13 @@ def page() -> None:
         st.subheader("Tracks", help=MAP_HELP)
         st.caption(f"{len(shown)} of {len(tracks)} tracks")
         dimmed = _uncached(shown) if cached else frozenset()
-        figure = _scatter(shown, colour_column=COLOUR_COLUMNS[colour or "Cluster"], rings=rings, dimmed=dimmed)
+        figure = _scatter(
+            shown,
+            colour_column=COLOUR_COLUMNS[colour or "Cluster"],
+            rings=rings,
+            dimmed=dimmed,
+            names=cluster_names(shown, labels=_cluster_labels(_labels_stamp())),
+        )
         track_map_chart(figure, key=MAP_KEY, on_click=_remember_click)
         _gallery(shown, cluster=cluster, sample=sample)
         if cluster is not None:
@@ -340,16 +354,45 @@ def _uncached(tracks: pd.DataFrame) -> frozenset[str]:
     return frozenset(tracks.loc[~tracks["recording"].isin(on_disk), "key"])
 
 
-def _scatter(tracks: pd.DataFrame, *, colour_column: str, rings: list[Ring], dimmed: frozenset[str]) -> go.Figure:
+def cluster_names(tracks: pd.DataFrame, *, labels: dict[str, list[str]]) -> pd.DataFrame:
+    """The name each named cluster is under, and where on the map it goes.
+
+    A name stands over the middle of its cluster's points, taken as the
+    median of them so that a track lying far out does not carry the name
+    away with it. A cluster holding tracks of more than one name, which
+    a clustering run afresh can leave, takes the name most of them are
+    under.
+    """
+    named = tracks[tracks["cluster"] != UNASSIGNED_NAME].copy()
+    named["name"] = named["key"].map({key: name for name, keys in labels.items() for key in keys})
+    named = named.dropna(subset=["name"])
+    if named.empty:
+        return pd.DataFrame(columns=["x", "y", "name"])
+
+    middles = named.groupby("cluster")[["x", "y"]].median()
+    middles["name"] = named.groupby("cluster")["name"].agg(_commonest)
+    return middles
+
+
+def _commonest(names: pd.Series) -> str:
+    return str(names.mode().iat[0])
+
+
+def _scatter(
+    tracks: pd.DataFrame, *, colour_column: str, rings: list[Ring], dimmed: frozenset[str], names: pd.DataFrame
+) -> go.Figure:
     """The tracks drawn by the graphics card, one trace per colour, so the
     legend names each colour and a click on it hides or shows those tracks.
 
     Drawing on the card keeps zooming and panning smooth over thousands
     of points. The fixed UI revision keeps the zoom when the plot is
-    handed the next figure, and each trace's uid keeps it hidden or shown
-    as the legend left it. The rings over the selected track and the
-    tracks the galleries show take no hover or click, so a click on a
-    ringed track selects the track under the ring.
+    handed the next figure, and each trace's uid keeps it hidden or
+    shown as the legend left it. The rings over the selected track and
+    the tracks the galleries show take no hover or click, so a click on
+    a ringed track selects the track under the ring.
+
+    The names of the clusters are drawn by the browser, which puts them
+    over the points the card draws.
     """
     traces = []
     for name, colour in _colours(tracks, column=colour_column).items():
@@ -377,6 +420,19 @@ def _scatter(tracks: pd.DataFrame, *, colour_column: str, rings: list[Ring], dim
                 name=ring.name,
                 uid=ring.name,
                 marker=ring.marker,
+                hoverinfo="skip",
+            )
+        )
+    if not names.empty:
+        traces.append(
+            go.Scatter(
+                x=names["x"],
+                y=names["y"],
+                mode="text",
+                name=NAMES_TITLE,
+                uid=NAMES_TITLE,
+                text=names["name"],
+                textfont=NAMES_FONT,
                 hoverinfo="skip",
             )
         )
