@@ -166,8 +166,11 @@ background, and two videos play once they are built. In the frame holds
 the whole picture with the track's path and a box drawn on it, and Close
 up holds a crop three box half-widths out from the detection on every
 side, which follows it from frame to frame and carries nothing drawn
-over it. The crop is black where it reaches past the edge of the
-picture. Both come out of the one pass over the recording, because
+over it. The crop eases a quarter of the way towards the detection each
+frame, so the hop of the matched pixel inside its blob hardly moves it,
+and it jumps to the detection outright once that sits more than a box
+half-width from the middle. The crop is black where it reaches past the
+edge of the picture. Both come out of the one pass over the recording, because
 reaching the track is most of what a build costs. A track deep in a
 recording is reached by seeking to the keyframe before it, which needs
 the recording's frame stamps read first. A recording whose stamps do

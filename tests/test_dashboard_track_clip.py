@@ -32,6 +32,9 @@ SIZE = 8
 COLOR = (0, 255, 0)
 GOP = 10
 CODED_FRAMES = INDEXED_FROM + 20
+JUMPING = 1
+"""A box half-width of a pixel, so the close-up jumps to every detection
+instead of easing towards it."""
 
 
 def test_a_clip_shows_a_second_either_side_of_its_track() -> None:
@@ -153,14 +156,34 @@ def test_the_close_up_reaches_a_box_beyond_the_box_on_every_side() -> None:
     assert close_up_side(SIZE) == 2 * CLOSE_UP_RADII * SIZE
 
 
-def test_the_close_up_follows_the_track_and_holds_where_it_is_unmatched() -> None:
+def test_the_close_up_holds_where_the_track_goes_unmatched() -> None:
     """A track goes unmatched for a frame here and there, and the crop stays
     where the object was rather than jumping back to the start."""
-    centres = close_up_centres(_track(frames=[5, 6, 9]), stretch=Stretch(begin_frame=3, end_frame=10))
+    centres = close_up_centres(_track(frames=[5, 9]), stretch=Stretch(begin_frame=3, end_frame=10), size=JUMPING)
 
     assert centres[0].tolist() == list(_position(5))
-    assert centres[4].tolist() == list(_position(6))
+    assert centres[4].tolist() == list(_position(5))
     assert centres[-1].tolist() == list(_position(9))
+
+
+def test_a_detection_that_hops_about_hardly_moves_the_close_up() -> None:
+    """A track is matched on its blob's brightest pixel, which hops about
+    inside the blob, and a crop cut around it straight shakes."""
+    hopping = _moving_track([100.0 + 2.0 * (frame % 2) for frame in range(20)])
+
+    centres = close_up_centres(hopping, stretch=Stretch(begin_frame=0, end_frame=19), size=SIZE)
+
+    assert int(centres[:, 0].max() - centres[:, 0].min()) <= 1
+
+
+def test_an_object_the_close_up_cannot_keep_up_with_stays_near_its_middle() -> None:
+    """Following alone falls behind an object that goes somewhere, and it is
+    the crop jumping to such a detection that keeps it in the picture."""
+    fast = _moving_track([100.0 + 5.0 * frame for frame in range(20)])
+
+    centres = close_up_centres(fast, stretch=Stretch(begin_frame=0, end_frame=19), size=SIZE)
+
+    assert int(np.abs(fast.x - centres[:, 0]).max()) <= SIZE
 
 
 def test_the_close_up_is_cut_around_the_detection() -> None:
@@ -228,6 +251,18 @@ def _write_video(path, *, frames: int):
         writer.write(np.full((48, 64, 3), index % 255, dtype=np.uint8))
     writer.release()
     return path
+
+
+def _moving_track(xs: list[float]) -> StoredTrack:
+    """A track matched on every frame from the first, at the given places
+    across the frame."""
+    return StoredTrack(
+        track_id=1,
+        frame_numbers=np.arange(len(xs), dtype=np.int64),
+        x=np.array(xs, dtype=np.float32),
+        y=np.full(len(xs), 120.0, dtype=np.float32),
+        frame_height=240,
+    )
 
 
 def _track(*, frames: list[int]) -> StoredTrack:

@@ -76,6 +76,25 @@ The box is drawn a half-width out from the detection on every side, so
 the close-up holds the box and as much again around it.
 """
 
+CLOSE_UP_FOLLOW = 0.25
+"""Share of the way the close-up moves towards the detection each frame.
+
+A track is matched on its blob's brightest pixel, which hops about
+inside the blob from one frame to the next, and a crop cut around that
+pixel shakes. Taking a quarter of the step each frame leaves a hop of a
+few pixels almost nothing to move the crop by, and still follows an
+object that is going somewhere.
+"""
+
+CLOSE_UP_SNAP_RADII = 1
+"""How far the detection may sit from the middle of the close-up before the
+crop jumps to it, in box half-widths.
+
+An object moving faster than the crop follows would otherwise walk
+towards the edge of the picture. A jump keeps it within a third of the
+way out to the edge of the crop, which is where the box's own edge sits.
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class Stretch:
@@ -191,7 +210,7 @@ def build_track_clip(
     planar = np.empty((frame_height * 3 // 2, frame_width), dtype=np.uint8)
 
     side = close_up_side(size)
-    centres = close_up_centres(track, stretch=stretch)
+    centres = close_up_centres(track, stretch=stretch, size=size)
     crop = np.empty((side, side, 3), dtype=np.uint8)
     crop_planar = np.empty((side * 3 // 2, side), dtype=np.uint8)
 
@@ -231,7 +250,7 @@ def close_up_side(size: int) -> int:
     return 2 * CLOSE_UP_RADII * size
 
 
-def close_up_centres(track: StoredTrack, *, stretch: Stretch) -> np.ndarray:
+def close_up_centres(track: StoredTrack, *, stretch: Stretch, size: int) -> np.ndarray:
     """Where the close-up is cut from on each frame of the stretch.
 
     A track goes unmatched for a frame here and there, and holding its
@@ -240,7 +259,25 @@ def close_up_centres(track: StoredTrack, *, stretch: Stretch) -> np.ndarray:
     """
     numbers = np.arange(stretch.begin_frame, stretch.end_frame + 1)
     reached = np.clip(np.searchsorted(track.frame_numbers, numbers, side="right") - 1, 0, None)
-    return np.column_stack([track.x[reached], track.y[reached]]).round().astype(np.int32)
+    detections = np.column_stack([track.x[reached], track.y[reached]]).astype(np.float64)
+    return _followed(detections, snap=CLOSE_UP_SNAP_RADII * size)
+
+
+def _followed(detections: np.ndarray, *, snap: int) -> np.ndarray:
+    """The detections followed rather than cut around, as whole pixels.
+
+    Each frame closes part of the distance to the detection, so the
+    shake of the matched pixel hardly moves the crop. A detection
+    further out than the snap is taken as it stands, which is what keeps
+    an object the crop cannot keep up with in the middle of the picture.
+    """
+    followed = np.empty_like(detections)
+    centre = detections[0]
+    for index, detection in enumerate(detections):
+        near = np.abs(detection - centre).max() <= snap
+        centre = centre + CLOSE_UP_FOLLOW * (detection - centre) if near else detection
+        followed[index] = centre
+    return followed.round().astype(np.int32)
 
 
 def cut_close_up(crop: np.ndarray, *, frame: np.ndarray, centre: np.ndarray) -> None:
