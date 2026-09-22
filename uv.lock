@@ -1416,6 +1416,7 @@ core = [
     { name = "tomli-w" },
 ]
 dashboard = [
+    { name = "plotly" },
     { name = "streamlit" },
 ]
 data = [
@@ -1449,7 +1450,10 @@ core = [
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "tomli-w", specifier = ">=1.0" },
 ]
-dashboard = [{ name = "streamlit", specifier = ">=1.64.0" }]
+dashboard = [
+    { name = "plotly", specifier = ">=7.1.0" },
+    { name = "streamlit", specifier = ">=1.64.0" },
+]
 data = [{ name = "dvc", extras = ["gdrive"], specifier = ">=3.66.1" }]
 dev = [
     { name = "docformatter", specifier = ">=1.7.7" },
@@ -1969,6 +1973,19 @@ source = { registry = "https://gitlab.com/api/v4/projects/21145795/packages/pypi
 sdist = { url = "https://files.pythonhosted.org/packages/cf/86/0248f086a84f01b37aaec0fa567b397df1a119f73c16f6c7a9aac73ea309/platformdirs-4.5.1.tar.gz", hash = "sha256:61d5cdcc6065745cdd94f0f878977f8de9437be93de97c1c12f853c9c0cdcbda", size = 21715, upload-time = "2025-12-05T13:52:58.638Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/cb/28/3bfe2fa5a7b9c46fe7e13c97bda14c895fb10fa2ebf1d0abb90e0cea7ee1/platformdirs-4.5.1-py3-none-any.whl", hash = "sha256:d03afa3963c806a9bed9d5125c8f4cb2fdaf74a55ab60e5d59b3fde758104d31", size = 18731, upload-time = "2025-12-05T13:52:56.823Z" },
+]
+
+[[package]]
+name = "plotly"
+version = "7.1.0"
+source = { registry = "https://gitlab.com/api/v4/projects/21145795/packages/pypi/simple" }
+dependencies = [
+    { name = "narwhals" },
+    { name = "packaging" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/49/c3/72b369f5ed7701b04ab0ea3dcf83e9bbce71c0b3bc6f07f87568550d09ea/plotly-7.1.0.tar.gz", hash = "sha256:f860166a4a3d78c69cb1f4a15f28a5c8283eade98a282a698f3bb853a449ace5", size = 6689315, upload-time = "2026-09-15T19:21:21.75Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e5/7d/905a3a3d51087515719058c94cfbda2ff0fc14417c20d557ae3e82d8b250/plotly-7.1.0-py3-none-any.whl", hash = "sha256:dbb7fa18afce40d0a8e80d1bf162eceb3faa0ce5a77fe741ad09a74cf78f53f3", size = 9692368, upload-time = "2026-09-15T19:21:18.331Z" },
 ]
 
 [[package]]
