@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from tqdm import tqdm
 
 from hessdalen.analysis.descriptors import ARROW_TYPES, TrackDescriptor, describe_file
 
@@ -56,7 +57,7 @@ class Corpus:
 def read_corpus(root: Path) -> Corpus:
     """Describe every track under a corpus root, tagged by class and event."""
     clips = corpus_clips(root)
-    rows = [row for clip in clips for row in _rows_for_clip(clip)]
+    rows = [row for clip in tqdm(clips, desc="Describing tracks", unit="clip") for row in _rows_for_clip(clip)]
     return Corpus(tracks=pa.Table.from_pylist(rows, schema=CORPUS_SCHEMA), clips=clips)
 
 
@@ -79,7 +80,7 @@ def gather_paths(clips: list[ClipPath]) -> pa.Table:
     its positions are pixels of, so a track can be drawn from this table
     alone.
     """
-    tables = [_path_rows(clip) for clip in clips]
+    tables = [_path_rows(clip) for clip in tqdm(clips, desc="Gathering paths", unit="clip")]
     return pa.concat_tables([table for table in tables if table.num_rows > 0])
 
 

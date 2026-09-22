@@ -28,6 +28,7 @@ import numpy as np
 import pyarrow as pa
 from sklearn.cluster import HDBSCAN  # type: ignore[import-not-found]
 from sklearn.preprocessing import QuantileTransformer  # type: ignore[import-not-found]
+from tqdm import tqdm
 from umap import UMAP  # type: ignore[import-not-found]
 
 FEATURES = (
@@ -180,7 +181,12 @@ def _agreed_clusters(tracks: pa.Table, *, side: Side, seeds: tuple[int, ...]) ->
         return np.full(tracks.num_rows, UNASSIGNED, dtype=np.int32)
 
     scores = standing_within_camera(tracks, names=FEATURES)
-    runs = np.array([_one_run(scores, side=side, seed=seed) for seed in seeds])
+    runs = np.array(
+        [
+            _one_run(scores, side=side, seed=seed)
+            for seed in tqdm(seeds, desc=f"Clustering {side.name} tracks", unit="run")
+        ]
+    )
     held = np.mean(runs >= 0, axis=0) >= TOGETHER
     agreed = np.full(tracks.num_rows, UNASSIGNED, dtype=np.int32)
     if held.sum() <= side.min_cluster_size:
