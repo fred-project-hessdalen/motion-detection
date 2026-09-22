@@ -15,7 +15,7 @@ keep has its video fetched from the archive before it is drawn.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -26,9 +26,15 @@ import pandas as pd
 import pyarrow.parquet as pq
 import streamlit as st
 
-from hessdalen.dashboard.clip_queue import ClipQueue
+from hessdalen.dashboard.clip_queue import ClipQueue, Job, Report
 from hessdalen.dashboard.runs import probe
-from hessdalen.dashboard.track_clip import StoredTrack, build_track_clip, stretch_around, track_clip_path
+from hessdalen.dashboard.track_clip import (
+    ClipProgress,
+    StoredTrack,
+    build_track_clip,
+    stretch_around,
+    track_clip_path,
+)
 from hessdalen.dashboard.track_preview import close_up, frame_view, gallery, light_curve
 from hessdalen.dashboard.video_cache import (
     MIN_FREE_BYTES,
@@ -283,15 +289,30 @@ def _clip_progress(key: str, *, fetching: bool) -> None:
         st.error(f"The clip could not be built: {state.error}")
     elif state.stage == "queued":
         st.caption("Waiting for the clip before it to finish")
+    elif state.progress is None:
+        st.caption("Fetching the video from the archive" if fetching else "Opening the recording")
     else:
-        st.caption("Fetching the video, then drawing the track on it" if fetching else "Drawing the track on its video")
+        st.progress(state.progress.fraction, text=_progress_text(state.progress))
 
 
-def _clip_job(source: VideoSource, *, track: StoredTrack) -> Callable[[], Path]:
+def _progress_text(progress: ClipProgress) -> str:
+    """How far a build has got, in frames, and how many it handles in all."""
+    stretch = progress.stretch
+    in_all = f"{progress.frames_total:,} frames in all"
+    if progress.drawing:
+        drawn = progress.frames_done - stretch.begin_frame
+        return f"Drawing the track: frame {drawn:,} of {stretch.drawn_frames:,} · {in_all}"
+    return (
+        f"Reaching the track: frame {progress.frames_done:,} of {stretch.begin_frame:,}, "
+        f"then drawing {stretch.drawn_frames:,} · {in_all}"
+    )
+
+
+def _clip_job(source: VideoSource, *, track: StoredTrack) -> Job:
     """The work that turns a track's source into its clip, run away from the
     page."""
 
-    def job() -> Path:
+    def job(report: Report) -> Path:
         video = source.path or fetch_video(FETCHED_DIR, video=_archived(source))
         clip = _clip_path(video, track=track)
         if not clip.is_file():
@@ -301,7 +322,12 @@ def _clip_job(source: VideoSource, *, track: StoredTrack) -> Callable[[], Path]:
             )
             part = clip.with_name(f"{clip.stem}.part{clip.suffix}")
             build_track_clip(
-                video, track=track, stretch=stretch, frames_per_second=details.frames_per_second, output=part
+                video,
+                track=track,
+                stretch=stretch,
+                frames_per_second=details.frames_per_second,
+                output=part,
+                on_progress=report,
             )
             part.replace(clip)
         return clip

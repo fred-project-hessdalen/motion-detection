@@ -10,7 +10,7 @@ detection.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Generator, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,7 +20,7 @@ import numpy as np
 from hessdalen.dashboard.encoder import LIVE, encode, even, playback_rate
 from hessdalen.dashboard.panels import box_size, draw_box, draw_frame_number, draw_trail
 from hessdalen.dashboard.store import digest
-from hessdalen.io.video import masked_stream
+from hessdalen.io.video import TIMESTAMP_MASK_COORDS, VideoStream
 from hessdalen.processing.debug import track_color
 
 MODULES = ("track_clip.py", "panels.py", "encoder.py")
@@ -29,6 +29,9 @@ MODULES = ("track_clip.py", "panels.py", "encoder.py")
 LEAD_SECONDS = 1.0
 """How much of the recording is shown before the track starts and after it
 ends."""
+
+REPORT_EVERY = 25
+"""Frames passed between two reports of how far the build has got."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +59,35 @@ class Stretch:
 
     begin_frame: int
     end_frame: int
+
+    @property
+    def drawn_frames(self) -> int:
+        return self.end_frame - self.begin_frame + 1
+
+
+@dataclass(frozen=True, slots=True)
+class ClipProgress:
+    """How far a build has got through the frames it has to handle.
+
+    Every frame of the recording up to the end of the stretch is
+    handled, the ones ahead of it by being passed and the stretch by
+    being drawn.
+    """
+
+    frames_done: int
+    stretch: Stretch
+
+    @property
+    def frames_total(self) -> int:
+        return self.stretch.end_frame + 1
+
+    @property
+    def drawing(self) -> bool:
+        return self.frames_done > self.stretch.begin_frame
+
+    @property
+    def fraction(self) -> float:
+        return min(1.0, self.frames_done / max(1, self.frames_total))
 
 
 def stretch_around(track: StoredTrack, *, frames_per_second: float, frame_count: int) -> Stretch:
@@ -88,6 +120,7 @@ def build_track_clip(
     stretch: Stretch,
     frames_per_second: float,
     output: Path,
+    on_progress: Callable[[ClipProgress], None],
 ) -> int:
     """Draw the track on its stretch of the recording, and return the frames
     written.
@@ -95,7 +128,11 @@ def build_track_clip(
     The frames are resized to the height the track was detected at,
     because that is the frame its positions are pixels of.
     """
-    stream = masked_stream(video, target_height=track.frame_height, first_frame=stretch.begin_frame)
+    stream = VideoStream(
+        PassingFrameSource(video, stretch=stretch, on_progress=on_progress),
+        mask_coords=TIMESTAMP_MASK_COORDS,
+        target_height=track.frame_height,
+    )
     height, width = stream.frame_shape
     frame_height, frame_width = even(height), even(width)
     size = box_size(frame_height, frame_width)
@@ -113,6 +150,8 @@ def build_track_clip(
             draw_frame_number(canvas, frame_number)
             cv2.cvtColor(canvas, cv2.COLOR_BGR2YUV_I420, dst=planar)
             yield planar
+            if (offset + 1) % REPORT_EVERY == 0 or frame_number == stretch.end_frame:
+                on_progress(ClipProgress(frames_done=frame_number + 1, stretch=stretch))
 
     output.parent.mkdir(parents=True, exist_ok=True)
     return encode(
@@ -123,6 +162,51 @@ def build_track_clip(
         frames_per_second=playback_rate(frames_per_second),
         encoding=LIVE,
     )
+
+
+class PassingFrameSource:
+    """A recording read from the start of a stretch, saying how many of the
+    frames ahead of it it has passed.
+
+    Passing them is most of a build when the track sits deep in a long
+    recording, and the frames are passed as the detector's own source
+    passes them, by grabbing.
+    """
+
+    def __init__(self, video: Path, *, stretch: Stretch, on_progress: Callable[[ClipProgress], None]) -> None:
+        self.video = video
+        self.stretch = stretch
+        self.on_progress = on_progress
+        self.first_frame = stretch.begin_frame
+
+    def colour_frames(self) -> Generator[np.ndarray, None, None]:
+        capture = cv2.VideoCapture(str(self.video))
+        try:
+            for passed in range(self.first_frame):
+                if not capture.grab():
+                    return
+                if (passed + 1) % REPORT_EVERY == 0:
+                    self.on_progress(ClipProgress(frames_done=passed + 1, stretch=self.stretch))
+            while True:
+                ret, frame = capture.read()
+                if not ret:
+                    return
+                yield frame
+        finally:
+            capture.release()
+
+    def gray_frames(self) -> Generator[np.ndarray, None, None]:
+        for frame in self.colour_frames():
+            yield cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    def sample_frame(self) -> np.ndarray | None:
+        """The first frame of the recording, read without passing anything."""
+        capture = cv2.VideoCapture(str(self.video))
+        try:
+            ret, frame = capture.read()
+            return frame if ret else None
+        finally:
+            capture.release()
 
 
 def draw_stored_track(

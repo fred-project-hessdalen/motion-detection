@@ -5,8 +5,10 @@ import threading
 from pathlib import Path
 
 from hessdalen.dashboard.clip_queue import ClipQueue
+from hessdalen.dashboard.track_clip import ClipProgress, Stretch
 
 WAIT = 5.0
+STRETCH = Stretch(begin_frame=100, end_frame=149)
 
 
 def test_a_requested_clip_is_built_and_reported_ready() -> None:
@@ -19,6 +21,26 @@ def test_a_requested_clip_is_built_and_reported_ready() -> None:
     _settle(queue, "a")
     assert queue.state("a").stage == "ready"
     assert queue.state("a").clip == Path("a.mp4")
+
+
+def test_how_far_a_build_has_got_is_reported_while_it_runs() -> None:
+    queue = ClipQueue()
+    reported, release = threading.Event(), threading.Event()
+
+    def job(report) -> Path:
+        report(ClipProgress(frames_done=60, stretch=STRETCH))
+        reported.set()
+        release.wait(WAIT)
+        return Path("a.mp4")
+
+    queue.request("a", job)
+
+    assert reported.wait(WAIT)
+    progress = queue.state("a").progress
+    release.set()
+    assert queue.state("a").stage in ("building", "ready")
+    assert progress is not None
+    assert progress.frames_done == 60
 
 
 def test_asking_for_another_track_drops_a_request_still_waiting() -> None:
@@ -55,7 +77,7 @@ def test_a_track_nobody_asked_for_has_no_clip() -> None:
 
 
 def _job(clip: Path, *, finished: threading.Event | None = None):
-    def job() -> Path:
+    def job(report) -> Path:
         if finished is not None:
             finished.set()
         return clip
@@ -64,14 +86,14 @@ def _job(clip: Path, *, finished: threading.Event | None = None):
 
 
 def _held(release: threading.Event):
-    def job() -> Path:
+    def job(report) -> Path:
         release.wait(WAIT)
         return Path("running.mp4")
 
     return job
 
 
-def _fails() -> Path:
+def _fails(report) -> Path:
     raise OSError("the recording holds no frames there")
 
 

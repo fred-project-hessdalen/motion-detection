@@ -1,9 +1,19 @@
 """What a track clip shows of its recording, and what it draws on each
 frame."""
 
+import cv2
 import numpy as np
+import pytest
 
-from hessdalen.dashboard.track_clip import StoredTrack, Stretch, draw_stored_track, stretch_around
+from hessdalen.dashboard.track_clip import (
+    REPORT_EVERY,
+    ClipProgress,
+    PassingFrameSource,
+    StoredTrack,
+    Stretch,
+    draw_stored_track,
+    stretch_around,
+)
 
 RATE = 25.0
 SIZE = 8
@@ -51,6 +61,50 @@ def test_between_matches_the_path_is_drawn_and_no_box() -> None:
     x, y = _position(6)
     assert canvas[y, x].any()
     assert not canvas[y - SIZE, x - SIZE].any()
+
+
+def test_a_build_counts_every_frame_up_to_the_end_of_its_stretch() -> None:
+    """The frames ahead of the stretch are passed and the stretch is drawn, and
+    a build handles both."""
+    stretch = Stretch(begin_frame=10_000, end_frame=10_102)
+
+    reaching = ClipProgress(frames_done=5_000, stretch=stretch)
+    drawing = ClipProgress(frames_done=10_050, stretch=stretch)
+
+    assert reaching.frames_total == 10_103
+    assert not reaching.drawing
+    assert drawing.drawing
+    assert reaching.fraction == pytest.approx(5_000 / 10_103)
+    assert stretch.drawn_frames == 103
+
+
+def test_passing_the_frames_ahead_of_a_stretch_reports_as_it_goes(tmp_path) -> None:
+    video = _write_video(tmp_path / "recording.avi", frames=4 * REPORT_EVERY + 10)
+    stretch = Stretch(begin_frame=4 * REPORT_EVERY, end_frame=4 * REPORT_EVERY + 5)
+    reports: list[ClipProgress] = []
+
+    frames = list(PassingFrameSource(video, stretch=stretch, on_progress=reports.append).colour_frames())
+
+    assert [report.frames_done for report in reports] == [REPORT_EVERY * n for n in range(1, 5)]
+    assert len(frames) == 10
+
+
+def test_the_shape_is_read_from_the_start_without_passing_anything(tmp_path) -> None:
+    video = _write_video(tmp_path / "recording.avi", frames=40)
+    reports: list[ClipProgress] = []
+
+    sample = PassingFrameSource(video, stretch=Stretch(30, 35), on_progress=reports.append).sample_frame()
+
+    assert sample is not None
+    assert reports == []
+
+
+def _write_video(path, *, frames: int):
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), 25.0, (64, 48))
+    for index in range(frames):
+        writer.write(np.full((48, 64, 3), index % 255, dtype=np.uint8))
+    writer.release()
+    return path
 
 
 def _track(*, frames: list[int]) -> StoredTrack:

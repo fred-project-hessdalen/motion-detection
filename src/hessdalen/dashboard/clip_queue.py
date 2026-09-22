@@ -20,28 +20,42 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from hessdalen.dashboard.track_clip import ClipProgress
+
 Stage = Literal["absent", "queued", "building", "ready", "failed"]
+
+Report = Callable[[ClipProgress], None]
+"""What a job calls to say how far it has got."""
+
+Job = Callable[[Report], Path]
+"""The work that builds one clip, handed a way to report its progress."""
 
 
 @dataclass(frozen=True, slots=True)
 class ClipState:
-    """How far the clip of one track has got."""
+    """How far the clip of one track has got.
+
+    Progress is None until the build first reports, which it does not
+    while its video is still being fetched.
+    """
 
     stage: Stage
     clip: Path | None
     error: str
+    progress: ClipProgress | None
 
 
-ABSENT = ClipState(stage="absent", clip=None, error="")
+ABSENT = ClipState(stage="absent", clip=None, error="", progress=None)
 
 
 class ClipQueue:
     def __init__(self) -> None:
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="track-clip")
         self._jobs: dict[str, Future[Path]] = {}
+        self._progress: dict[str, ClipProgress] = {}
         self._lock = threading.Lock()
 
-    def request(self, key: str, job: Callable[[], Path]) -> None:
+    def request(self, key: str, job: Job) -> None:
         """Have the clip of this track built, unless it is already waiting,
         under way or done.
 
@@ -53,20 +67,30 @@ class ClipQueue:
                     future.cancel()
             if _standing(self._jobs.get(key)):
                 return
-            self._jobs[key] = self._executor.submit(job)
+            self._progress.pop(key, None)
+            self._jobs[key] = self._executor.submit(job, self._reporter(key))
 
     def state(self, key: str) -> ClipState:
         with self._lock:
             future = self._jobs.get(key)
+            progress = self._progress.get(key)
         if future is None or future.cancelled():
             return ABSENT
         if not future.done():
-            return ClipState(stage="building" if future.running() else "queued", clip=None, error="")
+            stage: Stage = "building" if future.running() else "queued"
+            return ClipState(stage=stage, clip=None, error="", progress=progress)
 
         failure = future.exception()
         if failure is not None:
-            return ClipState(stage="failed", clip=None, error=str(failure))
-        return ClipState(stage="ready", clip=future.result(), error="")
+            return ClipState(stage="failed", clip=None, error=str(failure), progress=progress)
+        return ClipState(stage="ready", clip=future.result(), error="", progress=progress)
+
+    def _reporter(self, key: str) -> Report:
+        def report(progress: ClipProgress) -> None:
+            with self._lock:
+                self._progress[key] = progress
+
+        return report
 
 
 def _standing(future: Future[Path] | None) -> bool:
