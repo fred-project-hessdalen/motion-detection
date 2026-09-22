@@ -68,7 +68,7 @@ def test_between_matches_the_path_is_drawn_and_no_box() -> None:
     draw_stored_track(canvas, track=_track(frames=[5, 6, 9]), frame_number=7, color=COLOR, size=SIZE)
 
     x, y = _position(6)
-    assert canvas[y, x].any()
+    assert canvas[y, x - SIZE - 1].any()
     assert not canvas[y - SIZE, x - SIZE].any()
 
 

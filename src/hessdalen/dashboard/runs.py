@@ -314,7 +314,7 @@ def _draw_overlays(canvas: np.ndarray, *, overlays: tuple[_Overlay, ...], frame_
             continue
 
         color = track_color(overlay.track_id)
-        draw_trail(canvas, polyline=overlay.polyline[:reached], color=color)
+        draw_trail(canvas, polyline=overlay.polyline[:reached], color=color, clear=size)
         if overlay.frames[reached - 1] == frame_number:
             draw_box(canvas, point=overlay.polyline[reached - 1], color=color, size=size, label=str(overlay.track_id))
 
