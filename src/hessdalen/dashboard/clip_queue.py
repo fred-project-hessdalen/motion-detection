@@ -7,8 +7,8 @@ path, and picks the clip up once it is there.
 
 One clip is built at a time, because the machine is shared with the
 archive sift. A request for another track drops every request still
-waiting, so clicking through a cluster queues nothing but the track
-looked at last, and a clip already under way is finished and kept.
+waiting and stops the clip under way at its next report, so clicking
+through a cluster builds nothing but the track looked at last.
 """
 
 from __future__ import annotations
@@ -52,20 +52,26 @@ class ClipState:
 ABSENT = ClipState(stage="absent", clip=None, error="", progress=None)
 
 
+class Superseded(Exception):
+    """Raised into a job when it reports after another track was asked for."""
+
+
 class ClipQueue:
     def __init__(self) -> None:
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="track-clip")
         self._jobs: dict[str, Future[Path]] = {}
         self._progress: dict[str, Progress] = {}
+        self._wanted = ""
         self._lock = threading.Lock()
 
     def request(self, key: str, job: Job) -> None:
         """Have the clip of this track built, unless it is already waiting,
         under way or done.
 
-        A request that failed is tried again.
+        A request that failed or was stopped is tried again.
         """
         with self._lock:
+            self._wanted = key
             for other, future in self._jobs.items():
                 if other != key:
                     future.cancel()
@@ -85,6 +91,8 @@ class ClipQueue:
             return ClipState(stage=stage, clip=None, error="", progress=progress)
 
         failure = future.exception()
+        if isinstance(failure, Superseded):
+            return ABSENT
         if failure is not None:
             return ClipState(stage="failed", clip=None, error=str(failure), progress=progress)
         return ClipState(stage="ready", clip=future.result(), error="", progress=progress)
@@ -92,6 +100,8 @@ class ClipQueue:
     def _reporter(self, key: str) -> Report:
         def report(progress: Progress) -> None:
             with self._lock:
+                if self._wanted != key:
+                    raise Superseded(key)
                 self._progress[key] = progress
 
         return report

@@ -289,7 +289,7 @@ def _clip_progress(key: str, *, fetching: bool) -> None:
     elif state.stage == "failed":
         st.error(f"The clip could not be built: {state.error}")
     elif state.stage == "queued":
-        st.caption("Waiting for the clip before it to finish")
+        st.caption("Stopping the previous clip")
     elif state.progress is None:
         st.caption("Fetching the video from the archive" if fetching else "Opening the recording")
     elif isinstance(state.progress, FetchProgress):
@@ -332,14 +332,18 @@ def _clip_job(source: VideoSource, *, track: StoredTrack) -> Job:
                 track, frames_per_second=details.frames_per_second, frame_count=details.frame_count
             )
             part = clip.with_name(f"{clip.stem}.part{clip.suffix}")
-            build_track_clip(
-                video,
-                track=track,
-                stretch=stretch,
-                frames_per_second=details.frames_per_second,
-                output=part,
-                on_progress=report,
-            )
+            try:
+                build_track_clip(
+                    video,
+                    track=track,
+                    stretch=stretch,
+                    frames_per_second=details.frames_per_second,
+                    output=part,
+                    on_progress=report,
+                )
+            except BaseException:
+                part.unlink(missing_ok=True)
+                raise
             part.replace(clip)
         return clip
 

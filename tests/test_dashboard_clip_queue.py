@@ -57,6 +57,29 @@ def test_asking_for_another_track_drops_a_request_still_waiting() -> None:
     _settle(queue, "latest")
     assert queue.state("waiting").stage == "absent"
     assert queue.state("latest").stage == "ready"
+
+
+def test_asking_for_another_track_stops_the_clip_under_way_at_its_next_report() -> None:
+    queue = ClipQueue()
+    started, release = threading.Event(), threading.Event()
+
+    def job(report) -> Path:
+        started.set()
+        release.wait(WAIT)
+        report(ClipProgress(frames_done=60, stretch=STRETCH))
+        return Path("running.mp4")
+
+    queue.request("running", job)
+    assert started.wait(WAIT)
+    queue.request("latest", _job(Path("latest.mp4")))
+    release.set()
+
+    _settle(queue, "latest")
+    assert queue.state("running").stage == "absent"
+    assert queue.state("latest").stage == "ready"
+
+    queue.request("running", _job(Path("running.mp4")))
+    _settle(queue, "running")
     assert queue.state("running").stage == "ready"
 
 

@@ -10,13 +10,12 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from hessdalen.io.drive import ArchiveVideo, fetch_through
+from hessdalen.io.drive import STREAMS, ArchiveVideo
 
 REMOTE = "hessdalen:"
 """The rclone remote the archive is reached through, signed in with the
@@ -96,8 +95,8 @@ def fetch_video(directory: Path, *, video: ArchiveVideo, on_progress: Callable[[
     part = target.with_name(f"{target.name}.part")
     on_progress(FetchProgress(bytes_done=0, bytes_total=video.size_bytes))
     try:
-        _fetch_watched(video, part=part, on_progress=on_progress)
-    except (OSError, subprocess.CalledProcessError):
+        _copy_watched(video, part=part, on_progress=on_progress)
+    except BaseException:
         part.unlink(missing_ok=True)
         raise
     part.replace(target)
@@ -105,31 +104,53 @@ def fetch_video(directory: Path, *, video: ArchiveVideo, on_progress: Callable[[
     return target
 
 
-def _fetch_watched(video: ArchiveVideo, *, part: Path, on_progress: Callable[[FetchProgress], None]) -> None:
-    """Fetch into the part file while another thread reports how much of it has
-    arrived.
+def _copy_watched(video: ArchiveVideo, *, part: Path, on_progress: Callable[[FetchProgress], None]) -> None:
+    """Copy the video into the part file, reporting how much of it has arrived
+    until rclone exits.
 
     rclone reports nothing to its caller, and it writes into the file it
     was given, whose size grows with what has arrived. The space it
     reserves on disk is the whole video from the start, so that says
-    nothing.
+    nothing. A report that raises stops rclone before the error is
+    passed on.
     """
-    stop = threading.Event()
-    watcher = threading.Thread(
-        target=_watch, args=(part,), kwargs={"total": video.size_bytes, "on_progress": on_progress, "stop": stop}
-    )
-    watcher.start()
+    part.parent.mkdir(parents=True, exist_ok=True)
+    command = copy_command(video, part)
+    rclone = subprocess.Popen(command)
     try:
-        fetch_through(REMOTE, video, part)
+        while not _exited(rclone):
+            if part.is_file():
+                arrived = min(part.stat().st_size, video.size_bytes)
+                on_progress(FetchProgress(bytes_done=arrived, bytes_total=video.size_bytes))
     finally:
-        stop.set()
-        watcher.join()
+        if rclone.poll() is None:
+            rclone.terminate()
+        rclone.wait()
+
+    if rclone.returncode != 0:
+        raise subprocess.CalledProcessError(rclone.returncode, command)
+    if part.stat().st_size != video.size_bytes:
+        raise OSError(f"{video.name} arrived as {part.stat().st_size} bytes against the {video.size_bytes} listed")
 
 
-def _watch(part: Path, *, total: int, on_progress: Callable[[FetchProgress], None], stop: threading.Event) -> None:
-    while not stop.wait(WATCH_SECONDS):
-        if part.is_file():
-            on_progress(FetchProgress(bytes_done=min(part.stat().st_size, total), bytes_total=total))
+def copy_command(video: ArchiveVideo, target: Path) -> list[str]:
+    """The rclone call that copies the video to target, the one the archive
+    sift makes.
+
+    The remote is rooted at the archive, so the first segment of a
+    listing path names that root and is dropped.
+    """
+    source = REMOTE + video.path.split("/", 1)[1]
+    return ["rclone", "copyto", "--multi-thread-streams", str(STREAMS), source, str(target)]
+
+
+def _exited(process: subprocess.Popen[bytes]) -> bool:
+    """Whether the process exits within one look at its file."""
+    try:
+        process.wait(timeout=WATCH_SECONDS)
+    except subprocess.TimeoutExpired:
+        return False
+    return True
 
 
 def fetch_seconds(video: ArchiveVideo) -> float:
