@@ -29,8 +29,10 @@ import pyarrow.parquet as pq
 import streamlit as st
 from plotly.colors import hex_to_rgb, qualitative
 
+from hessdalen.config import config
 from hessdalen.dashboard.clip_queue import ClipQueue, Job, Report
 from hessdalen.dashboard.cluster_labels import label_of, read_labels, write_labels
+from hessdalen.dashboard.panels import DEVIATION, RECORDING
 from hessdalen.dashboard.runs import probe
 from hessdalen.dashboard.track_clip import (
     ClipProgress,
@@ -98,6 +100,8 @@ SELECTED_TITLE = "Selected track"
 NAMES_TITLE = "Cluster labels"
 WHOLE_TITLE = "In the frame"
 CLOSE_UP_TITLE = "Close up"
+CLIP_PANELS = (RECORDING, DEVIATION)
+"""The panels a track's videos are built for, in the order they are offered."""
 SAMPLE_COLOR = "#e6007e"
 NEAREST_COLOR = "#0091d5"
 SAMPLE_MARKER = {"color": SAMPLE_COLOR, "symbol": "circle-open", "size": 12, "line": {"width": 2}}
@@ -161,9 +165,16 @@ VIDEO_HELP = (
     "shows the whole picture with the track's path and a box drawn on it. Close up shows a crop that "
     "keeps the detection in the middle and nothing drawn over it, so the object itself can be seen. That "
     "crop eases towards the detection rather than sitting on it, because the pixel a track is matched on "
-    "hops about inside its blob and would shake the picture. Both "
+    "hops about inside its blob and would shake the picture. All of them "
     "are built in the background, one track at a time, and choosing another track stops the build under "
     "way."
+)
+PANEL_HELP = (
+    "Recording shows the picture as the camera recorded it. Deviation shows how far each pixel stands "
+    "from the background the detector measures it against, with the detection threshold at full white. "
+    "The deviation is measured over this stretch alone, so the background model opens on the stretch's "
+    "first frame and the frames before the track starts are what it has to settle in. Both panels are "
+    "built together, so switching between them plays at once."
 )
 GALLERY_HELP = (
     f"Up to {GALLERY_SIZE} tracks drawn at random from the cluster, each drawn from its stored path and "
@@ -511,10 +522,20 @@ def _video(key: str, *, recording: str, stored: StoredTrack) -> None:
 
 
 def _play(clips: TrackClips) -> None:
-    """The whole frame and the crop that follows the detection, a tab each."""
+    """The whole frame and the crop that follows the detection, a tab each, of
+    whichever panel is chosen.
+
+    Both panels are built together, so the choice costs nothing to
+    change.
+    """
+    panel = st.segmented_control(
+        "Panel", options=CLIP_PANELS, default=RECORDING, format_func=str.capitalize, help=PANEL_HELP
+    )
+    pair = clips.pair(str(panel or RECORDING))
+
     whole, close = st.tabs([WHOLE_TITLE, CLOSE_UP_TITLE])
-    whole.video(str(clips.whole), loop=True, autoplay=True, muted=True)
-    close.video(str(clips.close_up), loop=True, autoplay=True, muted=True)
+    whole.video(str(pair.whole), loop=True, autoplay=True, muted=True)
+    close.video(str(pair.close_up), loop=True, autoplay=True, muted=True)
 
 
 def _source(recording: str) -> VideoSource | None:
@@ -615,16 +636,17 @@ def _clip_job(source: VideoSource, *, track: StoredTrack) -> Job:
                     track=track,
                     stretch=stretch,
                     frames_per_second=details.frames_per_second,
+                    settings=config().settings,
                     output=parts,
                     on_progress=report,
                 )
             except BaseException:
-                parts.whole.unlink(missing_ok=True)
-                parts.close_up.unlink(missing_ok=True)
+                for path in parts.paths:
+                    path.unlink(missing_ok=True)
                 raise
-            parts.whole.replace(clips.whole)
-            parts.close_up.replace(clips.close_up)
-        return clips.whole
+            for part, clip in zip(parts.paths, clips.paths):
+                part.replace(clip)
+        return clips.recording.whole
 
     return job
 
@@ -638,7 +660,7 @@ def _archived(source: VideoSource) -> ArchiveVideo:
 def _clips(video: Path, *, track: StoredTrack) -> TrackClips:
     details = probe(video)
     stretch = stretch_around(track, frames_per_second=details.frames_per_second, frame_count=details.frame_count)
-    return track_clip_paths(video, track=track, stretch=stretch, output_dir=CLIPS_DIR)
+    return track_clip_paths(video, track=track, stretch=stretch, settings=config().settings, output_dir=CLIPS_DIR)
 
 
 def _gallery(tracks: pd.DataFrame, *, cluster: str | None, sample: pd.DataFrame) -> None:

@@ -1,6 +1,7 @@
 """What a track clip shows of its recording, and what it draws on each
 frame."""
 
+from dataclasses import replace
 from fractions import Fraction
 
 import av
@@ -8,6 +9,8 @@ import cv2
 import numpy as np
 import pytest
 
+from hessdalen.config import config
+from hessdalen.dashboard.panels import DEVIATION, RECORDING
 from hessdalen.dashboard.track_clip import (
     CLOSE_UP_RADII,
     INDEXED_FROM,
@@ -17,6 +20,7 @@ from hessdalen.dashboard.track_clip import (
     SeekingFrameSource,
     StoredTrack,
     Stretch,
+    TrackClips,
     close_up_centres,
     close_up_side,
     cut_close_up,
@@ -26,7 +30,9 @@ from hessdalen.dashboard.track_clip import (
     stretch_source,
     track_clip_paths,
 )
+from hessdalen.processing.movement import MovementSettings
 
+SETTINGS = config().settings
 RATE = 25.0
 SIZE = 8
 COLOR = (0, 255, 0)
@@ -208,14 +214,37 @@ def test_a_close_up_over_the_edge_of_the_frame_is_padded_with_black() -> None:
     assert crop[5, 5].tolist() == [200, 200, 200]
 
 
-def test_both_videos_of_a_track_are_kept_under_one_name(tmp_path) -> None:
-    clips = track_clip_paths(
-        tmp_path / "Cam1.mkv", track=_track(frames=[5]), stretch=Stretch(0, 9), output_dir=tmp_path
-    )
+def test_every_video_of_a_track_is_kept_under_one_name(tmp_path) -> None:
+    clips = _paths(tmp_path)
 
-    assert clips.whole != clips.close_up
+    assert len(set(clips.paths)) == 4
     assert not clips.built
-    assert clips.parts.whole.suffixes == [".part", ".mp4"]
+    assert clips.parts.recording.whole.suffixes == [".part", ".mp4"]
+
+
+def test_a_panel_names_the_pair_of_videos_it_is_shown_in(tmp_path) -> None:
+    clips = _paths(tmp_path)
+
+    assert clips.pair(RECORDING) == clips.recording
+    assert clips.pair(DEVIATION) == clips.deviation
+
+
+def test_settings_the_deviation_is_measured_under_name_the_videos(tmp_path) -> None:
+    """A clip built under other settings holds another deviation, so it is
+    built again rather than played as it stands."""
+    louder = replace(SETTINGS, detection=replace(SETTINGS.detection, detection_sigma=20.0))
+
+    assert _paths(tmp_path).paths != _paths(tmp_path, settings=louder).paths
+
+
+def _paths(tmp_path, *, settings: MovementSettings = SETTINGS) -> TrackClips:
+    return track_clip_paths(
+        tmp_path / "Cam1.mkv",
+        track=_track(frames=[5]),
+        stretch=Stretch(0, 9),
+        settings=settings,
+        output_dir=tmp_path,
+    )
 
 
 def _nothing(progress: ClipProgress) -> None:

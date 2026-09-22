@@ -1,34 +1,46 @@
 """One stored track drawn on the stretch of its recording it was found in.
 
-A build writes two videos of that stretch. One holds the whole frame
-with the track's path and a box on it, and the other holds a crop that
-keeps the detection in the middle of the picture.
+A build writes four videos of that stretch, the recording and the
+deviation the detector measures it against, and of each of those the
+whole frame with the track's path and a box on it and a crop that keeps
+the detection in the middle of the picture. All four come out of the one
+pass over the recording, because reaching the stretch is most of what a
+build costs.
 
-Nothing is detected. The track file already holds where the track was on
-every frame it was matched, so the drawn path sits where the detector
-saw the object as long as the frames carry the numbers the detector
-counted. A recording whose stamps rise with its frames is reached by
-seeking to the keyframe before the stretch and reading the numbers off
-those stamps. Any other recording is reached by passing every frame
-ahead of the stretch.
+No track is detected here. The track file already holds where the track
+was on every frame it was matched, so the drawn path sits where the
+detector saw the object as long as the frames carry the numbers the
+detector counted. A recording whose stamps rise with its frames is
+reached by seeking to the keyframe before the stretch and reading the
+numbers off those stamps. Any other recording is reached by passing
+every frame ahead of the stretch.
+
+The deviation is measured again over the stretch alone, so the
+background model opens on the stretch's first frame and takes its scene
+from the frames after it. The second before the track starts is what it
+has to settle in, and the first frames of a clip therefore read higher
+than a run over the whole recording leaves them.
 """
 
 from __future__ import annotations
 
 import bisect
-from collections.abc import Callable, Generator, Iterator
-from dataclasses import dataclass
+from collections.abc import Callable, Generator
+from contextlib import ExitStack
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import av
 import cv2
 import numpy as np
 
-from hessdalen.dashboard.encoder import LIVE, FrameWriter, encode, encoder, even, playback_rate
-from hessdalen.dashboard.panels import box_size, draw_box, draw_frame_number, draw_trail
+from hessdalen.dashboard.encoder import LIVE, FrameWriter, encoder, even, playback_rate
+from hessdalen.dashboard.panels import DEVIATION, box_size, draw_box, draw_frame_number, draw_trail
 from hessdalen.dashboard.store import digest
 from hessdalen.io.video import TIMESTAMP_MASK_COORDS, FrameSource, VideoStream
 from hessdalen.processing.debug import track_color
+from hessdalen.processing.devices import detection_stage
+from hessdalen.processing.movement import MovementSettings
 
 MODULES = ("track_clip.py", "panels.py", "encoder.py")
 """The dashboard modules that decide what a built track clip holds."""
@@ -141,29 +153,57 @@ def stretch_around(track: StoredTrack, *, frames_per_second: float, frame_count:
 
 
 @dataclass(frozen=True, slots=True)
-class TrackClips:
-    """The two videos one track is built into.
-
-    Both are drawn from the same pass over the recording, so a track
-    that has one of them has the other.
-    """
+class ClipPair:
+    """One panel as the two videos it is shown in."""
 
     whole: Path
     close_up: Path
 
     @property
+    def paths(self) -> tuple[Path, ...]:
+        return (self.whole, self.close_up)
+
+
+@dataclass(frozen=True, slots=True)
+class TrackClips:
+    """The videos one track is built into, a pair for each panel.
+
+    All of them are drawn from the same pass over the recording, so a
+    track that has one of them has the rest.
+    """
+
+    recording: ClipPair
+    deviation: ClipPair
+
+    def pair(self, panel: str) -> ClipPair:
+        """The videos of one panel, by the name the page calls it."""
+        return self.deviation if panel == DEVIATION else self.recording
+
+    @property
+    def paths(self) -> tuple[Path, ...]:
+        return self.recording.paths + self.deviation.paths
+
+    @property
     def built(self) -> bool:
-        return self.whole.is_file() and self.close_up.is_file()
+        return all(path.is_file() for path in self.paths)
 
     @property
     def parts(self) -> TrackClips:
-        """Where the two videos are written while they are being built."""
-        return TrackClips(whole=_part(self.whole), close_up=_part(self.close_up))
+        """Where the videos are written while they are being built."""
+        return TrackClips(recording=_parts(self.recording), deviation=_parts(self.deviation))
 
 
-def track_clip_paths(video: Path, *, track: StoredTrack, stretch: Stretch, output_dir: Path) -> TrackClips:
+def track_clip_paths(
+    video: Path, *, track: StoredTrack, stretch: Stretch, settings: MovementSettings, output_dir: Path
+) -> TrackClips:
     """Where the videos of this track are kept, named for everything that
-    decides them."""
+    decides them.
+
+    The settings the deviation is measured under are part of the name,
+    so a clip built under other settings than the ones in hand is built
+    again. The device they name is left out, because both devices
+    measure the same deviation.
+    """
     name = digest(
         {
             "video": video.name,
@@ -171,11 +211,18 @@ def track_clip_paths(video: Path, *, track: StoredTrack, stretch: Stretch, outpu
             "begin_frame": stretch.begin_frame,
             "end_frame": stretch.end_frame,
             "frame_height": track.frame_height,
+            "background": asdict(settings.background),
+            "detection": asdict(settings.detection),
         },
         modules=MODULES,
     )
     stem = f"{video.stem}__track{track.track_id}__{name}"
-    return TrackClips(whole=output_dir / f"{stem}.mp4", close_up=output_dir / f"{stem}__close.mp4")
+    return TrackClips(
+        recording=ClipPair(whole=output_dir / f"{stem}.mp4", close_up=output_dir / f"{stem}__close.mp4"),
+        deviation=ClipPair(
+            whole=output_dir / f"{stem}__deviation.mp4", close_up=output_dir / f"{stem}__deviation_close.mp4"
+        ),
+    )
 
 
 def build_track_clip(
@@ -184,16 +231,16 @@ def build_track_clip(
     track: StoredTrack,
     stretch: Stretch,
     frames_per_second: float,
+    settings: MovementSettings,
     output: TrackClips,
     on_progress: Callable[[ClipProgress], None],
 ) -> int:
     """Draw the track on its stretch of the recording, and return the frames
     written.
 
-    Both videos are written from the one pass, because reaching the
-    stretch is most of what a build costs. The whole frame carries the
-    path and the box, and the close-up carries the picture alone, which
-    is what the crop is there to show.
+    Every video is written from the one pass. The whole frame of each
+    panel carries the path and the box, and the close-up carries the
+    picture alone, which is what the crop is there to show.
 
     The frames are resized to the height the track was detected at,
     because that is the frame its positions are pixels of.
@@ -207,42 +254,73 @@ def build_track_clip(
     frame_height, frame_width = even(height), even(width)
     size = box_size(frame_height, frame_width)
     color = track_color(track.track_id)
-    planar = np.empty((frame_height * 3 // 2, frame_width), dtype=np.uint8)
-
     side = close_up_side(size)
+
     centres = close_up_centres(track, stretch=stretch, size=size)
+    stage = detection_stage(
+        device=settings.device,
+        background=settings.background,
+        detection=settings.detection,
+        timestamp_mask=stream.mask,
+    )
+    planar = np.empty((frame_height * 3 // 2, frame_width), dtype=np.uint8)
     crop = np.empty((side, side, 3), dtype=np.uint8)
     crop_planar = np.empty((side * 3 // 2, side), dtype=np.uint8)
 
-    def planar_frames(write_close_up: FrameWriter) -> Iterator[np.ndarray]:
+    output.recording.whole.parent.mkdir(parents=True, exist_ok=True)
+    rate = playback_rate(frames_per_second)
+    written = 0
+    with ExitStack() as open_encoders:
+        shown, measured = (
+            _opened(open_encoders, pair, height=frame_height, width=frame_width, side=side, rate=rate)
+            for pair in (output.recording, output.deviation)
+        )
         for offset, colour in enumerate(stream.stream_frames()):
             frame_number = stretch.begin_frame + offset
             if frame_number > stretch.end_frame:
-                return
+                break
 
-            canvas = np.ascontiguousarray(colour.frame[:frame_height, :frame_width])
-            cut_close_up(crop, frame=canvas, centre=centres[offset])
-            cv2.cvtColor(crop, cv2.COLOR_BGR2YUV_I420, dst=crop_planar)
-            write_close_up(crop_planar)
+            stage.detections(cv2.cvtColor(colour.frame, cv2.COLOR_BGR2GRAY))
+            np.copyto(shown.canvas, colour.frame[:frame_height, :frame_width])
+            cv2.cvtColor(stage.deviation_image()[:frame_height, :frame_width], cv2.COLOR_GRAY2BGR, dst=measured.canvas)
 
-            draw_stored_track(canvas, track=track, frame_number=frame_number, color=color, size=size)
-            draw_frame_number(canvas, frame_number)
-            cv2.cvtColor(canvas, cv2.COLOR_BGR2YUV_I420, dst=planar)
-            yield planar
+            for panel in (shown, measured):
+                cut_close_up(crop, frame=panel.canvas, centre=centres[offset])
+                cv2.cvtColor(crop, cv2.COLOR_BGR2YUV_I420, dst=crop_planar)
+                panel.close_up(crop_planar)
+
+                draw_stored_track(panel.canvas, track=track, frame_number=frame_number, color=color, size=size)
+                draw_frame_number(panel.canvas, frame_number)
+                cv2.cvtColor(panel.canvas, cv2.COLOR_BGR2YUV_I420, dst=planar)
+                panel.whole(planar)
+
+            written += 1
             if (offset + 1) % REPORT_EVERY == 0 or frame_number == stretch.end_frame:
                 on_progress(ClipProgress(frames_done=frame_number + 1, stretch=stretch))
+    return written
 
-    output.whole.parent.mkdir(parents=True, exist_ok=True)
-    rate = playback_rate(frames_per_second)
-    with encoder(output.close_up, width=side, height=side, frames_per_second=rate, encoding=LIVE) as write_close_up:
-        return encode(
-            planar_frames(write_close_up),
-            output=output.whole,
-            width=frame_width,
-            height=frame_height,
-            frames_per_second=rate,
-            encoding=LIVE,
-        )
+
+@dataclass(frozen=True, slots=True)
+class _Panel:
+    """One picture of the stretch while it is being written, and the two
+    encoders it goes to."""
+
+    canvas: np.ndarray
+    whole: FrameWriter
+    close_up: FrameWriter
+
+
+def _opened(stack: ExitStack, pair: ClipPair, *, height: int, width: int, side: int, rate: float) -> _Panel:
+    """A panel with both its encoders running, closed when the stack is."""
+    return _Panel(
+        canvas=np.empty((height, width, 3), dtype=np.uint8),
+        whole=stack.enter_context(
+            encoder(pair.whole, width=width, height=height, frames_per_second=rate, encoding=LIVE)
+        ),
+        close_up=stack.enter_context(
+            encoder(pair.close_up, width=side, height=side, frames_per_second=rate, encoding=LIVE)
+        ),
+    )
 
 
 def close_up_side(size: int) -> int:
@@ -290,6 +368,10 @@ def cut_close_up(crop: np.ndarray, *, frame: np.ndarray, centre: np.ndarray) -> 
 
     crop[:] = 0
     crop[rows.start - top : rows.stop - top, columns.start - left : columns.stop - left] = frame[rows, columns]
+
+
+def _parts(pair: ClipPair) -> ClipPair:
+    return ClipPair(whole=_part(pair.whole), close_up=_part(pair.close_up))
 
 
 def _part(clip: Path) -> Path:

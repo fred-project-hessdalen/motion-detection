@@ -162,15 +162,20 @@ Clicking a point draws that track at once from its stored path: where it
 was in the frame, its shape fitted to a box of its own, and its
 brightness and size frame by frame. Drawing it on its recording, from a
 second before it starts to a second after it ends, runs in the
-background, and two videos play once they are built. In the frame holds
-the whole picture with the track's path and a box drawn on it, and Close
-up holds a crop three box half-widths out from the detection on every
-side, which follows it from frame to frame and carries nothing drawn
-over it. The crop eases a quarter of the way towards the detection each
+background, and four videos play once they are built. Panel chooses
+between the recording and the deviation the detector measures it
+against, and the tabs choose between the two views of the chosen panel.
+In the frame holds the whole picture with the track's path and a box
+drawn on it, and Close up holds a crop three box half-widths out from
+the detection on every side, which follows it from frame to frame and
+carries nothing drawn over it. The deviation is measured over the
+stretch alone, so the background model opens on the stretch's first
+frame and the second before the track starts is what it has to settle
+in. The crop eases a quarter of the way towards the detection each
 frame, so the hop of the matched pixel inside its blob hardly moves it,
 and it jumps to the detection outright once that sits more than a box
 half-width from the middle. The crop is black where it reaches past the
-edge of the picture. Both come out of the one pass over the recording, because
+edge of the picture. All four come out of the one pass over the recording, because
 reaching the track is most of what a build costs. A track deep in a
 recording is reached by seeking to the keyframe before it, which needs
 the recording's frame stamps read first. A recording whose stamps do
