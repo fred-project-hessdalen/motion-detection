@@ -56,10 +56,11 @@ def test_every_chart_is_drawn_from_the_path_alone() -> None:
 def test_a_gallery_draws_each_track_under_its_caption_in_the_order_given() -> None:
     paths = pd.concat([_track("a", xs=[1.0, 2.0, 3.0], ys=[1.0, 2.0, 3.0]), _track("b", xs=[5.0, 9.0], ys=[1.0, 1.0])])
 
-    drawn = gallery_html(paths, captions={"b": "2. planes", "a": "1. birds <&>"})
+    drawn = gallery_html(paths, captions={"b": "2. planes", "a": "1. birds <&>"}, frame="#e6007e")
 
     figures = drawn.split("<figure")[1:]
     assert len(figures) == 2
+    assert all("#e6007e" in figure for figure in figures)
     assert "2. planes" in figures[0]
     assert "1. birds &lt;&amp;&gt;" in figures[1]
     assert _svg(figures[0]).count("<circle") == 2

@@ -81,9 +81,10 @@ def light_curve(points: pd.DataFrame) -> alt.Chart:
     )
 
 
-def gallery_html(paths: pd.DataFrame, *, captions: Mapping[str, str]) -> str:
-    """Each captioned track fitted to a small panel under its caption, in the
-    order of the captions and in rows that wrap to the width they are given.
+def gallery_html(paths: pd.DataFrame, *, captions: Mapping[str, str], frame: str) -> str:
+    """Each captioned track fitted to a small panel under its caption, framed
+    in the given colour, in the order of the captions and in rows that wrap
+    to the width they are given.
 
     The panels are SVG images in one block of HTML, so a gallery is a
     single element on the page however many tracks it holds, and
@@ -92,11 +93,11 @@ def gallery_html(paths: pd.DataFrame, *, captions: Mapping[str, str]) -> str:
     """
     drawn = fitted(paths[paths["key"].isin(captions)])
     by_key = {key: group.sort_values("frame_number") for key, group in drawn.groupby("key", sort=False)}
-    figures = "".join(_panel_svg(by_key[key], caption=caption) for key, caption in captions.items())
+    figures = "".join(_panel_svg(by_key[key], caption=caption, frame=frame) for key, caption in captions.items())
     return f'<div style="display:flex;flex-wrap:wrap;gap:{PANEL_GAP_PIXELS}px">{figures}</div>'
 
 
-def _panel_svg(points: pd.DataFrame, *, caption: str) -> str:
+def _panel_svg(points: pd.DataFrame, *, caption: str, frame: str) -> str:
     """One fitted track, its path in grey and a dot on each frame coloured by
     how far along the track it is."""
     x = (points["u"].to_numpy() + CLOSE_UP_MARGIN) / (2 * CLOSE_UP_MARGIN) * PANEL_PIXELS
@@ -117,7 +118,7 @@ def _panel_svg(points: pd.DataFrame, *, caption: str) -> str:
         f'<figcaption style="font-size:10px;text-align:center;white-space:nowrap;overflow:hidden;'
         f'text-overflow:ellipsis">{html.escape(caption)}</figcaption>'
         f'<img src="{source}" width="{PANEL_PIXELS}" height="{PANEL_PIXELS}" alt="{html.escape(caption)}" '
-        f'style="border:1px solid #cfcfcf"></figure>'
+        f'style="border:2px solid {frame}"></figure>'
     )
 
 

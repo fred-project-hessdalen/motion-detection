@@ -17,7 +17,6 @@ keep has its video fetched from the archive before it is drawn.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -38,6 +37,7 @@ from hessdalen.dashboard.track_clip import (
     stretch_around,
     track_clip_path,
 )
+from hessdalen.dashboard.track_map_chart import MAP_HEIGHT, track_map_chart
 from hessdalen.dashboard.track_preview import close_up, frame_view, gallery_html, light_curve
 from hessdalen.dashboard.video_cache import (
     MIN_FREE_BYTES,
@@ -79,6 +79,17 @@ HOVER_TEMPLATE = (
 GALLERY_SIZE = 30
 NEIGHBOUR_RADIUS = 0.5
 SHUFFLE_KEY = "gallery_shuffle"
+MAP_KEY = "track_map"
+PICKED_KEY = "picked_track"
+SAMPLE_TITLE = "Cluster sample"
+NEAREST_TITLE = "Nearest tracks"
+SELECTED_TITLE = "Selected track"
+SAMPLE_COLOR = "#e6007e"
+NEAREST_COLOR = "#0091d5"
+SAMPLE_MARKER = {"color": SAMPLE_COLOR, "symbol": "circle-open", "size": 12, "line": {"width": 2}}
+NEAREST_MARKER = {"color": NEAREST_COLOR, "symbol": "diamond-open", "size": 12, "line": {"width": 2}}
+SELECTED_MARKER = {"color": "#ffd400", "symbol": "star", "size": 18, "line": {"width": 1, "color": "#333333"}}
+GRID_COLOR = "rgba(128, 128, 128, 0.25)"
 PANEL_CACHE_ENTRIES = 64
 POLL_SECONDS = 2.0
 
@@ -103,7 +114,8 @@ MAP_HELP = (
     "Every track the corpus holds, placed so that tracks with similar descriptors sit close together. "
     "Grey points are tracks the clustering left out of every cluster. Click a point to see its track. "
     "Scroll to zoom, drag to pan, and double-click to zoom back out. Click an entry in the legend to hide "
-    "or show its tracks."
+    "or show its tracks. A star marks the selected track, and rings mark the tracks the galleries below "
+    "the map show."
 )
 PATH_HELP = (
     "The track drawn from its stored path through the blob's centre, which is what the descriptors "
@@ -116,12 +128,14 @@ VIDEO_HELP = (
 )
 GALLERY_HELP = (
     f"Up to {GALLERY_SIZE} tracks drawn at random from the cluster, each drawn from its stored path and "
-    "fitted to its own panel. Colour runs from dark blue on a track's first frame to yellow on its last."
+    "fitted to its own panel. Colour runs from dark blue on a track's first frame to yellow on its last. "
+    "The map rings these tracks in the colour their panels are framed in."
 )
 SHUFFLE_HELP = "Draw another random sample of the cluster."
 NEIGHBOURS_HELP = (
     f"The {GALLERY_SIZE} tracks that lie nearest the selected track on the map, from any cluster, and no "
-    "further from it than the neighbour radius. Each panel names the cluster its track is in."
+    "further from it than the neighbour radius. Each panel names the cluster its track is in. The map "
+    "rings these tracks in the colour their panels are framed in."
 )
 RADIUS_HELP = (
     "How far from the selected track, in the map's own units, a track may lie to count among its nearest "
@@ -131,6 +145,17 @@ UNSOURCED_TEXT = (
     "The video behind this track was not kept after detection, and no ledger says where in the archive "
     "it came from, so it cannot be fetched."
 )
+
+
+@dataclass(frozen=True, slots=True)
+class Ring:
+    """Tracks marked on the map over their points: the selected track, and the
+    tracks a gallery shows, in the colour the gallery frames its panels
+    in."""
+
+    name: str
+    marker: dict[str, Any]
+    tracks: pd.DataFrame
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,22 +190,26 @@ def page() -> None:
         )
 
     shown = tracks[tracks["label"].isin(labels)] if labels else tracks
+    picked = _picked(shown, key=st.session_state.get(PICKED_KEY))
+    cluster = _gallery_cluster(str(chosen_cluster), picked=picked)
+    sample = shown.iloc[0:0] if cluster is None else _sample(shown, cluster=cluster)
+    nearest = shown.iloc[0:0] if picked is None else _nearest(shown, track=picked, radius=float(radius))
+    chosen = shown.iloc[0:0] if picked is None else shown[shown["key"] == picked["key"]]
+    rings = [
+        Ring(name=SAMPLE_TITLE, marker=SAMPLE_MARKER, tracks=sample),
+        Ring(name=NEAREST_TITLE, marker=NEAREST_MARKER, tracks=nearest),
+        Ring(name=SELECTED_TITLE, marker=SELECTED_MARKER, tracks=chosen),
+    ]
+
     map_column, track_column = st.columns([3, 2])
     with map_column:
         st.subheader("Tracks", help=MAP_HELP)
         st.caption(f"{len(shown)} of {len(tracks)} tracks")
-        event = st.plotly_chart(
-            _scatter(shown, colour_column=COLOUR_COLUMNS[colour or "Cluster"]),
-            on_select="rerun",
-            selection_mode="points",
-            key="track_map",
-            width="stretch",
-            config={"scrollZoom": True, "displaylogo": False},
-        )
-        picked = _picked(shown, event)
-        _gallery(shown, cluster=_gallery_cluster(str(chosen_cluster), picked=picked))
+        figure = _scatter(shown, colour_column=COLOUR_COLUMNS[colour or "Cluster"], rings=rings)
+        track_map_chart(figure, key=MAP_KEY, on_click=_remember_click)
+        _gallery(shown, cluster=cluster, sample=sample)
         if picked is not None:
-            _neighbours(shown, track=picked, radius=float(radius))
+            _neighbours(nearest, radius=float(radius))
 
     with track_column:
         if picked is None:
@@ -189,13 +218,46 @@ def page() -> None:
             _selected(picked, points=_points(paths, key=str(picked["key"])))
 
 
-def _scatter(tracks: pd.DataFrame, *, colour_column: str) -> go.Figure:
+def _remember_click() -> None:
+    """Keep the clicked track as the selected one until another is clicked.
+
+    The page reads it before the map is drawn, because the map rings the
+    tracks the galleries show, and those follow the selected track.
+    """
+    clicked = st.session_state[MAP_KEY].get("clicked")
+    if clicked:
+        st.session_state[PICKED_KEY] = str(clicked)
+
+
+def _picked(shown: pd.DataFrame, *, key: str | None) -> pd.Series | None:
+    held = shown.loc[shown["key"] == key]
+    return None if held.empty else held.iloc[0]
+
+
+def _sample(tracks: pd.DataFrame, *, cluster: str) -> pd.DataFrame:
+    """A random sample of the cluster's tracks, drawn anew on Shuffle."""
+    members = tracks[tracks["cluster"] == cluster]
+    return members.sample(n=min(GALLERY_SIZE, len(members)), random_state=st.session_state.get(SHUFFLE_KEY, 0))
+
+
+def _nearest(tracks: pd.DataFrame, *, track: pd.Series, radius: float) -> pd.DataFrame:
+    """The tracks nearest the selected one on the map, in any cluster and
+    within the radius."""
+    others = tracks[tracks["key"] != track["key"]]
+    distance = np.hypot(others["x"] - track["x"], others["y"] - track["y"])
+    return others.loc[distance[distance <= radius].nsmallest(GALLERY_SIZE).index]
+
+
+def _scatter(tracks: pd.DataFrame, *, colour_column: str, rings: list[Ring]) -> go.Figure:
     """The tracks drawn by the graphics card, one trace per colour, so the
     legend names each colour and a click on it hides or shows those tracks.
 
     Drawing on the card keeps zooming and panning smooth over thousands
-    of points. The fixed UI revision keeps the zoom when the page is
-    drawn again after a click.
+    of points. The fixed UI revision keeps the zoom when the plot is
+    handed the next figure, and each trace's uid keeps it hidden or shown
+    as the legend left it. The rings over the selected track and the
+    tracks the galleries show take no hover or click, so a click on a
+    ringed track selects the track under the ring.
     """
     traces = []
     for name, colour in _colours(tracks, column=colour_column).items():
@@ -206,22 +268,38 @@ def _scatter(tracks: pd.DataFrame, *, colour_column: str) -> go.Figure:
                 y=members["y"],
                 mode="markers",
                 name=str(name),
+                uid=f"{colour_column}:{name}",
                 marker={"color": colour, "size": 6, "opacity": 0.7},
-                selected={"marker": {"opacity": 1.0, "size": 11}},
-                unselected={"marker": {"opacity": 0.3}},
                 customdata=members[HOVER_COLUMNS].to_numpy(dtype=object),
                 hovertemplate=HOVER_TEMPLATE,
             )
         )
+    for ring in rings:
+        if ring.tracks.empty:
+            continue
+        traces.append(
+            go.Scattergl(
+                x=ring.tracks["x"],
+                y=ring.tracks["y"],
+                mode="markers",
+                name=ring.name,
+                uid=ring.name,
+                marker=ring.marker,
+                hoverinfo="skip",
+            )
+        )
     figure = go.Figure(traces)
     figure.update_layout(
-        height=620,
+        template="plotly_white",
+        height=MAP_HEIGHT,
         dragmode="pan",
         uirevision="track-map",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
         margin={"l": 0, "r": 0, "t": 10, "b": 0},
         legend={"title": {"text": colour_column.capitalize()}},
-        xaxis={"showgrid": True, "zeroline": False},
-        yaxis={"showgrid": True, "zeroline": False},
+        xaxis={"showgrid": True, "gridcolor": GRID_COLOR, "zeroline": False},
+        yaxis={"showgrid": True, "gridcolor": GRID_COLOR, "zeroline": False},
     )
     return figure
 
@@ -238,14 +316,6 @@ def _colours(tracks: pd.DataFrame, *, column: str) -> dict[str, str]:
     if (tracks["cluster"] == UNASSIGNED_NAME).any():
         colours[UNASSIGNED_NAME] = UNASSIGNED_COLOR
     return colours
-
-
-def _picked(shown: pd.DataFrame, event: Any) -> pd.Series | None:
-    points = event.selection.get("points", []) if isinstance(event.selection, Mapping) else []
-    if not points:
-        return None
-    held = shown.loc[shown["key"] == str(points[0]["customdata"][0])]
-    return None if held.empty else held.iloc[0]
 
 
 def _selected(track: pd.Series, *, points: pd.DataFrame) -> None:
@@ -402,57 +472,55 @@ def _clip_path(video: Path, *, track: StoredTrack) -> Path:
     return track_clip_path(video, track=track, stretch=stretch, output_dir=CLIPS_DIR)
 
 
-def _gallery(tracks: pd.DataFrame, *, cluster: str | None) -> None:
-    """A random sample of the cluster's tracks, drawn anew on Shuffle."""
+def _gallery(tracks: pd.DataFrame, *, cluster: str | None, sample: pd.DataFrame) -> None:
+    """The random sample of the cluster, framed in the colour that rings it on
+    the map."""
     if cluster is None:
         st.caption("Select a track, or choose a cluster for the gallery in the sidebar.")
         return
 
-    members = tracks[tracks["cluster"] == cluster]
-    sample = members.sample(n=min(GALLERY_SIZE, len(members)), random_state=st.session_state.get(SHUFFLE_KEY, 0))
     heading, shuffle = st.columns([4, 1], vertical_alignment="bottom")
-    heading.subheader(_cluster_title(cluster), help=GALLERY_HELP)
+    heading.subheader(SAMPLE_TITLE, help=GALLERY_HELP)
     shuffle.button("Shuffle", on_click=_shuffle, help=SHUFFLE_HELP)
-    st.caption(f"{len(sample)} of {len(members)} tracks")
-    _panels(sample, captions=[f"{place}. {label}" for place, label in enumerate(sample["label"], start=1)])
+    members = int((tracks["cluster"] == cluster).sum())
+    st.caption(f"{_cluster_title(cluster)} · {len(sample)} of {members} tracks")
+    captions = [f"{place}. {label}" for place, label in enumerate(sample["label"], start=1)]
+    _panels(sample, captions=captions, frame=SAMPLE_COLOR)
 
 
 def _shuffle() -> None:
     st.session_state[SHUFFLE_KEY] = st.session_state.get(SHUFFLE_KEY, 0) + 1
 
 
-def _neighbours(tracks: pd.DataFrame, *, track: pd.Series, radius: float) -> None:
-    """The tracks nearest the selected one on the map, in any cluster, each
-    captioned with the cluster it is in."""
-    st.subheader("Nearest tracks", help=NEIGHBOURS_HELP)
-    others = tracks[tracks["key"] != track["key"]]
-    distance = np.hypot(others["x"] - track["x"], others["y"] - track["y"])
-    nearest = others.loc[distance[distance <= radius].nsmallest(GALLERY_SIZE).index]
+def _neighbours(nearest: pd.DataFrame, *, radius: float) -> None:
+    """The tracks nearest the selected one, each captioned with the cluster it
+    is in and framed in the colour that rings them on the map."""
+    st.subheader(NEAREST_TITLE, help=NEIGHBOURS_HELP)
     st.caption(f"{len(nearest)} tracks within {radius:.2f}")
     captions = [
         f"{place}. {_cluster_caption(cluster)} · {label}"
         for place, (cluster, label) in enumerate(zip(nearest["cluster"], nearest["label"]), start=1)
     ]
-    _panels(nearest, captions=captions)
+    _panels(nearest, captions=captions, frame=NEAREST_COLOR)
 
 
 def _cluster_caption(cluster: str) -> str:
     return "no cluster" if cluster == UNASSIGNED_NAME else f"cluster {cluster}"
 
 
-def _panels(chosen: pd.DataFrame, *, captions: list[str]) -> None:
+def _panels(chosen: pd.DataFrame, *, captions: list[str], frame: str) -> None:
     """The chosen tracks drawn from their stored paths, a panel each, in rows
     that wrap to the width of the column."""
-    st.html(_gallery_markup(PATHS_PATH.stat().st_mtime, tuple(zip(chosen["key"], captions))))
+    st.html(_gallery_markup(PATHS_PATH.stat().st_mtime, tuple(zip(chosen["key"], captions)), frame=frame))
 
 
 @st.cache_data(show_spinner=False, max_entries=PANEL_CACHE_ENTRIES)
-def _gallery_markup(stamp: float, captions: tuple[tuple[str, str], ...]) -> str:
+def _gallery_markup(stamp: float, captions: tuple[tuple[str, str], ...], *, frame: str) -> str:
     """The panels of these tracks under these captions, kept so that a gallery
     that comes out the same on the next click is not drawn again."""
     keyed = dict(captions)
     paths = _path_frame(stamp)
-    return gallery_html(paths[paths["key"].isin(keyed)], captions=keyed)
+    return gallery_html(paths[paths["key"].isin(keyed)], captions=keyed, frame=frame)
 
 
 def _gallery_cluster(chosen: str, *, picked: pd.Series | None) -> str | None:
