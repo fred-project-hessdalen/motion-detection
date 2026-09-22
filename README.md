@@ -174,7 +174,13 @@ the recording's frame stamps read first. A recording whose stamps do
 not say which frame is which has every frame ahead of the track passed
 instead, which takes a minute on a 20-minute recording. A gallery below the map
 draws 30 tracks at random from the selected track's cluster, or from any
-cluster chosen in the sidebar, from their stored paths alone. A second
+cluster chosen in the sidebar, from their stored paths alone. Under that
+gallery, Cluster label gives the cluster a name of your own and Save
+keeps it against every one of the cluster's tracks in
+`data/out/analysis/cluster-labels.json`, which holds each name with the
+tracks under it and is what a training set is built from. A cluster
+named again moves to the new name, and an empty name takes its tracks
+out of the one they were under. A second
 gallery draws the 30 tracks nearest the selected one on the map, from
 any cluster and within the neighbour radius set in the sidebar, and
 names the cluster of each. Tracks whose movement from step to step is

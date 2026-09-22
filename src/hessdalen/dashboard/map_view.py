@@ -30,6 +30,7 @@ import streamlit as st
 from plotly.colors import hex_to_rgb, qualitative
 
 from hessdalen.dashboard.clip_queue import ClipQueue, Job, Report
+from hessdalen.dashboard.cluster_labels import label_of, read_labels, write_labels
 from hessdalen.dashboard.runs import probe
 from hessdalen.dashboard.track_clip import (
     ClipProgress,
@@ -56,6 +57,7 @@ from hessdalen.io.drive import ArchiveVideo
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MAP_PATH = REPO_ROOT / "data" / "out" / "analysis" / "track-map.parquet"
 PATHS_PATH = MAP_PATH.with_name("track-paths.parquet")
+LABELS_PATH = MAP_PATH.with_name("cluster-labels.json")
 VIDEOS_DIR = REPO_ROOT / "data" / "corpus" / "videos"
 FETCHED_DIR = REPO_ROOT / "data" / "out" / "dashboard" / "videos"
 CLIPS_DIR = REPO_ROOT / "data" / "out" / "dashboard" / "tracks"
@@ -85,6 +87,8 @@ SHUFFLE_KEY = "gallery_shuffle"
 MAP_KEY = "track_map"
 PICKED_KEY = "picked_track"
 SEARCH_KEY = "track_search"
+LABEL_KEY = "cluster_label"
+SAVE_KEY = "save_cluster_label"
 SEARCH_WORDS = ("track", "in")
 """Words a search may carry around what it names, from the heading over a
 selected track."""
@@ -157,6 +161,13 @@ GALLERY_HELP = (
     "The map rings these tracks in the colour their panels are framed in."
 )
 SHUFFLE_HELP = "Draw another random sample of the cluster."
+LABEL_HELP = (
+    "What this cluster holds, in a word of your own, such as insect or plane. The name is kept against "
+    f"the cluster's tracks in {LABELS_PATH.name}, which is what a training set is built from. Naming the "
+    "cluster again moves its tracks to the new name, and an empty name takes them out of the one they "
+    "are under."
+)
+SAVE_LABEL_HELP = "Keep this name against every track of the cluster."
 NEIGHBOURS_HELP = (
     f"The {GALLERY_SIZE} tracks that lie nearest the selected track on the map, from any cluster, and no "
     "further from it than the neighbour radius. Each panel names the cluster its track is in. The map "
@@ -240,6 +251,8 @@ def page() -> None:
         figure = _scatter(shown, colour_column=COLOUR_COLUMNS[colour or "Cluster"], rings=rings, dimmed=dimmed)
         track_map_chart(figure, key=MAP_KEY, on_click=_remember_click)
         _gallery(shown, cluster=cluster, sample=sample)
+        if cluster is not None:
+            _labelling(tracks, cluster=cluster)
         if picked is not None:
             _neighbours(nearest, radius=float(radius))
 
@@ -589,6 +602,25 @@ def _shuffle() -> None:
     st.session_state[SHUFFLE_KEY] = st.session_state.get(SHUFFLE_KEY, 0) + 1
 
 
+def _labelling(tracks: pd.DataFrame, *, cluster: str) -> None:
+    """The name the cluster is under, and the box that gives it one.
+
+    Every track of the cluster takes the name, including the tracks the
+    sidebar's filters leave off the map, because the name is about what
+    the cluster holds.
+    """
+    keys = tracks.loc[tracks["cluster"] == cluster, "key"].tolist()
+    labels = _cluster_labels(_labels_stamp())
+    given = label_of(labels, keys=keys)
+
+    box, save = st.columns([4, 1], vertical_alignment="bottom")
+    name = box.text_input("Cluster label", value=given, key=f"{LABEL_KEY}:{cluster}", help=LABEL_HELP)
+    st.caption(f"{len(keys)} tracks under {given}" if given else "This cluster has no name yet.")
+    if save.button("Save", key=f"{SAVE_KEY}:{cluster}", help=SAVE_LABEL_HELP):
+        write_labels(LABELS_PATH, labels, name=str(name).strip(), keys=keys)
+        st.rerun()
+
+
 def _neighbours(nearest: pd.DataFrame, *, radius: float) -> None:
     """The tracks nearest the selected one, each captioned with the cluster it
     is in and framed in the colour that rings them on the map."""
@@ -717,6 +749,22 @@ def _videos_on_disk(stamp: tuple[float, ...]) -> frozenset[str]:
     """
     folders = (VIDEOS_DIR, FETCHED_DIR)
     return frozenset(path.name for folder in folders if folder.is_dir() for path in folder.iterdir())
+
+
+def _labels_stamp() -> float:
+    return LABELS_PATH.stat().st_mtime if LABELS_PATH.is_file() else 0.0
+
+
+@st.cache_data(show_spinner=False)
+def _cluster_labels(stamp: float) -> dict[str, list[str]]:
+    """The names given to clusters so far, read again whenever the file
+    changes.
+
+    The stamp is the file's modification time, and is what the cache is
+    keyed on, which is why it is passed although the body never reads
+    it.
+    """
+    return read_labels(LABELS_PATH)
 
 
 def _ledger_stamp() -> tuple[float, ...]:
