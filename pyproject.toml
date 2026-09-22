@@ -28,6 +28,7 @@ core = [
     "pyarrow>=25.0.1",
     "pydantic>=2.12.5",
     "tomli-w>=1.0",
+    "tqdm>=4.67.3",
 ]
 dashboard = [
     "plotly>=7.1.0",

@@ -1414,6 +1414,7 @@ core = [
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "tomli-w" },
+    { name = "tqdm" },
 ]
 dashboard = [
     { name = "plotly" },
@@ -1449,6 +1450,7 @@ core = [
     { name = "pyarrow", specifier = ">=25.0.1" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "tomli-w", specifier = ">=1.0" },
+    { name = "tqdm", specifier = ">=4.67.3" },
 ]
 dashboard = [
     { name = "plotly", specifier = ">=7.1.0" },
