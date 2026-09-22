@@ -16,10 +16,12 @@ from sklearn.metrics import adjusted_rand_score  # noqa: E402
 from hessdalen.analysis.corpus import CORPUS_SCHEMA  # noqa: E402
 from hessdalen.analysis.track_map import (  # noqa: E402
     FEATURES,
+    PER_CLIP,
     SMOOTH_BELOW,
     UNASSIGNED,
     camera_of,
     map_corpus,
+    sample_per_clip,
     standing_within_camera,
 )
 
@@ -88,6 +90,21 @@ def test_a_camera_whose_tracks_all_stand_out_more_is_scored_against_itself() -> 
 
     column = FEATURES.index("peak_deviation_max")
     assert scores[:GROUP_SIZE, column] == pytest.approx(scores[GROUP_SIZE:, column])
+
+
+def test_a_busy_clip_is_held_to_a_sample_spread_over_it() -> None:
+    """A recording holding thousands of tracks of one kind would set the
+    density every other track is clustered against."""
+    busy = [_streak(index, clip="Cam1_2025-01-01__00-00-00_000") for index in range(PER_CLIP * 3)]
+    quiet = [_streak(index, clip="Cam1_2025-01-01__00-00-00_001") for index in range(5)]
+
+    sampled = sample_per_clip(_table(busy + quiet))
+
+    clips = sampled.column("clip").to_pylist()
+    kept = sorted(track for track, clip in zip(sampled.column("track_id").to_pylist(), clips) if clip.endswith("_000"))
+    assert len(kept) == PER_CLIP
+    assert clips.count("Cam1_2025-01-01__00-00-00_001") == 5
+    assert kept[0] == 1 and kept[-1] == PER_CLIP * 3
 
 
 def test_the_camera_is_read_off_the_front_of_the_clip() -> None:

@@ -113,6 +113,32 @@ MIN_SAMPLES = 5
 UNASSIGNED = -1
 """The cluster of a track the clustering left out of every cluster."""
 
+PER_CLIP = 50
+"""Most tracks one recording contributes to the map.
+
+A busy recording can hold thousands of tracks of one kind, and at that
+weight it sets the density every other track is clustered against. On
+the archive's full-day recordings, 45 of 373 clips held nine tenths of
+all tracks, the largest 4316, and the trough in roughness that splits
+clean paths from clutter filled in. Holding each clip to 50 tracks
+brought the trough back.
+"""
+
+
+def sample_per_clip(tracks: pa.Table) -> pa.Table:
+    """At most PER_CLIP tracks from each clip, spread evenly over its tracks
+    in the order the tracker opened them, which runs with time."""
+    clips = np.array(tracks.column("clip").to_pylist())
+    events = np.array(tracks.column("event").to_pylist())
+    track_ids = np.asarray(tracks.column("track_id").to_numpy())
+    kept = np.zeros(tracks.num_rows, dtype=bool)
+    for place in set(zip(events.tolist(), clips.tolist())):
+        held = np.flatnonzero((events == place[0]) & (clips == place[1]))
+        ordered = held[np.argsort(track_ids[held])]
+        chosen = np.unique(np.linspace(0, ordered.size - 1, min(PER_CLIP, ordered.size)).astype(int))
+        kept[ordered[chosen]] = True
+    return tracks.filter(pa.array(kept))
+
 
 def map_corpus(tracks: pa.Table, *, seeds: tuple[int, ...]) -> pa.Table:
     """The corpus with a side, a cluster and a place on the map added to
