@@ -102,8 +102,8 @@ PATH_HELP = (
 )
 VIDEO_HELP = (
     "The track drawn on its recording, from a second before it starts to a second after it ends. "
-    "It is built in the background, one track at a time, and choosing another track drops a build "
-    "still waiting."
+    "It is built in the background, one track at a time, and choosing another track stops the build "
+    "under way."
 )
 GALLERY_HELP = (
     f"Up to {GALLERY_SIZE} tracks of the cluster, spread across it, each drawn from its stored path and "
