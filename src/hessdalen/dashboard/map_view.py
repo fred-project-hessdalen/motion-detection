@@ -26,7 +26,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import pyarrow.parquet as pq
 import streamlit as st
-from plotly.colors import qualitative
+from plotly.colors import hex_to_rgb, qualitative
 
 from hessdalen.dashboard.clip_queue import ClipQueue, Job, Report
 from hessdalen.dashboard.runs import probe
@@ -91,6 +91,7 @@ SAMPLE_MARKER = {"color": SAMPLE_COLOR, "symbol": "circle-open", "size": 12, "li
 NEAREST_MARKER = {"color": NEAREST_COLOR, "symbol": "diamond-open", "size": 12, "line": {"width": 2}}
 SELECTED_MARKER = {"color": "#ffd400", "symbol": "star", "size": 18, "line": {"width": 1, "color": "#333333"}}
 GRID_COLOR = "rgba(128, 128, 128, 0.25)"
+DIM_ALPHA = 0.2
 PANEL_CACHE_ENTRIES = 64
 POLL_SECONDS = 2.0
 
@@ -113,6 +114,10 @@ LABELS_HELP = "Show only the tracks of recordings filed under these labels."
 ROUGH_HELP = (
     "Show the tracks that hop about from step to step rather than moving evenly, which is what clutter "
     "does. Turn it off to leave the map and the galleries to the clean paths."
+)
+CACHED_HELP = (
+    "Draw the tracks whose recording is not on disk faintly. Such a track has its recording fetched from "
+    "the archive before it can be drawn on it, which takes a minute or more."
 )
 GALLERY_CHOICE_HELP = "The cluster the gallery below the map draws a sample of."
 MAP_HELP = (
@@ -185,6 +190,7 @@ def page() -> None:
         colour = st.segmented_control("Colour", options=COLOUR_CHOICES, default="Cluster", help=COLOUR_HELP)
         labels = st.multiselect("Labels", options=sorted(tracks["label"].unique()), help=LABELS_HELP)
         rough = st.toggle("Rough tracks", value=True, help=ROUGH_HELP)
+        cached = st.toggle("Video cached", value=False, help=CACHED_HELP)
         chosen_cluster = st.selectbox(
             "Gallery",
             options=[SELECTED_CLUSTER, *_cluster_names(tracks)],
@@ -212,7 +218,8 @@ def page() -> None:
     with map_column:
         st.subheader("Tracks", help=MAP_HELP)
         st.caption(f"{len(shown)} of {len(tracks)} tracks")
-        figure = _scatter(shown, colour_column=COLOUR_COLUMNS[colour or "Cluster"], rings=rings)
+        dimmed = _uncached(shown) if cached else frozenset()
+        figure = _scatter(shown, colour_column=COLOUR_COLUMNS[colour or "Cluster"], rings=rings, dimmed=dimmed)
         track_map_chart(figure, key=MAP_KEY, on_click=_remember_click)
         _gallery(shown, cluster=cluster, sample=sample)
         if picked is not None:
@@ -255,7 +262,14 @@ def _nearest(tracks: pd.DataFrame, *, track: pd.Series, radius: float) -> pd.Dat
     return others.loc[distance[distance <= radius].nsmallest(GALLERY_SIZE).index]
 
 
-def _scatter(tracks: pd.DataFrame, *, colour_column: str, rings: list[Ring]) -> go.Figure:
+def _uncached(tracks: pd.DataFrame) -> frozenset[str]:
+    """The tracks whose recording is on neither the sift's shelf nor the page's
+    own, which the map draws faintly."""
+    on_disk = _videos_on_disk(_videos_stamp())
+    return frozenset(tracks.loc[~tracks["recording"].isin(on_disk), "key"])
+
+
+def _scatter(tracks: pd.DataFrame, *, colour_column: str, rings: list[Ring], dimmed: frozenset[str]) -> go.Figure:
     """The tracks drawn by the graphics card, one trace per colour, so the
     legend names each colour and a click on it hides or shows those tracks.
 
@@ -276,7 +290,7 @@ def _scatter(tracks: pd.DataFrame, *, colour_column: str, rings: list[Ring]) -> 
                 mode="markers",
                 name=str(name),
                 uid=f"{colour_column}:{name}",
-                marker={"color": colour, "size": 6, "opacity": 0.7},
+                marker={"color": _point_colours(members, colour=colour, dimmed=dimmed), "size": 6, "opacity": 0.7},
                 customdata=members[HOVER_COLUMNS].to_numpy(dtype=object),
                 hovertemplate=HOVER_TEMPLATE,
             )
@@ -309,6 +323,17 @@ def _scatter(tracks: pd.DataFrame, *, colour_column: str, rings: list[Ring]) -> 
         yaxis={"showgrid": True, "gridcolor": GRID_COLOR, "zeroline": False},
     )
     return figure
+
+
+def _point_colours(members: pd.DataFrame, *, colour: str, dimmed: frozenset[str]) -> str | list[str]:
+    """The trace's colour at each point, faint where the track is one of the
+    dimmed, or the one colour for the whole trace when none of them is."""
+    if not dimmed:
+        return colour
+
+    red, green, blue = hex_to_rgb(colour)
+    faint = f"rgba({red}, {green}, {blue}, {DIM_ALPHA})"
+    return [faint if key in dimmed else colour for key in members["key"]]
 
 
 def _colours(tracks: pd.DataFrame, *, column: str) -> dict[str, str]:
@@ -610,6 +635,23 @@ def _path_frame(stamp: float) -> pd.DataFrame:
 
 def _keys(frame: pd.DataFrame) -> pd.Series:
     return frame["event"] + "/" + frame["clip"] + "/" + frame["track_id"].astype(str)
+
+
+def _videos_stamp() -> tuple[float, ...]:
+    return tuple(path.stat().st_mtime if path.is_dir() else 0.0 for path in (VIDEOS_DIR, FETCHED_DIR))
+
+
+@st.cache_data(show_spinner=False)
+def _videos_on_disk(stamp: tuple[float, ...]) -> frozenset[str]:
+    """The name of every video the sift kept or the page has fetched, read
+    again whenever either folder changes.
+
+    The stamp holds those folders' modification times, and is what the
+    cache is keyed on, which is why it is passed although the body never
+    reads it.
+    """
+    folders = (VIDEOS_DIR, FETCHED_DIR)
+    return frozenset(path.name for folder in folders if folder.is_dir() for path in folder.iterdir())
 
 
 def _ledger_stamp() -> tuple[float, ...]:
