@@ -164,8 +164,11 @@ brightness and size frame by frame. Drawing it on its recording, from a
 second before it starts to a second after it ends, runs in the
 background, because it has to pass every frame of the recording ahead of
 the track, and the clip plays once it is built. A gallery below the map
-draws 30 tracks of the selected track's cluster, or of any cluster
-chosen in the sidebar, from their stored paths alone.
+draws 30 tracks at random from the selected track's cluster, or from any
+cluster chosen in the sidebar, from their stored paths alone. A second
+gallery draws the 30 tracks nearest the selected one on the map, from
+any cluster and within the neighbour radius set in the sidebar, and
+names the cluster of each.
 
 The page runs no detection. A track whose video the sift did not keep
 has its video fetched from the archive into `data/out/dashboard/videos`

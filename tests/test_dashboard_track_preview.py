@@ -1,9 +1,12 @@
 """How a track's stored path is fitted and drawn without its video."""
 
+import base64
+import re
+
 import pandas as pd
 import pytest
 
-from hessdalen.dashboard.track_preview import close_up, fitted, frame_view, gallery, light_curve
+from hessdalen.dashboard.track_preview import close_up, fitted, frame_view, gallery_html, light_curve
 
 
 def test_a_fitted_track_keeps_its_proportions() -> None:
@@ -45,11 +48,28 @@ def test_a_track_that_never_moves_does_not_divide_by_nothing() -> None:
 
 def test_every_chart_is_drawn_from_the_path_alone() -> None:
     points = _track("a", xs=[100.0, 150.0, 200.0], ys=[500.0, 505.0, 510.0])
-    panels = pd.concat([_track("a", xs=[1.0, 2.0], ys=[1.0, 2.0]), _track("b", xs=[5.0, 9.0], ys=[1.0, 1.0])])
-    panels["panel"] = panels["key"].map({"a": "1. birds", "b": "2. planes"})
 
-    for chart in (frame_view(points), close_up(points), light_curve(points), gallery(panels)):
+    for chart in (frame_view(points), close_up(points), light_curve(points)):
         assert chart.to_dict()
+
+
+def test_a_gallery_draws_each_track_under_its_caption_in_the_order_given() -> None:
+    paths = pd.concat([_track("a", xs=[1.0, 2.0, 3.0], ys=[1.0, 2.0, 3.0]), _track("b", xs=[5.0, 9.0], ys=[1.0, 1.0])])
+
+    drawn = gallery_html(paths, captions={"b": "2. planes", "a": "1. birds <&>"})
+
+    figures = drawn.split("<figure")[1:]
+    assert len(figures) == 2
+    assert "2. planes" in figures[0]
+    assert "1. birds &lt;&amp;&gt;" in figures[1]
+    assert _svg(figures[0]).count("<circle") == 2
+    assert _svg(figures[1]).count("<circle") == 3
+
+
+def _svg(figure: str) -> str:
+    encoded = re.search(r"data:image/svg\+xml;base64,([^\"]+)", figure)
+    assert encoded is not None
+    return base64.b64decode(encoded.group(1)).decode()
 
 
 def _track(key: str, *, xs: list[float], ys: list[float], frames: list[int] | None = None) -> pd.DataFrame:

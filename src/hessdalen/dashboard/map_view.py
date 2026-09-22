@@ -5,8 +5,10 @@ Every track of the corpus is a point, placed and coloured by the map the
 analysis step writes. Clicking one draws its stored path straight away,
 and hands drawing it on its video to a background queue, because that
 has to pass every frame of the recording ahead of the track and can take
-a minute. A gallery below draws a sample of any one cluster from the
-stored paths alone, which is how a cluster is judged at a glance.
+a minute. A gallery below draws a random sample of any one cluster from
+the stored paths alone, which is how a cluster is judged at a glance,
+and a second one draws the tracks nearest the selected one, from
+whatever cluster they are in.
 
 The page never detects anything. A track whose video the sift did not
 keep has its video fetched from the archive before it is drawn.
@@ -36,7 +38,7 @@ from hessdalen.dashboard.track_clip import (
     stretch_around,
     track_clip_path,
 )
-from hessdalen.dashboard.track_preview import close_up, frame_view, gallery, light_curve
+from hessdalen.dashboard.track_preview import close_up, frame_view, gallery_html, light_curve
 from hessdalen.dashboard.video_cache import (
     MIN_FREE_BYTES,
     FetchProgress,
@@ -75,6 +77,9 @@ HOVER_TEMPLATE = (
     "Straightness %{customdata[7]:.2f}<br>Peak deviation %{customdata[8]:.1f}<extra></extra>"
 )
 GALLERY_SIZE = 30
+NEIGHBOUR_RADIUS = 0.5
+SHUFFLE_KEY = "gallery_shuffle"
+PANEL_CACHE_ENTRIES = 64
 POLL_SECONDS = 2.0
 
 AUTO_FETCH_BYTES = 100 * 1024**2
@@ -110,8 +115,17 @@ VIDEO_HELP = (
     "under way."
 )
 GALLERY_HELP = (
-    f"Up to {GALLERY_SIZE} tracks of the cluster, spread across it, each drawn from its stored path and "
+    f"Up to {GALLERY_SIZE} tracks drawn at random from the cluster, each drawn from its stored path and "
     "fitted to its own panel. Colour runs from dark blue on a track's first frame to yellow on its last."
+)
+SHUFFLE_HELP = "Draw another random sample of the cluster."
+NEIGHBOURS_HELP = (
+    f"The {GALLERY_SIZE} tracks that lie nearest the selected track on the map, from any cluster, and no "
+    "further from it than the neighbour radius. Each panel names the cluster its track is in."
+)
+RADIUS_HELP = (
+    "How far from the selected track, in the map's own units, a track may lie to count among its nearest "
+    f"tracks. At {NEIGHBOUR_RADIUS} most tracks have {GALLERY_SIZE} such neighbours."
 )
 UNSOURCED_TEXT = (
     "The video behind this track was not kept after detection, and no ledger says where in the archive "
@@ -146,6 +160,9 @@ def page() -> None:
             format_func=_cluster_title,
             help=GALLERY_CHOICE_HELP,
         )
+        radius = st.number_input(
+            "Neighbour radius", min_value=0.05, max_value=5.0, value=NEIGHBOUR_RADIUS, step=0.05, help=RADIUS_HELP
+        )
 
     shown = tracks[tracks["label"].isin(labels)] if labels else tracks
     map_column, track_column = st.columns([3, 2])
@@ -161,7 +178,9 @@ def page() -> None:
             config={"scrollZoom": True, "displaylogo": False},
         )
         picked = _picked(shown, event)
-        _gallery(shown, paths, cluster=_gallery_cluster(str(chosen_cluster), picked=picked))
+        _gallery(shown, cluster=_gallery_cluster(str(chosen_cluster), picked=picked))
+        if picked is not None:
+            _neighbours(shown, track=picked, radius=float(radius))
 
     with track_column:
         if picked is None:
@@ -383,23 +402,57 @@ def _clip_path(video: Path, *, track: StoredTrack) -> Path:
     return track_clip_path(video, track=track, stretch=stretch, output_dir=CLIPS_DIR)
 
 
-def _gallery(tracks: pd.DataFrame, paths: pd.DataFrame, *, cluster: str | None) -> None:
+def _gallery(tracks: pd.DataFrame, *, cluster: str | None) -> None:
+    """A random sample of the cluster's tracks, drawn anew on Shuffle."""
     if cluster is None:
         st.caption("Select a track, or choose a cluster for the gallery in the sidebar.")
         return
 
-    members = tracks[tracks["cluster"] == cluster].sort_values("key")
-    sample = members.iloc[np.unique(np.linspace(0, len(members) - 1, min(GALLERY_SIZE, len(members))).astype(int))]
-    st.subheader(_cluster_title(cluster), help=GALLERY_HELP)
+    members = tracks[tracks["cluster"] == cluster]
+    sample = members.sample(n=min(GALLERY_SIZE, len(members)), random_state=st.session_state.get(SHUFFLE_KEY, 0))
+    heading, shuffle = st.columns([4, 1], vertical_alignment="bottom")
+    heading.subheader(_cluster_title(cluster), help=GALLERY_HELP)
+    shuffle.button("Shuffle", on_click=_shuffle, help=SHUFFLE_HELP)
     st.caption(f"{len(sample)} of {len(members)} tracks")
-    if sample.empty:
-        return
+    _panels(sample, captions=[f"{place}. {label}" for place, label in enumerate(sample["label"], start=1)])
 
-    places = {key: place for place, key in enumerate(sample["key"])}
-    drawn = paths[paths["key"].isin(places)].copy()
-    drawn["place"] = drawn["key"].map(places)
-    drawn["panel"] = [f"{place + 1}. {label}" for place, label in zip(drawn["place"], drawn["label"])]
-    st.altair_chart(gallery(drawn.sort_values(["place", "frame_number"])))
+
+def _shuffle() -> None:
+    st.session_state[SHUFFLE_KEY] = st.session_state.get(SHUFFLE_KEY, 0) + 1
+
+
+def _neighbours(tracks: pd.DataFrame, *, track: pd.Series, radius: float) -> None:
+    """The tracks nearest the selected one on the map, in any cluster, each
+    captioned with the cluster it is in."""
+    st.subheader("Nearest tracks", help=NEIGHBOURS_HELP)
+    others = tracks[tracks["key"] != track["key"]]
+    distance = np.hypot(others["x"] - track["x"], others["y"] - track["y"])
+    nearest = others.loc[distance[distance <= radius].nsmallest(GALLERY_SIZE).index]
+    st.caption(f"{len(nearest)} tracks within {radius:.2f}")
+    captions = [
+        f"{place}. {_cluster_caption(cluster)} · {label}"
+        for place, (cluster, label) in enumerate(zip(nearest["cluster"], nearest["label"]), start=1)
+    ]
+    _panels(nearest, captions=captions)
+
+
+def _cluster_caption(cluster: str) -> str:
+    return "no cluster" if cluster == UNASSIGNED_NAME else f"cluster {cluster}"
+
+
+def _panels(chosen: pd.DataFrame, *, captions: list[str]) -> None:
+    """The chosen tracks drawn from their stored paths, a panel each, in rows
+    that wrap to the width of the column."""
+    st.html(_gallery_markup(PATHS_PATH.stat().st_mtime, tuple(zip(chosen["key"], captions))))
+
+
+@st.cache_data(show_spinner=False, max_entries=PANEL_CACHE_ENTRIES)
+def _gallery_markup(stamp: float, captions: tuple[tuple[str, str], ...]) -> str:
+    """The panels of these tracks under these captions, kept so that a gallery
+    that comes out the same on the next click is not drawn again."""
+    keyed = dict(captions)
+    paths = _path_frame(stamp)
+    return gallery_html(paths[paths["key"].isin(keyed)], captions=keyed)
 
 
 def _gallery_cluster(chosen: str, *, picked: pd.Series | None) -> str | None:
@@ -419,10 +472,9 @@ def _cluster_title(cluster: str) -> str:
 
 
 def _facts(track: pd.Series) -> str:
-    cluster = track["cluster"]
     parts = [
         f"Label {track['label']}",
-        "no cluster" if cluster == UNASSIGNED_NAME else f"cluster {cluster}",
+        _cluster_caption(str(track["cluster"])),
         f"{track['side']} side",
         f"camera {track['camera']}",
         f"straightness {track['straightness']:.2f}",

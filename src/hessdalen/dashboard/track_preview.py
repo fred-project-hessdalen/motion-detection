@@ -12,14 +12,20 @@ tracker matched on, hops about inside a large blob.
 
 from __future__ import annotations
 
+import base64
+import html
+from collections.abc import Mapping
+
 import altair as alt
 import numpy as np
 import pandas as pd
+from plotly.colors import sample_colorscale
 
 FRAME_WIDTH_PIXELS = 420
 CLOSE_UP_PIXELS = 240
 PANEL_PIXELS = 120
-GALLERY_COLUMNS = 5
+PANEL_GAP_PIXELS = 8
+PANEL_DOT_RADIUS = 1.8
 CLOSE_UP_MARGIN = 0.55
 """Half the side of a fitted track's box, in units of the track's larger
 extent, so a path fills most of its panel and never touches the edge."""
@@ -75,21 +81,44 @@ def light_curve(points: pd.DataFrame) -> alt.Chart:
     )
 
 
-def gallery(paths: pd.DataFrame) -> alt.FacetChart:
-    """Every given track in a panel of its own, fitted to the panel.
+def gallery_html(paths: pd.DataFrame, *, captions: Mapping[str, str]) -> str:
+    """Each captioned track fitted to a small panel under its caption, in the
+    order of the captions and in rows that wrap to the width they are given.
 
-    The paths carry a panel column naming each one, and panels follow
-    the order the paths arrive in.
+    The panels are SVG images in one block of HTML, so a gallery is a
+    single element on the page however many tracks it holds, and
+    Streamlit renders the page once for it. Each SVG goes in as an image
+    because Streamlit's HTML sanitiser removes SVG written into the page.
     """
-    drawn = fitted(paths)
-    order = list(dict.fromkeys(drawn["panel"]))
-    layered = _fitted_layers(drawn).properties(width=PANEL_PIXELS, height=PANEL_PIXELS)
-    return layered.facet(
-        facet=alt.Facet(
-            "panel:N", sort=order, title=None, header=alt.Header(labelFontSize=10, labelLimit=PANEL_PIXELS)
-        ),
-        columns=GALLERY_COLUMNS,
-    ).configure_view(stroke="#cfcfcf")
+    drawn = fitted(paths[paths["key"].isin(captions)])
+    by_key = {key: group.sort_values("frame_number") for key, group in drawn.groupby("key", sort=False)}
+    figures = "".join(_panel_svg(by_key[key], caption=caption) for key, caption in captions.items())
+    return f'<div style="display:flex;flex-wrap:wrap;gap:{PANEL_GAP_PIXELS}px">{figures}</div>'
+
+
+def _panel_svg(points: pd.DataFrame, *, caption: str) -> str:
+    """One fitted track, its path in grey and a dot on each frame coloured by
+    how far along the track it is."""
+    x = (points["u"].to_numpy() + CLOSE_UP_MARGIN) / (2 * CLOSE_UP_MARGIN) * PANEL_PIXELS
+    y = (points["v"].to_numpy() + CLOSE_UP_MARGIN) / (2 * CLOSE_UP_MARGIN) * PANEL_PIXELS
+    colours = sample_colorscale("Viridis", points["phase"].tolist())
+    line = " ".join(f"{px:.1f},{py:.1f}" for px, py in zip(x, y))
+    dots = "".join(
+        f'<circle cx="{px:.1f}" cy="{py:.1f}" r="{PANEL_DOT_RADIUS}" fill="{colour}"/>'
+        for px, py, colour in zip(x, y, colours)
+    )
+    svg = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{PANEL_PIXELS}" height="{PANEL_PIXELS}">'
+        f'<polyline points="{line}" fill="none" stroke="#9a9a9a" stroke-width="1"/>{dots}</svg>'
+    )
+    source = "data:image/svg+xml;base64," + base64.b64encode(svg.encode()).decode()
+    return (
+        f'<figure style="margin:0;width:{PANEL_PIXELS}px">'
+        f'<figcaption style="font-size:10px;text-align:center;white-space:nowrap;overflow:hidden;'
+        f'text-overflow:ellipsis">{html.escape(caption)}</figcaption>'
+        f'<img src="{source}" width="{PANEL_PIXELS}" height="{PANEL_PIXELS}" alt="{html.escape(caption)}" '
+        f'style="border:1px solid #cfcfcf"></figure>'
+    )
 
 
 def fitted(paths: pd.DataFrame) -> pd.DataFrame:
