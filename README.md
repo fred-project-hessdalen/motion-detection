@@ -168,10 +168,13 @@ draws 30 tracks at random from the selected track's cluster, or from any
 cluster chosen in the sidebar, from their stored paths alone. A second
 gallery draws the 30 tracks nearest the selected one on the map, from
 any cluster and within the neighbour radius set in the sidebar, and
-names the cluster of each. The map marks the selected track with a star
-and rings the tracks of each gallery in the colour that gallery frames
-its panels in. The map is drawn by plotly.js, which the page loads from
-the jsDelivr CDN, so the page needs internet access to show it.
+names the cluster of each. Tracks whose movement from step to step is
+uneven, which most clutter is, can be left out of the page with the
+Rough tracks switch in the sidebar. The map marks the selected track
+with a star and rings the tracks of each gallery in the colour that
+gallery frames its panels in. The map is drawn by plotly.js, which the
+page loads from the jsDelivr CDN, so the page needs internet access to
+show it.
 
 The page runs no detection. A track whose video the sift did not keep
 has its video fetched from the archive into `data/out/dashboard/videos`

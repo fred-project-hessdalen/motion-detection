@@ -69,6 +69,7 @@ CLUSTER_COLORS = ("#4c78a8", "#f58518", "#54a24b", "#e45756", "#72b7b2", "#eeca3
 COLOUR_CHOICES = ("Cluster", "Side", "Label", "Camera")
 COLOUR_COLUMNS = {"Cluster": "cluster", "Side": "side", "Label": "label", "Camera": "camera"}
 SELECTED_CLUSTER = "Selected track's cluster"
+ROUGH_SIDE = "rough"
 OTHER_COLORS = qualitative.Dark24
 HOVER_COLUMNS = ["key", "label", "cluster", "side", "clip", "track_id", "frames", "straightness", "peak_deviation_max"]
 HOVER_TEMPLATE = (
@@ -109,6 +110,10 @@ COLOUR_HELP = (
     "thing the folder is named for."
 )
 LABELS_HELP = "Show only the tracks of recordings filed under these labels."
+ROUGH_HELP = (
+    "Show the tracks that hop about from step to step rather than moving evenly, which is what clutter "
+    "does. Turn it off to leave the map and the galleries to the clean paths."
+)
 GALLERY_CHOICE_HELP = "The cluster the gallery below the map draws a sample of."
 MAP_HELP = (
     "Every track the corpus holds, placed so that tracks with similar descriptors sit close together. "
@@ -179,6 +184,7 @@ def page() -> None:
     with st.sidebar:
         colour = st.segmented_control("Colour", options=COLOUR_CHOICES, default="Cluster", help=COLOUR_HELP)
         labels = st.multiselect("Labels", options=sorted(tracks["label"].unique()), help=LABELS_HELP)
+        rough = st.toggle("Rough tracks", value=True, help=ROUGH_HELP)
         chosen_cluster = st.selectbox(
             "Gallery",
             options=[SELECTED_CLUSTER, *_cluster_names(tracks)],
@@ -189,7 +195,8 @@ def page() -> None:
             "Neighbour radius", min_value=0.05, max_value=5.0, value=NEIGHBOUR_RADIUS, step=0.05, help=RADIUS_HELP
         )
 
-    shown = tracks[tracks["label"].isin(labels)] if labels else tracks
+    shown = tracks if rough else tracks[tracks["side"] != ROUGH_SIDE]
+    shown = shown[shown["label"].isin(labels)] if labels else shown
     picked = _picked(shown, key=st.session_state.get(PICKED_KEY))
     cluster = _gallery_cluster(str(chosen_cluster), picked=picked)
     sample = shown.iloc[0:0] if cluster is None else _sample(shown, cluster=cluster)
