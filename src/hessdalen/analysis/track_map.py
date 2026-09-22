@@ -203,9 +203,9 @@ def _agreed_clusters(tracks: pa.Table, *, side: Side, seeds: tuple[int, ...]) ->
 
 
 def _one_run(scores: np.ndarray, *, side: Side, seed: int) -> np.ndarray:
-    embedded = UMAP(n_neighbors=NEIGHBOURS, min_dist=0.0, n_components=EMBEDDED, random_state=seed).fit_transform(
-        scores
-    )
+    embedded = UMAP(
+        n_neighbors=NEIGHBOURS, min_dist=0.0, n_components=EMBEDDED, random_state=seed, n_jobs=1
+    ).fit_transform(scores)
     return np.asarray(
         HDBSCAN(min_cluster_size=side.min_cluster_size, min_samples=MIN_SAMPLES, copy=True).fit_predict(embedded)
     )
@@ -220,6 +220,7 @@ def _layout(scores: np.ndarray, *, seed: int) -> np.ndarray:
             min_dist=LAYOUT_SPREAD,
             n_components=2,
             random_state=seed,
+            n_jobs=1,
         ).fit_transform(scores)
     )
 
