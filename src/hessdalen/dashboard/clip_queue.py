@@ -18,16 +18,21 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, TypeAlias
 
 from hessdalen.dashboard.track_clip import ClipProgress
+from hessdalen.dashboard.video_cache import FetchProgress
 
 Stage = Literal["absent", "queued", "building", "ready", "failed"]
 
-Report = Callable[[ClipProgress], None]
+Progress: TypeAlias = FetchProgress | ClipProgress
+"""How far a job has got: first how much of its video has arrived, when
+the video has to be fetched, then how many frames it has handled."""
+
+Report: TypeAlias = Callable[[Progress], None]
 """What a job calls to say how far it has got."""
 
-Job = Callable[[Report], Path]
+Job: TypeAlias = Callable[[Report], Path]
 """The work that builds one clip, handed a way to report its progress."""
 
 
@@ -35,14 +40,13 @@ Job = Callable[[Report], Path]
 class ClipState:
     """How far the clip of one track has got.
 
-    Progress is None until the build first reports, which it does not
-    while its video is still being fetched.
+    Progress is None until the job first reports.
     """
 
     stage: Stage
     clip: Path | None
     error: str
-    progress: ClipProgress | None
+    progress: Progress | None
 
 
 ABSENT = ClipState(stage="absent", clip=None, error="", progress=None)
@@ -52,7 +56,7 @@ class ClipQueue:
     def __init__(self) -> None:
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="track-clip")
         self._jobs: dict[str, Future[Path]] = {}
-        self._progress: dict[str, ClipProgress] = {}
+        self._progress: dict[str, Progress] = {}
         self._lock = threading.Lock()
 
     def request(self, key: str, job: Job) -> None:
@@ -86,7 +90,7 @@ class ClipQueue:
         return ClipState(stage="ready", clip=future.result(), error="", progress=progress)
 
     def _reporter(self, key: str) -> Report:
-        def report(progress: ClipProgress) -> None:
+        def report(progress: Progress) -> None:
             with self._lock:
                 self._progress[key] = progress
 

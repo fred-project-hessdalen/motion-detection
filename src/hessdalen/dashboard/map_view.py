@@ -38,6 +38,7 @@ from hessdalen.dashboard.track_clip import (
 from hessdalen.dashboard.track_preview import close_up, frame_view, gallery, light_curve
 from hessdalen.dashboard.video_cache import (
     MIN_FREE_BYTES,
+    FetchProgress,
     archive_video,
     cached_video,
     fetch_seconds,
@@ -291,8 +292,18 @@ def _clip_progress(key: str, *, fetching: bool) -> None:
         st.caption("Waiting for the clip before it to finish")
     elif state.progress is None:
         st.caption("Fetching the video from the archive" if fetching else "Opening the recording")
+    elif isinstance(state.progress, FetchProgress):
+        st.progress(state.progress.fraction, text=_fetch_text(state.progress))
     else:
         st.progress(state.progress.fraction, text=_progress_text(state.progress))
+
+
+def _fetch_text(progress: FetchProgress) -> str:
+    """How much of the video has arrived, and how much there is."""
+    total = f"{progress.bytes_total / 1e6:.1f} MB"
+    if progress.bytes_done == 0:
+        return f"Fetching the video: reaching the archive · {total}"
+    return f"Fetching the video: {progress.bytes_done / 1e6:.1f} of {total}"
 
 
 def _progress_text(progress: ClipProgress) -> str:
@@ -313,7 +324,7 @@ def _clip_job(source: VideoSource, *, track: StoredTrack) -> Job:
     page."""
 
     def job(report: Report) -> Path:
-        video = source.path or fetch_video(FETCHED_DIR, video=_archived(source))
+        video = source.path or fetch_video(FETCHED_DIR, video=_archived(source), on_progress=report)
         clip = _clip_path(video, track=track)
         if not clip.is_file():
             details = probe(video)

@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from collections.abc import Mapping
+import threading
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +33,25 @@ at a time, so a fetch here must not take the disk under that.
 FETCH_RATE = 31e6 / 26.0
 """Bytes a second a fetch moves, from a 31 MB recording that took 26 seconds
 through the remote with four streams."""
+
+WATCH_SECONDS = 0.5
+"""How often a fetch's file is looked at to see how much has arrived."""
+
+
+@dataclass(frozen=True, slots=True)
+class FetchProgress:
+    """How much of a video has arrived.
+
+    Nothing has arrived while rclone is still reaching the archive,
+    which takes some seconds before the first byte lands.
+    """
+
+    bytes_done: int
+    bytes_total: int
+
+    @property
+    def fraction(self) -> float:
+        return min(1.0, self.bytes_done / max(1, self.bytes_total))
 
 
 def archive_video(entry: Mapping[str, Any]) -> ArchiveVideo:
@@ -63,7 +84,7 @@ def free_bytes(directory: Path) -> int:
     return shutil.disk_usage(directory).free
 
 
-def fetch_video(directory: Path, *, video: ArchiveVideo) -> Path:
+def fetch_video(directory: Path, *, video: ArchiveVideo, on_progress: Callable[[FetchProgress], None]) -> Path:
     """Fetch the video into the directory and return where it landed.
 
     The fetch writes a part file of its own and moves it into place once
@@ -73,13 +94,42 @@ def fetch_video(directory: Path, *, video: ArchiveVideo) -> Path:
     """
     target = directory / video.name
     part = target.with_name(f"{target.name}.part")
+    on_progress(FetchProgress(bytes_done=0, bytes_total=video.size_bytes))
     try:
-        fetch_through(REMOTE, video, part)
+        _fetch_watched(video, part=part, on_progress=on_progress)
     except (OSError, subprocess.CalledProcessError):
         part.unlink(missing_ok=True)
         raise
     part.replace(target)
+    on_progress(FetchProgress(bytes_done=video.size_bytes, bytes_total=video.size_bytes))
     return target
+
+
+def _fetch_watched(video: ArchiveVideo, *, part: Path, on_progress: Callable[[FetchProgress], None]) -> None:
+    """Fetch into the part file while another thread reports how much of it has
+    arrived.
+
+    rclone reports nothing to its caller, and it writes into the file it
+    was given, whose size grows with what has arrived. The space it
+    reserves on disk is the whole video from the start, so that says
+    nothing.
+    """
+    stop = threading.Event()
+    watcher = threading.Thread(
+        target=_watch, args=(part,), kwargs={"total": video.size_bytes, "on_progress": on_progress, "stop": stop}
+    )
+    watcher.start()
+    try:
+        fetch_through(REMOTE, video, part)
+    finally:
+        stop.set()
+        watcher.join()
+
+
+def _watch(part: Path, *, total: int, on_progress: Callable[[FetchProgress], None], stop: threading.Event) -> None:
+    while not stop.wait(WATCH_SECONDS):
+        if part.is_file():
+            on_progress(FetchProgress(bytes_done=min(part.stat().st_size, total), bytes_total=total))
 
 
 def fetch_seconds(video: ArchiveVideo) -> float:
