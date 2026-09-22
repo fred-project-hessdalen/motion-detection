@@ -20,11 +20,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import altair as alt
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import pyarrow.parquet as pq
 import streamlit as st
+from plotly.colors import qualitative
 
 from hessdalen.dashboard.clip_queue import ClipQueue, Job, Report
 from hessdalen.dashboard.runs import probe
@@ -66,11 +67,13 @@ CLUSTER_COLORS = ("#4c78a8", "#f58518", "#54a24b", "#e45756", "#72b7b2", "#eeca3
 COLOUR_CHOICES = ("Cluster", "Side", "Label", "Camera")
 COLOUR_COLUMNS = {"Cluster": "cluster", "Side": "side", "Label": "label", "Camera": "camera"}
 SELECTED_CLUSTER = "Selected track's cluster"
-SELECTION = "track"
-ZOOM = "zoom"
-MAP_LABEL_WIDTH = 36
-"""Pixels kept for the map's y labels, which the layout sizes once for the
-whole map and which grow a decimal place when it is zoomed in."""
+OTHER_COLORS = qualitative.Dark24
+HOVER_COLUMNS = ["key", "label", "cluster", "side", "clip", "track_id", "frames", "straightness", "peak_deviation_max"]
+HOVER_TEMPLATE = (
+    "Label %{customdata[1]}<br>Cluster %{customdata[2]}<br>Side %{customdata[3]}<br>"
+    "Recording %{customdata[4]}<br>Track %{customdata[5]}<br>Frames %{customdata[6]}<br>"
+    "Straightness %{customdata[7]:.2f}<br>Peak deviation %{customdata[8]:.1f}<extra></extra>"
+)
 GALLERY_SIZE = 30
 POLL_SECONDS = 2.0
 
@@ -94,7 +97,8 @@ GALLERY_CHOICE_HELP = "The cluster the gallery below the map draws a sample of."
 MAP_HELP = (
     "Every track the corpus holds, placed so that tracks with similar descriptors sit close together. "
     "Grey points are tracks the clustering left out of every cluster. Click a point to see its track. "
-    "Scroll to zoom, drag to pan, and double-click to zoom back out."
+    "Scroll to zoom, drag to pan, and double-click to zoom back out. Click an entry in the legend to hide "
+    "or show its tracks."
 )
 PATH_HELP = (
     "The track drawn from its stored path through the blob's centre, which is what the descriptors "
@@ -148,12 +152,13 @@ def page() -> None:
     with map_column:
         st.subheader("Tracks", help=MAP_HELP)
         st.caption(f"{len(shown)} of {len(tracks)} tracks")
-        event = st.altair_chart(
+        event = st.plotly_chart(
             _scatter(shown, colour_column=COLOUR_COLUMNS[colour or "Cluster"]),
             on_select="rerun",
-            selection_mode=SELECTION,
+            selection_mode="points",
             key="track_map",
             width="stretch",
+            config={"scrollZoom": True, "displaylogo": False},
         )
         picked = _picked(shown, event)
         _gallery(shown, paths, cluster=_gallery_cluster(str(chosen_cluster), picked=picked))
@@ -165,55 +170,62 @@ def page() -> None:
             _selected(picked, points=_points(paths, key=str(picked["key"])))
 
 
-def _scatter(tracks: pd.DataFrame, *, colour_column: str) -> alt.Chart:
-    selection = alt.selection_point(name=SELECTION, fields=["key"], on="click")
-    zoom = alt.selection_interval(name=ZOOM, bind="scales")
-    return (
-        alt.Chart(tracks)
-        .mark_circle(size=45, clip=True)
-        .encode(
-            x=alt.X("x:Q", title=None, axis=alt.Axis(grid=True), scale=alt.Scale(zero=False)),
-            y=alt.Y(
-                "y:Q", title=None, axis=alt.Axis(grid=True, minExtent=MAP_LABEL_WIDTH), scale=alt.Scale(zero=False)
-            ),
-            color=_colour(tracks, column=colour_column),
-            opacity=alt.condition(selection, alt.value(0.95), alt.value(0.4)),
-            tooltip=[
-                alt.Tooltip("label:N", title="Label"),
-                alt.Tooltip("cluster:N", title="Cluster"),
-                alt.Tooltip("side:N", title="Side"),
-                alt.Tooltip("clip:N", title="Recording"),
-                alt.Tooltip("track_id:Q", title="Track"),
-                alt.Tooltip("frames:Q", title="Frames"),
-                alt.Tooltip("straightness:Q", title="Straightness", format=".2f"),
-                alt.Tooltip("peak_deviation_max:Q", title="Peak deviation", format=".1f"),
-            ],
+def _scatter(tracks: pd.DataFrame, *, colour_column: str) -> go.Figure:
+    """The tracks drawn by the graphics card, one trace per colour, so the
+    legend names each colour and a click on it hides or shows those tracks.
+
+    Drawing on the card keeps zooming and panning smooth over thousands
+    of points. The fixed UI revision keeps the zoom when the page is
+    drawn again after a click.
+    """
+    traces = []
+    for name, colour in _colours(tracks, column=colour_column).items():
+        members = tracks[tracks[colour_column] == name]
+        traces.append(
+            go.Scattergl(
+                x=members["x"],
+                y=members["y"],
+                mode="markers",
+                name=str(name),
+                marker={"color": colour, "size": 6, "opacity": 0.7},
+                selected={"marker": {"opacity": 1.0, "size": 11}},
+                unselected={"marker": {"opacity": 0.3}},
+                customdata=members[HOVER_COLUMNS].to_numpy(dtype=object),
+                hovertemplate=HOVER_TEMPLATE,
+            )
         )
-        .add_params(selection, zoom)
-        .properties(height=620, usermeta={"embedOptions": {"renderer": "canvas"}})
+    figure = go.Figure(traces)
+    figure.update_layout(
+        height=620,
+        dragmode="pan",
+        uirevision="track-map",
+        margin={"l": 0, "r": 0, "t": 10, "b": 0},
+        legend={"title": {"text": colour_column.capitalize()}},
+        xaxis={"showgrid": True, "zeroline": False},
+        yaxis={"showgrid": True, "zeroline": False},
     )
+    return figure
 
 
-def _colour(tracks: pd.DataFrame, *, column: str) -> alt.Color:
-    """Colour by the chosen column, with tracks outside every cluster in
-    grey."""
+def _colours(tracks: pd.DataFrame, *, column: str) -> dict[str, str]:
+    """The colour of each value of the column, with the clusters in their
+    fixed colours and tracks outside every cluster in grey."""
     if column != "cluster":
-        return alt.Color(f"{column}:N", title=column.capitalize(), scale=alt.Scale(scheme="category20"))
+        names = sorted(tracks[column].unique())
+        return {name: OTHER_COLORS[index % len(OTHER_COLORS)] for index, name in enumerate(names)}
 
     named = [name for name in _cluster_names(tracks) if name != UNASSIGNED_NAME]
-    colours = [CLUSTER_COLORS[index % len(CLUSTER_COLORS)] for index in range(len(named))]
-    return alt.Color(
-        "cluster:N",
-        title="Cluster",
-        scale=alt.Scale(domain=[*named, UNASSIGNED_NAME], range=[*colours, UNASSIGNED_COLOR]),
-    )
+    colours = {name: CLUSTER_COLORS[index % len(CLUSTER_COLORS)] for index, name in enumerate(named)}
+    if (tracks["cluster"] == UNASSIGNED_NAME).any():
+        colours[UNASSIGNED_NAME] = UNASSIGNED_COLOR
+    return colours
 
 
 def _picked(shown: pd.DataFrame, event: Any) -> pd.Series | None:
-    selected = event.selection.get(SELECTION, []) if isinstance(event.selection, Mapping) else []
-    if not selected:
+    points = event.selection.get("points", []) if isinstance(event.selection, Mapping) else []
+    if not points:
         return None
-    held = shown.loc[shown["key"] == str(selected[0].get("key"))]
+    held = shown.loc[shown["key"] == str(points[0]["customdata"][0])]
     return None if held.empty else held.iloc[0]
 
 
