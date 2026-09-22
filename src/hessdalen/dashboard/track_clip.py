@@ -1,5 +1,9 @@
 """One stored track drawn on the stretch of its recording it was found in.
 
+A build writes two videos of that stretch. One holds the whole frame
+with the track's path and a box on it, and the other holds a crop that
+keeps the detection in the middle of the picture.
+
 Nothing is detected. The track file already holds where the track was on
 every frame it was matched, so the drawn path sits where the detector
 saw the object as long as the frames carry the numbers the detector
@@ -20,7 +24,7 @@ import av
 import cv2
 import numpy as np
 
-from hessdalen.dashboard.encoder import LIVE, encode, even, playback_rate
+from hessdalen.dashboard.encoder import LIVE, FrameWriter, encode, encoder, even, playback_rate
 from hessdalen.dashboard.panels import box_size, draw_box, draw_frame_number, draw_trail
 from hessdalen.dashboard.store import digest
 from hessdalen.io.video import TIMESTAMP_MASK_COORDS, FrameSource, VideoStream
@@ -63,6 +67,14 @@ class StoredTrack:
     @property
     def last_frame(self) -> int:
         return int(self.frame_numbers[-1])
+
+
+CLOSE_UP_RADII = 3
+"""How far out from a detection the close-up reaches, in box half-widths.
+
+The box is drawn a half-width out from the detection on every side, so
+the close-up holds the box and as much again around it.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,9 +121,30 @@ def stretch_around(track: StoredTrack, *, frames_per_second: float, frame_count:
     return Stretch(begin_frame=max(0, track.first_frame - lead), end_frame=min(last, track.last_frame + lead))
 
 
-def track_clip_path(video: Path, *, track: StoredTrack, stretch: Stretch, output_dir: Path) -> Path:
-    """Where the clip of this track is kept, named for everything that decides
-    it."""
+@dataclass(frozen=True, slots=True)
+class TrackClips:
+    """The two videos one track is built into.
+
+    Both are drawn from the same pass over the recording, so a track
+    that has one of them has the other.
+    """
+
+    whole: Path
+    close_up: Path
+
+    @property
+    def built(self) -> bool:
+        return self.whole.is_file() and self.close_up.is_file()
+
+    @property
+    def parts(self) -> TrackClips:
+        """Where the two videos are written while they are being built."""
+        return TrackClips(whole=_part(self.whole), close_up=_part(self.close_up))
+
+
+def track_clip_paths(video: Path, *, track: StoredTrack, stretch: Stretch, output_dir: Path) -> TrackClips:
+    """Where the videos of this track are kept, named for everything that
+    decides them."""
     name = digest(
         {
             "video": video.name,
@@ -122,7 +155,8 @@ def track_clip_path(video: Path, *, track: StoredTrack, stretch: Stretch, output
         },
         modules=MODULES,
     )
-    return output_dir / f"{video.stem}__track{track.track_id}__{name}.mp4"
+    stem = f"{video.stem}__track{track.track_id}__{name}"
+    return TrackClips(whole=output_dir / f"{stem}.mp4", close_up=output_dir / f"{stem}__close.mp4")
 
 
 def build_track_clip(
@@ -131,11 +165,16 @@ def build_track_clip(
     track: StoredTrack,
     stretch: Stretch,
     frames_per_second: float,
-    output: Path,
+    output: TrackClips,
     on_progress: Callable[[ClipProgress], None],
 ) -> int:
     """Draw the track on its stretch of the recording, and return the frames
     written.
+
+    Both videos are written from the one pass, because reaching the
+    stretch is most of what a build costs. The whole frame carries the
+    path and the box, and the close-up carries the picture alone, which
+    is what the crop is there to show.
 
     The frames are resized to the height the track was detected at,
     because that is the frame its positions are pixels of.
@@ -151,13 +190,22 @@ def build_track_clip(
     color = track_color(track.track_id)
     planar = np.empty((frame_height * 3 // 2, frame_width), dtype=np.uint8)
 
-    def planar_frames() -> Iterator[np.ndarray]:
+    side = close_up_side(size)
+    centres = close_up_centres(track, stretch=stretch)
+    crop = np.empty((side, side, 3), dtype=np.uint8)
+    crop_planar = np.empty((side * 3 // 2, side), dtype=np.uint8)
+
+    def planar_frames(write_close_up: FrameWriter) -> Iterator[np.ndarray]:
         for offset, colour in enumerate(stream.stream_frames()):
             frame_number = stretch.begin_frame + offset
             if frame_number > stretch.end_frame:
                 return
 
             canvas = np.ascontiguousarray(colour.frame[:frame_height, :frame_width])
+            cut_close_up(crop, frame=canvas, centre=centres[offset])
+            cv2.cvtColor(crop, cv2.COLOR_BGR2YUV_I420, dst=crop_planar)
+            write_close_up(crop_planar)
+
             draw_stored_track(canvas, track=track, frame_number=frame_number, color=color, size=size)
             draw_frame_number(canvas, frame_number)
             cv2.cvtColor(canvas, cv2.COLOR_BGR2YUV_I420, dst=planar)
@@ -165,15 +213,50 @@ def build_track_clip(
             if (offset + 1) % REPORT_EVERY == 0 or frame_number == stretch.end_frame:
                 on_progress(ClipProgress(frames_done=frame_number + 1, stretch=stretch))
 
-    output.parent.mkdir(parents=True, exist_ok=True)
-    return encode(
-        planar_frames(),
-        output=output,
-        width=frame_width,
-        height=frame_height,
-        frames_per_second=playback_rate(frames_per_second),
-        encoding=LIVE,
-    )
+    output.whole.parent.mkdir(parents=True, exist_ok=True)
+    rate = playback_rate(frames_per_second)
+    with encoder(output.close_up, width=side, height=side, frames_per_second=rate, encoding=LIVE) as write_close_up:
+        return encode(
+            planar_frames(write_close_up),
+            output=output.whole,
+            width=frame_width,
+            height=frame_height,
+            frames_per_second=rate,
+            encoding=LIVE,
+        )
+
+
+def close_up_side(size: int) -> int:
+    """The side of the close-up crop, in pixels of the frame it is cut from."""
+    return 2 * CLOSE_UP_RADII * size
+
+
+def close_up_centres(track: StoredTrack, *, stretch: Stretch) -> np.ndarray:
+    """Where the close-up is cut from on each frame of the stretch.
+
+    A track goes unmatched for a frame here and there, and holding its
+    last position over those frames keeps the crop where the object was
+    rather than jumping back to where the track started.
+    """
+    numbers = np.arange(stretch.begin_frame, stretch.end_frame + 1)
+    reached = np.clip(np.searchsorted(track.frame_numbers, numbers, side="right") - 1, 0, None)
+    return np.column_stack([track.x[reached], track.y[reached]]).round().astype(np.int32)
+
+
+def cut_close_up(crop: np.ndarray, *, frame: np.ndarray, centre: np.ndarray) -> None:
+    """Fill the crop with the picture around the centre, black where the crop
+    reaches past the edge of the frame."""
+    side = crop.shape[0]
+    top, left = int(centre[1]) - side // 2, int(centre[0]) - side // 2
+    rows = slice(max(0, top), min(frame.shape[0], top + side))
+    columns = slice(max(0, left), min(frame.shape[1], left + side))
+
+    crop[:] = 0
+    crop[rows.start - top : rows.stop - top, columns.start - left : columns.stop - left] = frame[rows, columns]
+
+
+def _part(clip: Path) -> Path:
+    return clip.with_name(f"{clip.stem}.part{clip.suffix}")
 
 
 def stretch_source(video: Path, *, stretch: Stretch, on_progress: Callable[[ClipProgress], None]) -> FrameSource:

@@ -162,7 +162,13 @@ Clicking a point draws that track at once from its stored path: where it
 was in the frame, its shape fitted to a box of its own, and its
 brightness and size frame by frame. Drawing it on its recording, from a
 second before it starts to a second after it ends, runs in the
-background, and the clip plays once it is built. A track deep in a
+background, and two videos play once they are built. In the frame holds
+the whole picture with the track's path and a box drawn on it, and Close
+up holds a crop three box half-widths out from the detection on every
+side, which follows it from frame to frame and carries nothing drawn
+over it. The crop is black where it reaches past the edge of the
+picture. Both come out of the one pass over the recording, because
+reaching the track is most of what a build costs. A track deep in a
 recording is reached by seeking to the keyframe before it, which needs
 the recording's frame stamps read first. A recording whose stamps do
 not say which frame is which has every frame ahead of the track passed

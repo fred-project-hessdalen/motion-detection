@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from hessdalen.dashboard.track_clip import (
+    CLOSE_UP_RADII,
     INDEXED_FROM,
     REPORT_EVERY,
     ClipProgress,
@@ -16,10 +17,14 @@ from hessdalen.dashboard.track_clip import (
     SeekingFrameSource,
     StoredTrack,
     Stretch,
+    close_up_centres,
+    close_up_side,
+    cut_close_up,
     draw_stored_track,
     frame_index,
     stretch_around,
     stretch_source,
+    track_clip_paths,
 )
 
 RATE = 25.0
@@ -142,6 +147,52 @@ def test_a_recording_whose_frames_carry_no_stamp_is_read_from_its_first_frame(tm
 
     assert frame_index(video) is None
     assert isinstance(stretch_source(video, stretch=Stretch(30, 35), on_progress=_nothing), PassingFrameSource)
+
+
+def test_the_close_up_reaches_a_box_beyond_the_box_on_every_side() -> None:
+    assert close_up_side(SIZE) == 2 * CLOSE_UP_RADII * SIZE
+
+
+def test_the_close_up_follows_the_track_and_holds_where_it_is_unmatched() -> None:
+    """A track goes unmatched for a frame here and there, and the crop stays
+    where the object was rather than jumping back to the start."""
+    centres = close_up_centres(_track(frames=[5, 6, 9]), stretch=Stretch(begin_frame=3, end_frame=10))
+
+    assert centres[0].tolist() == list(_position(5))
+    assert centres[4].tolist() == list(_position(6))
+    assert centres[-1].tolist() == list(_position(9))
+
+
+def test_the_close_up_is_cut_around_the_detection() -> None:
+    frame = np.zeros((48, 64, 3), dtype=np.uint8)
+    frame[30, 20] = (7, 8, 9)
+    crop = np.empty((8, 8, 3), dtype=np.uint8)
+
+    cut_close_up(crop, frame=frame, centre=np.array([20, 30]))
+
+    assert crop[4, 4].tolist() == [7, 8, 9]
+    assert int(crop.sum()) == 7 + 8 + 9
+
+
+def test_a_close_up_over_the_edge_of_the_frame_is_padded_with_black() -> None:
+    frame = np.full((48, 64, 3), 200, dtype=np.uint8)
+    crop = np.empty((8, 8, 3), dtype=np.uint8)
+
+    cut_close_up(crop, frame=frame, centre=np.array([1, 1]))
+
+    assert not crop[:3].any()
+    assert not crop[:, :3].any()
+    assert crop[5, 5].tolist() == [200, 200, 200]
+
+
+def test_both_videos_of_a_track_are_kept_under_one_name(tmp_path) -> None:
+    clips = track_clip_paths(
+        tmp_path / "Cam1.mkv", track=_track(frames=[5]), stretch=Stretch(0, 9), output_dir=tmp_path
+    )
+
+    assert clips.whole != clips.close_up
+    assert not clips.built
+    assert clips.parts.whole.suffixes == [".part", ".mp4"]
 
 
 def _nothing(progress: ClipProgress) -> None:

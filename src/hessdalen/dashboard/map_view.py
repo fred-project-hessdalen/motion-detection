@@ -33,9 +33,10 @@ from hessdalen.dashboard.runs import probe
 from hessdalen.dashboard.track_clip import (
     ClipProgress,
     StoredTrack,
+    TrackClips,
     build_track_clip,
     stretch_around,
-    track_clip_path,
+    track_clip_paths,
 )
 from hessdalen.dashboard.track_map_chart import MAP_HEIGHT, track_map_chart
 from hessdalen.dashboard.track_preview import close_up, frame_view, gallery_html, light_curve
@@ -85,6 +86,8 @@ PICKED_KEY = "picked_track"
 SAMPLE_TITLE = "Cluster sample"
 NEAREST_TITLE = "Nearest tracks"
 SELECTED_TITLE = "Selected track"
+WHOLE_TITLE = "In the frame"
+CLOSE_UP_TITLE = "Close up"
 SAMPLE_COLOR = "#e6007e"
 NEAREST_COLOR = "#0091d5"
 SAMPLE_MARKER = {"color": SAMPLE_COLOR, "symbol": "circle-open", "size": 12, "line": {"width": 2}}
@@ -132,9 +135,11 @@ PATH_HELP = (
     "were computed from. Colour runs from dark blue on its first frame to yellow on its last."
 )
 VIDEO_HELP = (
-    "The track drawn on its recording, from a second before it starts to a second after it ends. "
-    "It is built in the background, one track at a time, and choosing another track stops the build "
-    "under way."
+    "The track on its recording, from a second before it starts to a second after it ends. In the frame "
+    "shows the whole picture with the track's path and a box drawn on it. Close up shows a crop that "
+    "keeps the detection in the middle and nothing drawn over it, so the object itself can be seen. Both "
+    "are built in the background, one track at a time, and choosing another track stops the build under "
+    "way."
 )
 GALLERY_HELP = (
     f"Up to {GALLERY_SIZE} tracks drawn at random from the cluster, each drawn from its stored path and "
@@ -364,22 +369,30 @@ def _selected(track: pd.Series, *, points: pd.DataFrame) -> None:
 
 
 def _video(key: str, *, recording: str, stored: StoredTrack) -> None:
-    """The clip of the track when it is built, and its progress until then."""
+    """The clips of the track when they are built, and their progress until
+    then."""
     source = _source(recording)
     if source is None:
         st.info(UNSOURCED_TEXT)
         return
 
     if source.path is not None:
-        clip = _clip_path(source.path, track=stored)
-        if clip.is_file():
-            st.video(str(clip), loop=True, autoplay=True, muted=True)
+        clips = _clips(source.path, track=stored)
+        if clips.built:
+            _play(clips)
             return
     elif not _may_fetch(source):
         return
 
     _queue().request(key, _clip_job(source, track=stored))
     _clip_progress(key, fetching=source.path is None)
+
+
+def _play(clips: TrackClips) -> None:
+    """The whole frame and the crop that follows the detection, a tab each."""
+    whole, close = st.tabs([WHOLE_TITLE, CLOSE_UP_TITLE])
+    whole.video(str(clips.whole), loop=True, autoplay=True, muted=True)
+    close.video(str(clips.close_up), loop=True, autoplay=True, muted=True)
 
 
 def _source(recording: str) -> VideoSource | None:
@@ -467,27 +480,29 @@ def _clip_job(source: VideoSource, *, track: StoredTrack) -> Job:
 
     def job(report: Report) -> Path:
         video = source.path or fetch_video(FETCHED_DIR, video=_archived(source), on_progress=report)
-        clip = _clip_path(video, track=track)
-        if not clip.is_file():
+        clips = _clips(video, track=track)
+        if not clips.built:
             details = probe(video)
             stretch = stretch_around(
                 track, frames_per_second=details.frames_per_second, frame_count=details.frame_count
             )
-            part = clip.with_name(f"{clip.stem}.part{clip.suffix}")
+            parts = clips.parts
             try:
                 build_track_clip(
                     video,
                     track=track,
                     stretch=stretch,
                     frames_per_second=details.frames_per_second,
-                    output=part,
+                    output=parts,
                     on_progress=report,
                 )
             except BaseException:
-                part.unlink(missing_ok=True)
+                parts.whole.unlink(missing_ok=True)
+                parts.close_up.unlink(missing_ok=True)
                 raise
-            part.replace(clip)
-        return clip
+            parts.whole.replace(clips.whole)
+            parts.close_up.replace(clips.close_up)
+        return clips.whole
 
     return job
 
@@ -498,10 +513,10 @@ def _archived(source: VideoSource) -> ArchiveVideo:
     return source.archived
 
 
-def _clip_path(video: Path, *, track: StoredTrack) -> Path:
+def _clips(video: Path, *, track: StoredTrack) -> TrackClips:
     details = probe(video)
     stretch = stretch_around(track, frames_per_second=details.frames_per_second, frame_count=details.frame_count)
-    return track_clip_path(video, track=track, stretch=stretch, output_dir=CLIPS_DIR)
+    return track_clip_paths(video, track=track, stretch=stretch, output_dir=CLIPS_DIR)
 
 
 def _gallery(tracks: pd.DataFrame, *, cluster: str | None, sample: pd.DataFrame) -> None:

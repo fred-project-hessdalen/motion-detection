@@ -7,15 +7,20 @@ in how hard the encoder is asked to work at each frame.
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
+from typing import TypeAlias
 
 import numpy as np
 
 PIXEL_FORMAT = "yuv420p"
 FALLBACK_FPS = 25.0
+
+FrameWriter: TypeAlias = Callable[[np.ndarray], object]
+"""What one planar frame is handed to on its way into a video."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,29 +64,48 @@ def encode(
     if first is None:
         return 0
 
-    encoder = _open_encoder(
+    written = 0
+    with encoder(output, width=width, height=height, frames_per_second=frames_per_second, encoding=encoding) as write:
+        for frame in chain((first,), frames):
+            write(frame)
+            written += 1
+    return written
+
+
+@contextmanager
+def encoder(
+    output: Path,
+    *,
+    width: int,
+    height: int,
+    frames_per_second: float,
+    encoding: Encoding,
+) -> Iterator[FrameWriter]:
+    """An open encoder, as the call that hands it one planar frame.
+
+    A caller that has to write two videos from one pass over a recording
+    holds one of them open here while the other is written frame by
+    frame.
+    """
+    process = _open_encoder(
         output,
         width=width,
         height=height,
         frames_per_second=frames_per_second,
         encoding=encoding,
     )
-    stdin = encoder.stdin
+    stdin = process.stdin
     if stdin is None:
         raise RuntimeError("ffmpeg was started without an input pipe.")
 
-    written = 0
     try:
-        for frame in chain((first,), frames):
-            stdin.write(frame)
-            written += 1
+        yield stdin.write
     finally:
         stdin.close()
-        encoder.wait()
+        process.wait()
 
-    if encoder.returncode != 0:
-        raise RuntimeError(f"ffmpeg exited with status {encoder.returncode}.")
-    return written
+    if process.returncode != 0:
+        raise RuntimeError(f"ffmpeg exited with status {process.returncode}.")
 
 
 def _open_encoder(
