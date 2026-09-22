@@ -39,7 +39,7 @@ def test_how_far_a_build_has_got_is_reported_while_it_runs() -> None:
     progress = queue.state("a").progress
     release.set()
     assert queue.state("a").stage in ("building", "ready")
-    assert progress is not None
+    assert isinstance(progress, ClipProgress)
     assert progress.frames_done == 60
 
 

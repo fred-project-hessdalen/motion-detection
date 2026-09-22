@@ -80,5 +80,5 @@ if __name__ == "__main__":
     # Numba's default threading layer tries TBB first and warns when the
     # system's TBB is older than it supports. Seeded UMAP runs on one thread,
     # so numba's own layer costs nothing.
-    numba.config.THREADING_LAYER = "workqueue"
+    numba.config.THREADING_LAYER = "workqueue"  # type: ignore[attr-defined]
     main(parse_args())

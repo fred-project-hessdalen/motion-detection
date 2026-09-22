@@ -207,7 +207,7 @@ uv run pytest
 
 # Linting and type checking
 uv run ruff check .
-uv run mypy src/
+uv run mypy src scripts tests
 
 # Format code
 uv run ruff format .

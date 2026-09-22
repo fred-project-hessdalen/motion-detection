@@ -171,7 +171,8 @@ def _write_coded_video(path, *, frames: int, container: str | None = None):
 
 
 def _write_video(path, *, frames: int):
-    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), 25.0, (64, 48))
+    fourcc = cv2.VideoWriter_fourcc(*"MJPG")  # type: ignore[attr-defined]
+    writer = cv2.VideoWriter(str(path), fourcc, 25.0, (64, 48))
     for index in range(frames):
         writer.write(np.full((48, 64, 3), index % 255, dtype=np.uint8))
     writer.release()
