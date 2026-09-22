@@ -6,6 +6,10 @@ the tracks they were given to rather than as the clusters, because a
 later run of the analysis step numbers its clusters afresh while a track
 keeps its name.
 
+A name is kept in one form, in small letters with single spaces between
+its words and every word in the singular, so that one thing does not
+stand under two spellings of itself.
+
 The file is what a training set is built from, so it holds the tracks
 and nothing about the map they were picked on.
 """
@@ -13,15 +17,79 @@ and nothing about the map they were picked on.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
+
+WORD_BREAK = re.compile(r"[^0-9A-Za-z]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+"""Where one word of a name ends and the next begins.
+
+A name is written however the person writing it likes, so the break is
+anything that is not a letter or a digit, and the step from a small
+letter into a capital that a run-together name is written with.
+"""
+
+PLURAL_ENDINGS = (
+    ("ss", "ss"),
+    ("us", "us"),
+    ("is", "is"),
+    ("ies", "y"),
+    ("sses", "ss"),
+    ("shes", "sh"),
+    ("ches", "ch"),
+    ("xes", "x"),
+    ("oes", "o"),
+    ("s", ""),
+)
+"""What a plural ending is replaced by, the endings that stand for themselves
+first.
+
+These are the regular endings of English and reach no further. A word
+whose plural is made another way keeps whichever form it was written in.
+"""
+
+KEPT_ENDINGS = frozenset({"aircraft", "bus", "canvas", "gas", "lens", "series", "species"})
+"""Words that end as a plural does and are already singular."""
+
+
+def canonical_label(name: str) -> str:
+    """The name in the one form it is kept in: small letters, single spaces
+    between the words, and every word in the singular.
+
+    One thing is named the same way however it was typed, so that
+    "Street Lights", "streetLights" and "street-light" all come to the
+    same name and hold their tracks together.
+    """
+    words = (word for word in WORD_BREAK.split(name) if word)
+    return " ".join(_singular(word.lower()) for word in words)
+
+
+def _singular(word: str) -> str:
+    if word in KEPT_ENDINGS or not word.endswith("s"):
+        return word
+
+    for plural, singular in PLURAL_ENDINGS:
+        if word.endswith(plural):
+            return word[: len(word) - len(plural)] + singular
+    return word
 
 
 def read_labels(path: Path) -> dict[str, list[str]]:
-    """Every name given so far, with the tracks under it."""
+    """Every name given so far, with the tracks under it.
+
+    A name written before it was brought to the form names are kept in
+    is read in that form, so a file holding both "birds" and "bird"
+    hands back the one name with the tracks of both.
+    """
     if not path.is_file():
         return {}
+
     held = json.loads(path.read_text())
-    return {str(name): [str(key) for key in keys] for name, keys in held.items()}
+    gathered: dict[str, list[str]] = {}
+    for name, keys in held.items():
+        canonical = canonical_label(str(name))
+        if canonical:
+            gathered[canonical] = gathered.get(canonical, []) + [str(key) for key in keys]
+    return {name: sorted(set(keys)) for name, keys in gathered.items()}
 
 
 def label_of(labels: dict[str, list[str]], *, keys: list[str]) -> str:
@@ -40,15 +108,16 @@ def label_of(labels: dict[str, list[str]], *, keys: list[str]) -> str:
 def write_labels(path: Path, labels: dict[str, list[str]], *, name: str, keys: list[str]) -> dict[str, list[str]]:
     """Put these tracks under this name and write every name out again.
 
-    The tracks are taken out of the name they were under first, so a
-    cluster named again moves rather than standing under both names.
-    Under an empty name they are only taken out, which is how a name is
-    withdrawn.
+    The name is brought to the form names are kept in first. The tracks
+    are taken out of the name they were under, so a cluster named again
+    moves rather than standing under both names. Under an empty name
+    they are only taken out, which is how a name is withdrawn.
     """
+    given = canonical_label(name)
     wanted = set(keys)
     written = {held: [key for key in under if key not in wanted] for held, under in labels.items()}
-    if name:
-        written[name] = sorted(set(written.get(name, [])) | wanted)
+    if given:
+        written[given] = sorted(set(written.get(given, [])) | wanted)
 
     written = {held: under for held, under in written.items() if under}
     path.parent.mkdir(parents=True, exist_ok=True)

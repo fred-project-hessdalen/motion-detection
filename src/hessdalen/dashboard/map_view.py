@@ -165,9 +165,10 @@ GALLERY_HELP = (
 SHUFFLE_HELP = "Draw another random sample of the cluster."
 LABEL_HELP = (
     "What this cluster holds, in a word of your own, such as insect or plane. The name is kept against "
-    f"the cluster's tracks in {LABELS_PATH.name}, which is what a training set is built from. Naming the "
-    "cluster again moves its tracks to the new name, and an empty name takes them out of the one they "
-    "are under."
+    f"the cluster's tracks in {LABELS_PATH.name}, which is what a training set is built from. It is kept "
+    "in small letters with single spaces between its words and every word in the singular, so that "
+    '"Street Lights" and "streetLight" come to the one name. Naming the cluster again moves its tracks '
+    "to the new name, and an empty name takes them out of the one they are under."
 )
 SAVE_LABEL_HELP = "Keep this name against every track of the cluster."
 NEIGHBOURS_HELP = (

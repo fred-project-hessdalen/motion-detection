@@ -181,9 +181,13 @@ cluster chosen in the sidebar, from their stored paths alone. Under that
 gallery, Cluster label gives the cluster a name of your own and Save
 keeps it against every one of the cluster's tracks in
 `data/out/analysis/cluster-labels.json`, which holds each name with the
-tracks under it and is what a training set is built from. A cluster
-named again moves to the new name, and an empty name takes its tracks
-out of the one they were under. A second
+tracks under it and is what a training set is built from. A name is kept
+in small letters with single spaces between its words and every word in
+the singular, so `Street Lights` and `streetLight` come to the one name
+`street light`, and a file holding two spellings of a name has the
+tracks of both under it once it is read. A cluster named again moves to
+the new name, and an empty name takes its tracks out of the one they
+were under. A second
 gallery draws the 30 tracks nearest the selected one on the map, from
 any cluster and within the neighbour radius set in the sidebar, and
 names the cluster of each. Tracks whose movement from step to step is

@@ -3,7 +3,9 @@ them."""
 
 import json
 
-from hessdalen.dashboard.cluster_labels import label_of, read_labels, write_labels
+import pytest
+
+from hessdalen.dashboard.cluster_labels import canonical_label, label_of, read_labels, write_labels
 
 BIRDS = ["a/Cam1_2025-06-03__12-40-00/1", "a/Cam1_2025-06-03__12-40-00/2"]
 INSECTS = ["b/Cam2_2025-01-09__23-20-00/7", "b/Cam2_2025-01-09__23-20-00/9"]
@@ -59,3 +61,44 @@ def test_a_cluster_is_under_the_name_its_tracks_carry(tmp_path) -> None:
 
 def test_no_file_yet_means_no_name_given(tmp_path) -> None:
     assert read_labels(tmp_path / "cluster-labels.json") == {}
+
+
+@pytest.mark.parametrize(
+    ("written", "kept"),
+    [
+        ("Bird", "bird"),
+        ("BIRDS", "bird"),
+        ("streetLight", "street light"),
+        ("StreetLights", "street light"),
+        ("street-lights", "street light"),
+        ("  street   light  ", "street light"),
+        ("insects", "insect"),
+        ("flashes", "flash"),
+        ("bodies", "body"),
+        ("boxes", "box"),
+        ("mosquitoes", "mosquito"),
+        ("gas", "gas"),
+        ("aircraft", "aircraft"),
+        ("species", "species"),
+        ("!", ""),
+    ],
+)
+def test_a_name_is_kept_in_one_form(written: str, kept: str) -> None:
+    assert canonical_label(written) == kept
+
+
+def test_a_name_is_brought_to_that_form_before_it_is_written(tmp_path) -> None:
+    path = tmp_path / "cluster-labels.json"
+
+    written = write_labels(path, read_labels(path), name="Street Lights", keys=BIRDS)
+
+    assert written == {"street light": sorted(BIRDS)}
+
+
+def test_two_names_that_come_to_one_hold_their_tracks_together(tmp_path) -> None:
+    """A file written before names were kept in one form carries both, and
+    reading it puts the tracks of both under the one name."""
+    path = tmp_path / "cluster-labels.json"
+    path.write_text(json.dumps({"bird": BIRDS[:1], "Birds": BIRDS[1:]}))
+
+    assert read_labels(path) == {"bird": sorted(BIRDS)}
