@@ -1,23 +1,32 @@
 """What a track clip shows of its recording, and what it draws on each
 frame."""
 
+from fractions import Fraction
+
+import av
 import cv2
 import numpy as np
 import pytest
 
 from hessdalen.dashboard.track_clip import (
+    INDEXED_FROM,
     REPORT_EVERY,
     ClipProgress,
     PassingFrameSource,
+    SeekingFrameSource,
     StoredTrack,
     Stretch,
     draw_stored_track,
+    frame_index,
     stretch_around,
+    stretch_source,
 )
 
 RATE = 25.0
 SIZE = 8
 COLOR = (0, 255, 0)
+GOP = 10
+CODED_FRAMES = INDEXED_FROM + 20
 
 
 def test_a_clip_shows_a_second_either_side_of_its_track() -> None:
@@ -97,6 +106,68 @@ def test_the_shape_is_read_from_the_start_without_passing_anything(tmp_path) -> 
 
     assert sample is not None
     assert reports == []
+
+
+def test_a_stretch_deep_in_a_recording_is_seeked_into(tmp_path) -> None:
+    video = _write_coded_video(tmp_path / "recording.mp4", frames=CODED_FRAMES)
+
+    deep = stretch_source(video, stretch=Stretch(INDEXED_FROM, INDEXED_FROM + 4), on_progress=_nothing)
+    near = stretch_source(video, stretch=Stretch(INDEXED_FROM - 1, INDEXED_FROM + 3), on_progress=_nothing)
+
+    assert isinstance(deep, SeekingFrameSource)
+    assert isinstance(near, PassingFrameSource)
+
+
+def test_seeking_into_a_stretch_lands_on_the_frames_passing_reaches(tmp_path) -> None:
+    """The stored track's frames are numbered by a decode from the first frame,
+    so a seek that lands anywhere else draws the path on the wrong
+    picture."""
+    video = _write_coded_video(tmp_path / "recording.mp4", frames=CODED_FRAMES)
+    stretch = Stretch(begin_frame=INDEXED_FROM, end_frame=INDEXED_FROM + 4)
+    index = frame_index(video)
+    assert index is not None
+
+    passed = list(PassingFrameSource(video, stretch=stretch, on_progress=_nothing).colour_frames())
+    seeked = list(SeekingFrameSource(video, stretch=stretch, index=index, on_progress=_nothing).colour_frames())
+
+    assert len(seeked) == len(passed) == CODED_FRAMES - stretch.begin_frame
+    for reached, grabbed in zip(seeked, passed):
+        assert np.abs(reached.astype(np.int32) - grabbed.astype(np.int32)).mean() < 1.0
+
+
+def test_a_recording_whose_frames_carry_no_stamp_is_read_from_its_first_frame(tmp_path) -> None:
+    """A stream written without a container carries no stamps to tell its
+    frames apart by."""
+    video = _write_coded_video(tmp_path / "recording.h264", frames=40, container="h264")
+
+    assert frame_index(video) is None
+    assert isinstance(stretch_source(video, stretch=Stretch(30, 35), on_progress=_nothing), PassingFrameSource)
+
+
+def _nothing(progress: ClipProgress) -> None:
+    pass
+
+
+def _write_coded_video(path, *, frames: int, container: str | None = None):
+    """A recording coded the way the archive's are, with a keyframe every GOP
+    frames, written without a container when one is named to leave its frames
+    unstamped."""
+    step = Fraction(1, int(RATE))
+    with av.open(str(path), mode="w", format=container) as held:
+        stream = held.add_stream("libx264", rate=int(RATE))
+        stream.width, stream.height = 64, 48
+        stream.pix_fmt = "yuv420p"
+        stream.codec_context.gop_size = GOP
+        stream.codec_context.time_base = step
+        for index in range(frames):
+            picture = av.VideoFrame.from_ndarray(np.full((48, 64, 3), index % 256, dtype=np.uint8), format="bgr24")
+            picture.pts = index
+            picture.time_base = step
+            for packet in stream.encode(picture):
+                held.mux(packet)
+        for packet in stream.encode():
+            held.mux(packet)
+    return path
 
 
 def _write_video(path, *, frames: int):

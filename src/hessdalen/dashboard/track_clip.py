@@ -1,26 +1,29 @@
 """One stored track drawn on the stretch of its recording it was found in.
 
 Nothing is detected. The track file already holds where the track was on
-every frame it was matched, and the frames are reached by grabbing,
-which lands on exactly the frame a linear decode numbers the same way.
-The drawn path therefore sits where the detector saw the object, at the
-cost of passing every frame ahead of the stretch and none of the
-detection.
+every frame it was matched, so the drawn path sits where the detector
+saw the object as long as the frames carry the numbers the detector
+counted. A recording whose stamps rise with its frames is reached by
+seeking to the keyframe before the stretch and reading the numbers off
+those stamps. Any other recording is reached by passing every frame
+ahead of the stretch.
 """
 
 from __future__ import annotations
 
+import bisect
 from collections.abc import Callable, Generator, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+import av
 import cv2
 import numpy as np
 
 from hessdalen.dashboard.encoder import LIVE, encode, even, playback_rate
 from hessdalen.dashboard.panels import box_size, draw_box, draw_frame_number, draw_trail
 from hessdalen.dashboard.store import digest
-from hessdalen.io.video import TIMESTAMP_MASK_COORDS, VideoStream
+from hessdalen.io.video import TIMESTAMP_MASK_COORDS, FrameSource, VideoStream
 from hessdalen.processing.debug import track_color
 
 MODULES = ("track_clip.py", "panels.py", "encoder.py")
@@ -32,6 +35,15 @@ ends."""
 
 REPORT_EVERY = 25
 """Frames passed between two reports of how far the build has got."""
+
+INDEXED_FROM = 500
+"""Frames a stretch has to start past before the recording is indexed.
+
+Reading the index costs about 40 microseconds a frame over the whole
+recording, and passing a frame costs about 2.5 milliseconds at the size
+the cameras record at, so a stretch nearer the start than this is
+reached faster by passing the frames ahead of it.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,7 +141,7 @@ def build_track_clip(
     because that is the frame its positions are pixels of.
     """
     stream = VideoStream(
-        PassingFrameSource(video, stretch=stretch, on_progress=on_progress),
+        stretch_source(video, stretch=stretch, on_progress=on_progress),
         mask_coords=TIMESTAMP_MASK_COORDS,
         target_height=track.frame_height,
     )
@@ -162,6 +174,117 @@ def build_track_clip(
         frames_per_second=playback_rate(frames_per_second),
         encoding=LIVE,
     )
+
+
+def stretch_source(video: Path, *, stretch: Stretch, on_progress: Callable[[ClipProgress], None]) -> FrameSource:
+    """The source a build reads its stretch of the recording from.
+
+    A recording whose stamps say which frame is which is seeked into.
+    Any other is read from its first frame, which is the only way left
+    to give a frame the number the detector counted it under.
+    """
+    index = frame_index(video) if stretch.begin_frame >= INDEXED_FROM else None
+    if index is None:
+        return PassingFrameSource(video, stretch=stretch, on_progress=on_progress)
+    return SeekingFrameSource(video, stretch=stretch, index=index, on_progress=on_progress)
+
+
+@dataclass(frozen=True, slots=True)
+class FrameIndex:
+    """Every frame of a recording by its stamp, and which of them are
+    keyframes, both in the order a decode from the first frame reaches
+    them."""
+
+    stamps: tuple[int, ...]
+    keyframes: tuple[int, ...]
+
+    def keyframe_before(self, frame_number: int) -> int:
+        """The last keyframe at or before the frame, which is the nearest place
+        a decode can start from."""
+        return self.keyframes[bisect.bisect_right(self.keyframes, frame_number) - 1]
+
+
+def frame_index(video: Path) -> FrameIndex | None:
+    """Every frame's stamp, or None when the stamps do not say which frame is
+    which.
+
+    Read by demuxing the packets and decoding none of them, which costs
+    about a second on a recording of 30000 frames. One packet holds one
+    frame, and a decode hands the frames over in the order of their
+    stamps, so a frame's number is the place of its stamp among them
+    all. A packet without a stamp, or two packets sharing one, leave a
+    frame that cannot be told from another.
+    """
+    packets: list[tuple[int, bool]] = []
+    with av.open(str(video)) as container:
+        stream = container.streams.video[0]
+        for packet in container.demux(stream):
+            if packet.size == 0:
+                continue
+            if packet.pts is None:
+                return None
+            packets.append((int(packet.pts), bool(packet.is_keyframe)))
+
+    ordered = sorted(packets)
+    stamps = tuple(stamp for stamp, _key in ordered)
+    keyframes = tuple(number for number, (_stamp, key) in enumerate(ordered) if key)
+    if len(set(stamps)) != len(stamps) or not keyframes or keyframes[0] != 0:
+        return None
+    return FrameIndex(stamps=stamps, keyframes=keyframes)
+
+
+class SeekingFrameSource:
+    """A recording read from the start of a stretch, reached by seeking to the
+    last keyframe before it.
+
+    Every frame handed on carries the stamp the index holds for its
+    number, so the path is drawn on the picture the detector saw under
+    that number. A decode that hands back anything else ends the
+    stretch there, and one that hands back nothing leaves the recording
+    to be read from its first frame.
+    """
+
+    def __init__(
+        self,
+        video: Path,
+        *,
+        stretch: Stretch,
+        index: FrameIndex,
+        on_progress: Callable[[ClipProgress], None],
+    ) -> None:
+        self.video = video
+        self.stretch = stretch
+        self.index = index
+        self.on_progress = on_progress
+        self.first_frame = stretch.begin_frame
+
+    def colour_frames(self) -> Generator[np.ndarray, None, None]:
+        stamps = self.index.stamps
+        wanted = self.first_frame
+        with av.open(str(self.video)) as container:
+            stream = container.streams.video[0]
+            stream.thread_type = "AUTO"
+            container.seek(stamps[self.index.keyframe_before(wanted)], stream=stream, backward=True)
+            for frame in container.decode(stream):
+                if frame.pts is None or wanted >= len(stamps) or frame.pts > stamps[wanted]:
+                    break
+                if frame.pts < stamps[wanted]:
+                    continue
+                yield frame.to_ndarray(format="bgr24")
+                wanted += 1
+
+        if wanted == self.first_frame:
+            yield from self._passing().colour_frames()
+
+    def gray_frames(self) -> Generator[np.ndarray, None, None]:
+        for frame in self.colour_frames():
+            yield cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    def sample_frame(self) -> np.ndarray | None:
+        return self._passing().sample_frame()
+
+    def _passing(self) -> PassingFrameSource:
+        return PassingFrameSource(self.video, stretch=self.stretch, on_progress=self.on_progress)
 
 
 class PassingFrameSource:

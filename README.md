@@ -162,8 +162,11 @@ Clicking a point draws that track at once from its stored path: where it
 was in the frame, its shape fitted to a box of its own, and its
 brightness and size frame by frame. Drawing it on its recording, from a
 second before it starts to a second after it ends, runs in the
-background, because it has to pass every frame of the recording ahead of
-the track, and the clip plays once it is built. A gallery below the map
+background, and the clip plays once it is built. A track deep in a
+recording is reached by seeking to the keyframe before it, which needs
+the recording's frame stamps read first. A recording whose stamps do
+not say which frame is which has every frame ahead of the track passed
+instead, which takes a minute on a 20-minute recording. A gallery below the map
 draws 30 tracks at random from the selected track's cluster, or from any
 cluster chosen in the sidebar, from their stored paths alone. A second
 gallery draws the 30 tracks nearest the selected one on the map, from
