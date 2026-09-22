@@ -294,16 +294,23 @@ def prefetched(frames: Iterator[Frame]) -> Generator[Frame, None, None]:
     the first frame pulled, so a caller that has other work to do first
     gets that decoding done underneath it. A stream that is created and
     then never iterated leaves the worker holding its prefetch.
+
+    A failure while preparing a frame is raised to the caller in place of
+    that frame.
     """
-    pending: queue.Queue[Frame | None] = queue.Queue(maxsize=PREFETCH_DEPTH)
+    pending: queue.Queue[Frame | Exception | None] = queue.Queue(maxsize=PREFETCH_DEPTH)
     stop = threading.Event()
 
     def produce() -> None:
-        for frame in frames:
-            if stop.is_set():
-                break
-            pending.put(frame)
-        pending.put(None)
+        try:
+            for frame in frames:
+                if stop.is_set():
+                    break
+                pending.put(frame)
+        except Exception as failure:
+            pending.put(failure)
+        else:
+            pending.put(None)
 
     worker = threading.Thread(target=produce, daemon=True)
     worker.start()
@@ -314,6 +321,8 @@ def prefetched(frames: Iterator[Frame]) -> Generator[Frame, None, None]:
                 frame = pending.get()
                 if frame is None:
                     return
+                if isinstance(frame, Exception):
+                    raise frame
                 yield frame
         finally:
             stop.set()
