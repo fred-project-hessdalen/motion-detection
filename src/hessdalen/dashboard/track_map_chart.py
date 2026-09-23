@@ -9,7 +9,11 @@ entries all stay as they were.
 
 Plotly reports a click on a point and says nothing about a click on the
 empty space between them, so the plot's own mouse presses are watched to
-tell a click apart from a pan.
+tell a click apart from a pan. They are watched as they go down to the
+plot, because plotly stops a press from travelling any further once it
+has taken it for a drag. The keypress is watched once for the page, and
+finds the plot when it fires, so that a plot drawn again leaves no
+listener behind holding the one before it.
 """
 
 from __future__ import annotations
@@ -67,7 +71,7 @@ export default function (component) {
       let down = null;
       plot.addEventListener("mousedown", (event) => {
         down = event.button === 0 ? { x: event.clientX, y: event.clientY } : null;
-      });
+      }, true);
       plot.addEventListener("mouseup", (event) => {
         const from = down;
         down = null;
@@ -81,12 +85,16 @@ export default function (component) {
           }
           plot.report("cleared", String(Date.now()));
         }, 0);
-      });
-      document.addEventListener("keydown", (event) => {
-        if (event.key !== "Escape") return;
-        if (event.target.closest("input, textarea, [role='combobox'], [role='dialog'], [contenteditable]")) return;
-        plot.report("cleared", String(Date.now()));
-      });
+      }, true);
+      if (!window.trackMapEscape) {
+        window.trackMapEscape = (event) => {
+          if (event.key !== "Escape") return;
+          if (event.target.closest("input, textarea, [role='combobox'], [role='dialog'], [contenteditable]")) return;
+          const map = document.querySelector(".track-map");
+          if (map && map.report) map.report("cleared", String(Date.now()));
+        };
+        document.addEventListener("keydown", window.trackMapEscape);
+      }
     });
   });
 }
