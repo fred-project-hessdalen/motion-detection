@@ -72,16 +72,40 @@ MAP_COMMAND = "uv run --group analysis python scripts/dev/map_tracks.py"
 UNASSIGNED_NAME = "none"
 UNASSIGNED_COLOR = "#b8b8b8"
 CLUSTER_COLORS = ("#4c78a8", "#f58518", "#54a24b", "#e45756", "#72b7b2", "#eeca3b", "#b279a2", "#ff9da6", "#9d755d")
-COLOUR_CHOICES = ("Cluster", "Side", "Label", "Camera")
-COLOUR_COLUMNS = {"Cluster": "cluster", "Side": "side", "Label": "label", "Camera": "camera"}
+NAME_COLUMN = "cluster_label"
+"""Column holding the name given to the cluster each track is in."""
+
+UNNAMED = "unlabelled"
+"""What a track whose cluster has no name yet is shown under."""
+
+COLOUR_CHOICES = ("Cluster", "Cluster label", "Side", "Folder", "Camera")
+COLOUR_COLUMNS = {
+    "Cluster": "cluster",
+    "Cluster label": NAME_COLUMN,
+    "Side": "side",
+    "Folder": "label",
+    "Camera": "camera",
+}
 SELECTED_CLUSTER = "Selected track's cluster"
 ROUGH_SIDE = "rough"
 OTHER_COLORS = qualitative.Dark24
-HOVER_COLUMNS = ["key", "label", "cluster", "side", "clip", "track_id", "frames", "straightness", "peak_deviation_max"]
+HOVER_COLUMNS = [
+    "key",
+    NAME_COLUMN,
+    "cluster",
+    "side",
+    "clip",
+    "track_id",
+    "frames",
+    "straightness",
+    "peak_deviation_max",
+    "label",
+]
 HOVER_TEMPLATE = (
-    "Label %{customdata[1]}<br>Cluster %{customdata[2]}<br>Side %{customdata[3]}<br>"
+    "Cluster label %{customdata[1]}<br>Cluster %{customdata[2]}<br>Side %{customdata[3]}<br>"
     "Recording %{customdata[4]}<br>Track %{customdata[5]}<br>Frames %{customdata[6]}<br>"
-    "Straightness %{customdata[7]:.2f}<br>Peak deviation %{customdata[8]:.1f}<extra></extra>"
+    "Straightness %{customdata[7]:.2f}<br>Peak deviation %{customdata[8]:.1f}<br>"
+    "Folder %{customdata[9]}<extra></extra>"
 )
 GALLERY_SIZE = 30
 NEIGHBOUR_RADIUS = 0.5
@@ -127,18 +151,22 @@ other clip meanwhile, so that fetch waits for a press.
 """
 
 COLOUR_HELP = (
-    "What the points are coloured by. Clusters come from the descriptors alone. The side says whether a "
-    "track moves evenly from step to step, as a clean path does, or hops about as clutter does, and "
-    "each side is clustered on its own. A label is the folder the recording was filed under, which names "
-    "the whole recording, so most tracks under a label are that scene's background activity and not the "
-    "thing the folder is named for."
+    "What the points are coloured by. Clusters come from the descriptors alone, and a cluster label is "
+    "the name someone gave one of them. The side says whether a track moves evenly from step to step, as "
+    "a clean path does, or hops about as clutter does, and each side is clustered on its own. A folder is "
+    "where the recording was filed in the archive, which names the whole recording, so most tracks under "
+    "a folder are that scene's background activity and not the thing the folder is named for."
 )
 SEARCH_HELP = (
     "Select a track by its number, by its recording, or by both, as the heading over a selected track "
     'gives them. "Track 7484 in Cam1_2025-06-03__12-40-00_noInsect" and "7484" both work, and so does a '
     "recording's name on its own. The first of the matching tracks is selected."
 )
-LABELS_HELP = "Show only the tracks of recordings filed under these labels."
+NAMES_HELP = (
+    "Show only the tracks whose cluster has been given one of these names. Tracks of a cluster with no "
+    f"name yet, and tracks the clustering left out of every cluster, are under {UNNAMED}."
+)
+FOLDERS_HELP = "Show only the tracks of recordings filed under these folders of the archive."
 ROUGH_HELP = (
     "Show the tracks that hop about from step to step rather than moving evenly, which is what clutter "
     "does. Turn it off to leave the map and the galleries to the clean paths."
@@ -179,7 +207,8 @@ PANEL_HELP = (
 GALLERY_HELP = (
     f"Up to {GALLERY_SIZE} tracks drawn at random from the cluster, each drawn from its stored path and "
     "fitted to its own panel. Colour runs from dark blue on a track's first frame to yellow on its last. "
-    "The map rings these tracks in the colour their panels are framed in."
+    "Each panel names the folder of the archive its recording was filed in. The map rings these tracks "
+    "in the colour their panels are framed in."
 )
 SHUFFLE_HELP = "Draw another random sample of the cluster."
 LABEL_HELP = (
@@ -192,8 +221,8 @@ LABEL_HELP = (
 SAVE_LABEL_HELP = "Keep this name against every track of the cluster."
 NEIGHBOURS_HELP = (
     f"The {GALLERY_SIZE} tracks that lie nearest the selected track on the map, from any cluster, and no "
-    "further from it than the neighbour radius. Each panel names the cluster its track is in. The map "
-    "rings these tracks in the colour their panels are framed in."
+    "further from it than the neighbour radius. Each panel names the cluster its track is in and the name "
+    "that cluster is under. The map rings these tracks in the colour their panels are framed in."
 )
 RADIUS_HELP = (
     "How far from the selected track, in the map's own units, a track may lie to count among its nearest "
@@ -232,14 +261,15 @@ def page() -> None:
         st.error(f"No track map at {MAP_PATH}. Write it with `{MAP_COMMAND}`.")
         return
 
-    tracks = _map_frame(MAP_PATH.stat().st_mtime)
+    tracks = named(_map_frame(MAP_PATH.stat().st_mtime), labels=_cluster_labels(_labels_stamp()))
     paths = _path_frame(PATHS_PATH.stat().st_mtime)
     with st.sidebar:
         wanted = str(st.text_input("Search", key=SEARCH_KEY, on_change=_search, help=SEARCH_HELP))
         if wanted.strip():
             st.caption(f"{len(searched(tracks, wanted=wanted))} of {len(tracks)} tracks matched")
         colour = st.segmented_control("Colour", options=COLOUR_CHOICES, default="Cluster", help=COLOUR_HELP)
-        labels = st.multiselect("Labels", options=sorted(tracks["label"].unique()), help=LABELS_HELP)
+        chosen_names = st.multiselect("Cluster labels", options=sorted(tracks[NAME_COLUMN].unique()), help=NAMES_HELP)
+        folders = st.multiselect("Folders", options=sorted(tracks["label"].unique()), help=FOLDERS_HELP)
         rough = st.toggle("Rough tracks", value=True, help=ROUGH_HELP)
         cached = st.toggle("Video cached", value=False, help=CACHED_HELP)
         chosen_cluster = st.selectbox(
@@ -253,7 +283,8 @@ def page() -> None:
         )
 
     shown = tracks if rough else tracks[tracks["side"] != ROUGH_SIDE]
-    shown = shown[shown["label"].isin(labels)] if labels else shown
+    shown = shown[shown[NAME_COLUMN].isin(chosen_names)] if chosen_names else shown
+    shown = shown[shown["label"].isin(folders)] if folders else shown
     picked = _picked(shown, tracks=tracks, key=st.session_state.get(PICKED_KEY))
     cluster = _gallery_cluster(str(chosen_cluster), picked=picked)
     sample = shown.iloc[0:0] if cluster is None else _sample(shown, cluster=cluster)
@@ -272,7 +303,7 @@ def page() -> None:
         dimmed = _uncached(shown) if cached else frozenset()
         figure = _scatter(
             shown,
-            colour_column=COLOUR_COLUMNS[colour or "Cluster"],
+            colour=str(colour or "Cluster"),
             rings=rings,
             dimmed=dimmed,
             names=cluster_names(shown, labels=_cluster_labels(_labels_stamp())),
@@ -365,6 +396,18 @@ def _uncached(tracks: pd.DataFrame) -> frozenset[str]:
     return frozenset(tracks.loc[~tracks["recording"].isin(on_disk), "key"])
 
 
+def named(tracks: pd.DataFrame, *, labels: dict[str, list[str]]) -> pd.DataFrame:
+    """The tracks with the name of the cluster each one is in beside it.
+
+    A track whose cluster has no name yet, and a track the clustering
+    left out of every cluster, stand under one name of their own, so
+    that the map can be coloured and filtered by the name without those
+    tracks falling off it.
+    """
+    under = {key: name for name, keys in labels.items() for key in keys}
+    return tracks.assign(**{NAME_COLUMN: tracks["key"].map(under).fillna(UNNAMED)})
+
+
 def cluster_names(tracks: pd.DataFrame, *, labels: dict[str, list[str]]) -> pd.DataFrame:
     """The name each named cluster is under, and where on the map it goes.
 
@@ -390,7 +433,7 @@ def _commonest(names: pd.Series) -> str:
 
 
 def _scatter(
-    tracks: pd.DataFrame, *, colour_column: str, rings: list[Ring], dimmed: frozenset[str], names: pd.DataFrame
+    tracks: pd.DataFrame, *, colour: str, rings: list[Ring], dimmed: frozenset[str], names: pd.DataFrame
 ) -> go.Figure:
     """The tracks drawn by the graphics card, one trace per colour, so the
     legend names each colour and a click on it hides or shows those tracks.
@@ -405,17 +448,18 @@ def _scatter(
     The names of the clusters are drawn by the browser, which puts them
     over the points the card draws.
     """
+    column = COLOUR_COLUMNS[colour]
     traces = []
-    for name, colour in _colours(tracks, column=colour_column).items():
-        members = tracks[tracks[colour_column] == name]
+    for name, shade in _colours(tracks, column=column).items():
+        members = tracks[tracks[column] == name]
         traces.append(
             go.Scattergl(
                 x=members["x"],
                 y=members["y"],
                 mode="markers",
                 name=str(name),
-                uid=f"{colour_column}:{name}",
-                marker={"color": _point_colours(members, colour=colour, dimmed=dimmed), "size": 6, "opacity": 0.7},
+                uid=f"{column}:{name}",
+                marker={"color": _point_colours(members, colour=shade, dimmed=dimmed), "size": 6, "opacity": 0.7},
                 customdata=members[HOVER_COLUMNS].to_numpy(dtype=object),
                 hovertemplate=HOVER_TEMPLATE,
             )
@@ -456,7 +500,7 @@ def _scatter(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         margin={"l": 0, "r": 0, "t": 10, "b": 0},
-        legend={"title": {"text": colour_column.capitalize()}},
+        legend={"title": {"text": colour}},
         xaxis={"showgrid": True, "gridcolor": GRID_COLOR, "zeroline": False},
         yaxis={"showgrid": True, "gridcolor": GRID_COLOR, "zeroline": False},
     )
@@ -675,7 +719,7 @@ def _gallery(tracks: pd.DataFrame, *, cluster: str | None, sample: pd.DataFrame)
     shuffle.button("Shuffle", on_click=_shuffle, help=SHUFFLE_HELP)
     members = int((tracks["cluster"] == cluster).sum())
     st.caption(f"{_cluster_title(cluster)} · {len(sample)} of {members} tracks")
-    captions = [f"{place}. {label}" for place, label in enumerate(sample["label"], start=1)]
+    captions = [f"{place}. folder {folder}" for place, folder in enumerate(sample["label"], start=1)]
     _panels(sample, captions=captions, frame=SAMPLE_COLOR)
 
 
@@ -708,8 +752,8 @@ def _neighbours(nearest: pd.DataFrame, *, radius: float) -> None:
     st.subheader(NEAREST_TITLE, help=NEIGHBOURS_HELP)
     st.caption(f"{len(nearest)} tracks within {radius:.2f}")
     captions = [
-        f"{place}. {_cluster_caption(cluster)} · {label}"
-        for place, (cluster, label) in enumerate(zip(nearest["cluster"], nearest["label"]), start=1)
+        f"{place}. {_cluster_caption(cluster)} · {name}"
+        for place, (cluster, name) in enumerate(zip(nearest["cluster"], nearest[NAME_COLUMN]), start=1)
     ]
     _panels(nearest, captions=captions, frame=NEAREST_COLOR)
 
@@ -751,8 +795,9 @@ def _cluster_title(cluster: str) -> str:
 
 def _facts(track: pd.Series) -> str:
     parts = [
-        f"Label {track['label']}",
+        str(track[NAME_COLUMN]),
         _cluster_caption(str(track["cluster"])),
+        f"folder {track['label']}",
         f"{track['side']} side",
         f"camera {track['camera']}",
         f"straightness {track['straightness']:.2f}",

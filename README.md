@@ -155,8 +155,14 @@ A stored run and a live clip are both written through `ffmpeg` with
 ### Track map
 
 The Track map page shows every track of the corpus under `data/corpus`
-as a point. Tracks with similar descriptors sit close together, and the
-colour gives the cluster they fell into.
+as a point. Tracks with similar descriptors sit close together, and
+Colour in the sidebar gives what the points are coloured by: the cluster
+they fell into, the name that cluster has been given, the side they were
+clustered on, the folder of the archive their recording was filed in, or
+the camera that recorded them. A cluster label and a folder are
+different things. The first is a name someone gave a cluster on this
+page, and the second is where the recording sits in the archive, which
+names the whole recording rather than the track.
 
 Clicking a point draws that track at once from its stored path: where it
 was in the frame, its shape fitted to a box of its own, and its
@@ -195,7 +201,11 @@ the new name, and an empty name takes its tracks out of the one they
 were under. A second
 gallery draws the 30 tracks nearest the selected one on the map, from
 any cluster and within the neighbour radius set in the sidebar, and
-names the cluster of each. Tracks whose movement from step to step is
+names the cluster of each with the name it is under. Cluster labels in
+the sidebar holds the page to the tracks under the names picked there,
+with every track of an unnamed cluster under `unlabelled`, and Folders
+holds it to the tracks of recordings filed under the folders picked
+there. Tracks whose movement from step to step is
 uneven, which most clutter is, can be left out of the page with the
 Rough tracks switch in the sidebar, and the Video cached switch there
 draws the tracks whose recording is not on disk faintly. Search in the

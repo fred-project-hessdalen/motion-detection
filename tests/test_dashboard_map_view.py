@@ -3,7 +3,7 @@ goes on the map."""
 
 import pandas as pd
 
-from hessdalen.dashboard.map_view import cluster_names, searched
+from hessdalen.dashboard.map_view import NAME_COLUMN, UNNAMED, cluster_names, named, searched
 
 INSECT = "Cam1_2025-06-03__12-40-00_noInsect"
 ROD = "Cam2_2025-01-09__23-20-00_rod"
@@ -64,6 +64,12 @@ def test_the_tracks_of_no_cluster_carry_no_name() -> None:
     placed = cluster_names(_mapped(), labels={"bird": ["a/4"]})
 
     assert placed.empty
+
+
+def test_every_track_carries_the_name_of_the_cluster_it_is_in() -> None:
+    carried = named(_mapped(), labels={"bird": ["a/1", "a/3"]})
+
+    assert carried[NAME_COLUMN].tolist() == ["bird", UNNAMED, "bird", UNNAMED]
 
 
 def _mapped() -> pd.DataFrame:
