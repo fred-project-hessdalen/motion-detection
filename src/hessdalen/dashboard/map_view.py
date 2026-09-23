@@ -31,10 +31,11 @@ import plotly.graph_objects as go
 import pyarrow.parquet as pq
 import streamlit as st
 from plotly.colors import hex_to_rgb, qualitative
+from streamlit.delta_generator import DeltaGenerator
 
 from hessdalen.config import config
 from hessdalen.dashboard.clip_queue import ClipQueue, Job, Report
-from hessdalen.dashboard.cluster_labels import canonical_label, label_of, read_labels, write_labels
+from hessdalen.dashboard.cluster_labels import canonical_label, label_of, near_label, read_labels, write_labels
 from hessdalen.dashboard.panels import DEVIATION, RECORDING
 from hessdalen.dashboard.runs import probe
 from hessdalen.dashboard.track_clip import (
@@ -143,12 +144,15 @@ SAVE_KEY = "save_cluster_label"
 TRACK_LABEL_KEY = "track_label"
 SAVE_TRACK_LABEL_KEY = "save_track_label"
 VALIDATED_KEY = "track_validated"
+SIMILAR_KEY = "similar_name"
 SEARCH_WORDS = ("track", "in")
 """Words a search may carry around what it names, from the heading over a
 selected track."""
 SAMPLE_TITLE = "Cluster sample"
 NEAREST_TITLE = "Nearest tracks"
 SELECTED_TITLE = "Selected track"
+SIMILAR_TITLE = "Similar name"
+NAME_PLACEHOLDER = "Choose or add a name"
 NAMES_TITLE = "Cluster labels"
 WHOLE_TITLE = "In the frame"
 CLOSE_UP_TITLE = "Close up"
@@ -253,18 +257,25 @@ GALLERY_HELP = (
 )
 SHUFFLE_HELP = "Draw another random sample of the cluster."
 LABEL_HELP = (
-    "What this cluster holds, in a word of your own, such as insect or plane. The name is kept against "
-    f"the cluster's tracks in {LABELS_PATH.name}, which is what a training set is built from. It is kept "
-    "in small letters with single spaces between its words and every word in the singular, so that "
-    '"Street Lights" and "streetLight" come to the one name. Naming the cluster again moves its tracks '
-    "to the new name, and an empty name takes them out of the one they are under."
+    "What this cluster holds, in a word of your own, such as insect or plane. The names given so far are "
+    "offered in the list, which narrows to what is typed into it, and anything else typed there is a new "
+    f"name. The name is kept against the cluster's tracks in {LABELS_PATH.name}, which is what a training "
+    "set is built from. It is kept in small letters with single spaces between its words and every word "
+    'in the singular, so that "Street Lights" and "streetLight" come to the one name. A name within a '
+    "letter or two of one already in use is put to you before it is written. Naming the cluster again "
+    "moves its tracks to the new name, and clearing the box takes them out of the one they are under."
 )
 SAVE_LABEL_HELP = "Keep this name against every track of the cluster."
+SIMILAR_TEXT = (
+    "A name holds the tracks given it and nothing more, so two spellings of one thing keep their tracks "
+    "apart. Both names are kept if that is what you meant."
+)
 TRACK_LABEL_HELP = (
     "What this one track holds, in a word of your own. It starts as the name the track's cluster is "
     "under, and is changed where the track is not what the rest of its cluster is. The name is kept "
     f"against the track alone in {TRACK_LABELS_PATH.name}, in the same form as a cluster label, and it is "
-    "what a training set reads for this track. An empty name takes the track back to its cluster's name."
+    "what a training set reads for this track. The names given so far are offered in the list, and "
+    "clearing the box takes the track back to its cluster's name."
 )
 SAVE_TRACK_LABEL_HELP = (
     "Keep this name against this track alone. Naming a track is someone looking at it and saying what it "
@@ -305,6 +316,28 @@ class Ring:
     name: str
     marker: dict[str, Any]
     tracks: pd.DataFrame
+
+
+@dataclass(frozen=True, slots=True)
+class Naming:
+    """What a press of Save is to write: the file the name is kept in, the
+    tracks it is given to, the box it was given in, and whether keeping it
+    confirms those tracks as well."""
+
+    path: Path
+    keys: tuple[str, ...]
+    box: str
+    confirms: bool
+
+
+@dataclass(frozen=True, slots=True)
+class Similar:
+    """A name that was given and lies within a letter or two of one already in
+    use, held until the person says which of the two they meant."""
+
+    naming: Naming
+    name: str
+    near: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -390,6 +423,10 @@ def page() -> None:
             _selected(picked, points=_points(paths, key=str(picked["key"])))
         if playing is not None:
             _video(playing, points=_points(paths, key=str(playing["key"])))
+
+    similar = st.session_state.pop(SIMILAR_KEY, None)
+    if similar is not None:
+        _similar_name(similar)
 
 
 def _steps() -> None:
@@ -736,19 +773,21 @@ def _track_labelling(track: pd.Series) -> None:
     key = str(track["key"])
     given = label_of(_track_labels(_track_labels_stamp()), keys=[key])
     cluster_name = str(track[NAME_COLUMN])
+    naming = Naming(path=TRACK_LABELS_PATH, keys=(key,), box=f"{TRACK_LABEL_KEY}:{key}", confirms=True)
 
-    box, save, tick = st.columns([3, 1, 1], vertical_alignment="bottom")
-    box.text_input(
-        "Track label",
-        value=given or ("" if cluster_name == UNNAMED else cluster_name),
-        key=f"{TRACK_LABEL_KEY}:{key}",
+    chooser, save, tick = st.columns([3, 1, 1], vertical_alignment="bottom")
+    _name_box(
+        chooser,
+        label="Track label",
+        given=given or ("" if cluster_name == UNNAMED else cluster_name),
+        naming=naming,
         help=TRACK_LABEL_HELP,
     )
     save.button(
         "Save",
         key=f"{SAVE_TRACK_LABEL_KEY}:{key}",
-        on_click=_save_track_label,
-        args=(key,),
+        on_click=_save_name,
+        args=(naming,),
         help=SAVE_TRACK_LABEL_HELP,
         width="stretch",
     )
@@ -762,21 +801,75 @@ def _track_labelling(track: pd.Series) -> None:
     )
 
 
-def _save_track_label(key: str) -> None:
-    """Keep the name given to this one track, and mark the track confirmed.
+def _name_box(column: DeltaGenerator, *, label: str, given: str, naming: Naming, help: str) -> None:
+    """The box a name is given in: the names in use so far in a drop-down that
+    narrows as it is typed in, and a name of its own where none of them fits.
+
+    Every name of either file is offered, because a cluster and a track
+    stand under names of one vocabulary.
+    """
+    options = sorted(set(_known_names()) | ({given} if given else set()))
+    column.selectbox(
+        label,
+        options=options,
+        index=options.index(given) if given else None,
+        key=naming.box,
+        accept_new_options=True,
+        placeholder=NAME_PLACEHOLDER,
+        help=help,
+    )
+
+
+def _save_name(naming: Naming) -> None:
+    """Keep the name given in the box, unless it is close enough to a name
+    already in use to be that name mistyped, which is put to the person
+    first."""
+    wanted = canonical_label(str(st.session_state[naming.box] or ""))
+    near = near_label(wanted, known=_known_names())
+    if near:
+        st.session_state[SIMILAR_KEY] = Similar(naming=naming, name=wanted, near=near)
+        return
+
+    _keep_name(naming, name=wanted)
+
+
+def _keep_name(naming: Naming, *, name: str) -> None:
+    """Put the tracks this name was given to under it, and take the box to what
+    the file now holds.
+
+    The box has to be set rather than emptied, because a box left to
+    itself hands back whatever was typed into it and would take the page
+    away from the file again.
 
     Naming a track is someone looking at it and saying what it is, which
-    is what confirming it says. Withdrawing the name says nothing, and
-    leaves the track as it was.
-
-    The box is put back in the form the name is kept in, so that the
-    page shows what the file holds.
+    is what confirming it says, so a track keeps its name and its
+    confirmation together. Withdrawing a name says nothing, and leaves
+    the track as it was.
     """
-    wanted = canonical_label(str(st.session_state[f"{TRACK_LABEL_KEY}:{key}"]))
-    write_labels(TRACK_LABELS_PATH, _track_labels(_track_labels_stamp()), name=wanted, keys=[key])
-    st.session_state[f"{TRACK_LABEL_KEY}:{key}"] = wanted
-    if wanted:
-        _confirm(key, confirmed=True)
+    write_labels(naming.path, read_labels(naming.path), name=name, keys=list(naming.keys))
+    st.session_state[naming.box] = name or None
+    if naming.confirms and name:
+        _confirm(naming.keys[0], confirmed=True)
+
+
+@st.dialog(SIMILAR_TITLE)
+def _similar_name(similar: Similar) -> None:
+    """What to do about a name that is close to one already in use."""
+    st.write(f"**{similar.name}** is close to **{similar.near}**, which is already in use.")
+    st.caption(SIMILAR_TEXT)
+
+    use, keep = st.columns(2)
+    if use.button(f"Use {similar.near}", type="primary", width="stretch"):
+        _keep_name(similar.naming, name=similar.near)
+        st.rerun()
+    if keep.button(f"Keep {similar.name}", width="stretch"):
+        _keep_name(similar.naming, name=similar.name)
+        st.rerun()
+
+
+def _known_names() -> list[str]:
+    """Every name given so far, to a cluster or to a track."""
+    return sorted(set(_cluster_labels(_labels_stamp())) | set(_track_labels(_track_labels_stamp())))
 
 
 def _validate(key: str) -> None:
@@ -1005,15 +1098,20 @@ def _labelling(tracks: pd.DataFrame, *, cluster: str) -> None:
     the cluster holds.
     """
     keys = tracks.loc[tracks["cluster"] == cluster, "key"].tolist()
-    labels = _cluster_labels(_labels_stamp())
-    given = label_of(labels, keys=keys)
+    given = label_of(_cluster_labels(_labels_stamp()), keys=keys)
+    naming = Naming(path=LABELS_PATH, keys=tuple(keys), box=f"{LABEL_KEY}:{cluster}", confirms=False)
 
-    box, save = st.columns([4, 1], vertical_alignment="bottom")
-    name = box.text_input("Cluster label", value=given, key=f"{LABEL_KEY}:{cluster}", help=LABEL_HELP)
+    chooser, save = st.columns([4, 1], vertical_alignment="bottom")
+    _name_box(chooser, label="Cluster label", given=given, naming=naming, help=LABEL_HELP)
     st.caption(f"{len(keys)} tracks under {given}" if given else "This cluster has no name yet.")
-    if save.button("Save", key=f"{SAVE_KEY}:{cluster}", help=SAVE_LABEL_HELP):
-        write_labels(LABELS_PATH, labels, name=str(name).strip(), keys=keys)
-        st.rerun()
+    save.button(
+        "Save",
+        key=f"{SAVE_KEY}:{cluster}",
+        on_click=_save_name,
+        args=(naming,),
+        help=SAVE_LABEL_HELP,
+        width="stretch",
+    )
 
 
 def _neighbours(nearest: pd.DataFrame, *, radius: float, playing: pd.Series | None) -> None:

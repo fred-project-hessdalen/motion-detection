@@ -8,7 +8,9 @@ keeps its name.
 
 A name is kept in one form, in small letters with single spaces between
 its words and every word in the singular, so that one thing does not
-stand under two spellings of itself.
+stand under two spellings of itself. A name that the form leaves a
+letter or two from one already in use is most likely that name mistyped,
+which the page puts to the person before either is written.
 
 The file is what a training set is built from, so it holds the tracks
 and nothing about the map they were picked on.
@@ -18,6 +20,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Sequence
 from pathlib import Path
 
 WORD_BREAK = re.compile(r"[^0-9A-Za-z]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
@@ -49,6 +52,15 @@ whose plural is made another way keeps whichever form it was written in.
 
 KEPT_ENDINGS = frozenset({"aircraft", "bus", "canvas", "gas", "lens", "series", "species"})
 """Words that end as a plural does and are already singular."""
+
+NEAR_EDITS = 2
+SHORT_NAME = 4
+NEAR_EDITS_SHORT = 1
+"""How far apart two names may be before they count as one mistyped.
+
+A short name is held to one letter, because at two letters apart most
+short words of the vocabulary reach each other.
+"""
 
 
 def canonical_label(name: str) -> str:
@@ -90,6 +102,53 @@ def read_labels(path: Path) -> dict[str, list[str]]:
         if canonical:
             gathered[canonical] = gathered.get(canonical, []) + [str(key) for key in keys]
     return {name: sorted(set(keys)) for name, keys in gathered.items()}
+
+
+def near_label(name: str, *, known: Sequence[str]) -> str:
+    """The name already in use that this one is most likely a mistyping of, and
+    nothing when it stands on its own.
+
+    A name is kept as it is typed, so "brid" and "bird" hold their
+    tracks apart while meaning the same thing. Two names lying that
+    close together are almost always one name typed twice, which is put
+    to the person before either is written.
+    """
+    if not name or name in known:
+        return ""
+
+    allowed = NEAR_EDITS_SHORT if len(name) <= SHORT_NAME else NEAR_EDITS
+    nearest, closest = "", allowed + 1
+    for held in known:
+        distance = _edits(name, held)
+        if distance < closest:
+            nearest, closest = held, distance
+    return nearest
+
+
+def _edits(name: str, other: str) -> int:
+    """How many letters have to be put in, taken out, replaced, or swapped with
+    the letter beside them to turn one name into the other.
+
+    A swap counts as one rather than as two, because two letters typed
+    the wrong way round is the commonest way a name is mistyped.
+    """
+    rows = [[0] * (len(other) + 1) for _ in range(len(name) + 1)]
+    for down in range(len(name) + 1):
+        rows[down][0] = down
+    for across in range(len(other) + 1):
+        rows[0][across] = across
+
+    for down, letter in enumerate(name, start=1):
+        for across, held in enumerate(other, start=1):
+            step = min(
+                rows[down - 1][across] + 1,
+                rows[down][across - 1] + 1,
+                rows[down - 1][across - 1] + int(letter != held),
+            )
+            if down > 1 and across > 1 and letter == other[across - 2] and name[down - 2] == held:
+                step = min(step, rows[down - 2][across - 2] + 1)
+            rows[down][across] = step
+    return rows[-1][-1]
 
 
 def label_of(labels: dict[str, list[str]], *, keys: list[str]) -> str:

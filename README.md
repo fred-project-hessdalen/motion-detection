@@ -172,7 +172,7 @@ track step through the tracks selected before it, in both directions.
 Track label gives this one track a name of its own, which starts as the
 name of its cluster and is kept against the track alone in
 `data/out/analysis/track-labels.json`, in the same form a cluster label
-is kept in. An empty name takes the track back to its cluster's name.
+is kept in. Clearing the box takes the track back to its cluster's name.
 Validated says that a person has watched the track and stands by the
 name it is under, and saving a track label marks the track at the same
 time. The tracks marked are kept in
@@ -214,12 +214,18 @@ track. Under that gallery, Cluster label
 gives the cluster a name of your own and Save
 keeps it against every one of the cluster's tracks in
 `data/out/analysis/cluster-labels.json`, which holds each name with the
-tracks under it and is what a training set is built from. A name is kept
+tracks under it and is what a training set is built from. Cluster label
+and Track label both offer the names given so far, to a cluster or to a
+track, in a list that narrows to what is typed into it, and anything
+else typed there is a new name. A name is kept
 in small letters with single spaces between its words and every word in
 the singular, so `Street Lights` and `streetLight` come to the one name
 `street light`, and a file holding two spellings of a name has the
-tracks of both under it once it is read. A cluster named again moves to
-the new name, and an empty name takes its tracks out of the one they
+tracks of both under it once it is read. A new name that lies within a
+letter or two of one already in use is put to you before either is
+written, counting a swap of two letters as one, because two spellings of
+one thing keep their tracks apart. A cluster named again moves to
+the new name, and clearing the box takes its tracks out of the name they
 were under. A second
 gallery draws the 30 tracks nearest the selected one on the map, from
 any cluster and within the neighbour radius set in the sidebar, and

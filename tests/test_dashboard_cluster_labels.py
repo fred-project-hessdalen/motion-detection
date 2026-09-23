@@ -5,7 +5,9 @@ import json
 
 import pytest
 
-from hessdalen.dashboard.cluster_labels import canonical_label, label_of, read_labels, write_labels
+from hessdalen.dashboard.cluster_labels import canonical_label, label_of, near_label, read_labels, write_labels
+
+KNOWN = ["bird", "insect", "meteor", "street light", "car"]
 
 BIRDS = ["a/Cam1_2025-06-03__12-40-00/1", "a/Cam1_2025-06-03__12-40-00/2"]
 INSECTS = ["b/Cam2_2025-01-09__23-20-00/7", "b/Cam2_2025-01-09__23-20-00/9"]
@@ -102,3 +104,38 @@ def test_two_names_that_come_to_one_hold_their_tracks_together(tmp_path) -> None
     path.write_text(json.dumps({"bird": BIRDS[:1], "Birds": BIRDS[1:]}))
 
     assert read_labels(path) == {"bird": sorted(BIRDS)}
+
+
+@pytest.mark.parametrize(
+    ("typed", "meant"),
+    [
+        ("brid", "bird"),
+        ("insct", "insect"),
+        ("meteror", "meteor"),
+        ("street ligth", "street light"),
+    ],
+)
+def test_a_mistyped_name_finds_the_name_it_was_meant_to_be(typed: str, meant: str) -> None:
+    assert near_label(typed, known=KNOWN) == meant
+
+
+@pytest.mark.parametrize("name", ["bird", "insect", "street light"])
+def test_a_name_already_in_use_is_near_nothing(name: str) -> None:
+    """The name is the one in use, so there is nothing to put to the person."""
+    assert near_label(name, known=KNOWN) == ""
+
+
+@pytest.mark.parametrize("name", ["plane", "cloud", "rain or snow", ""])
+def test_a_name_of_its_own_is_near_nothing(name: str) -> None:
+    assert near_label(name, known=KNOWN) == ""
+
+
+def test_a_short_name_is_held_to_one_letter() -> None:
+    """At two letters apart the short words of the vocabulary reach each other,
+    so a short name is only questioned at one."""
+    assert near_label("cat", known=KNOWN) == "car"
+    assert near_label("bat", known=KNOWN) == ""
+
+
+def test_the_nearest_of_the_names_in_use_is_the_one_put_forward() -> None:
+    assert near_label("birt", known=["insect", "bind", "bird"]) == "bird"
