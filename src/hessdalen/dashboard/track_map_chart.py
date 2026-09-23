@@ -10,9 +10,14 @@ entries all stay as they were.
 What a point holds is written into a panel under the plot rather than
 into a label over the point, because a label over the point covers the
 points around it, which are what a point is read against. The panel
-stands in one place and the point it holds is marked with an arrow above
-it. Both are drawn by the browser from the point's own data, so moving
-the pointer over the map costs no run of the page.
+stands its values in fixed columns, so a value keeps its place from one
+point to the next and a value too long for its column is cut off. The
+point the panel holds is marked with an arrow above it. Both are drawn
+by the browser from the point's own data, so moving the pointer over the
+map costs no run of the page.
+
+The pointer over the plot is the page's own, and a point under it turns
+the pointer into a hand, because a point is there to be clicked.
 
 Plotly reports a click on a point and says nothing about a click on the
 empty space between them, so the plot's own mouse presses are watched to
@@ -45,9 +50,18 @@ PLOTLY_URL = f"https://cdn.jsdelivr.net/npm/plotly.js-dist-min@{get_plotlyjs_ver
 for, so the figures it writes are the ones the plot reads."""
 CONFIG = {"scrollZoom": True, "displaylogo": False, "responsive": True}
 
+DETAIL_COLUMNS = 4
+"""How many columns the panel under the plot stands its values in.
+
+Every value keeps its column whatever is under the pointer, so nothing
+moves sideways as the pointer goes from one track to the next. Four
+columns leave a recording's name the room it takes.
+"""
+
 HTML = f"""
 <style>
 .track-map-frame {{ position: relative; }}
+.track-map-frame .track-map .nsewdrag {{ cursor: default !important; }}
 .track-map-pointer {{
   position: absolute;
   display: none;
@@ -61,17 +75,21 @@ HTML = f"""
   pointer-events: none;
 }}
 .track-map-details {{
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.1rem 1.1rem;
-  min-height: 2.8em;
-  margin-top: 0.35rem;
+  display: grid;
+  grid-template-columns: repeat({DETAIL_COLUMNS}, minmax(0, 1fr));
+  gap: 0.35rem 1.1rem;
+  margin-top: 0.4rem;
   font-size: 0.8rem;
-  line-height: 1.4;
+  line-height: 1.3;
 }}
-.track-map-field {{ display: flex; gap: 0.35rem; white-space: nowrap; }}
-.track-map-name {{ opacity: 0.6; }}
+.track-map-field {{ min-width: 0; }}
+.track-map-name,
+.track-map-value {{ display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }}
+.track-map-name {{ font-size: 0.72rem; opacity: 0.55; }}
 .track-map-value {{ font-variant-numeric: tabular-nums; }}
+@media (max-width: 760px) {{
+  .track-map-details {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+}}
 </style>
 <div class="track-map-frame">
   <div class="track-map" style="width:100%;height:{MAP_HEIGHT}px"></div>
@@ -177,6 +195,7 @@ function describe(plot, values) {
   const fields = plot.details.map((detail, place) => {
     const field = document.createElement("div");
     field.className = "track-map-field";
+    if (detail.wide) field.style.gridColumn = "span 2";
     const name = document.createElement("span");
     name.className = "track-map-name";
     name.textContent = detail.label;
@@ -236,10 +255,11 @@ def track_map_chart(
     call on_clear when the plot is clicked away from every track or Escape is
     pressed.
 
-    Each detail names a line of the panel under the plot and the digits
-    its number is shown to, with no digits where the value is shown as
-    it stands. The values follow the track's key in a point's
-    customdata, in the order the details are given in.
+    Each detail names a line of the panel under the plot, the digits its
+    number is shown to, with no digits where the value is shown as it
+    stands, and whether the line takes two of the panel's columns. The
+    values follow the track's key in a point's customdata, in the order
+    the details are given in.
 
     A press that moves the pointer more than a few pixels is a pan and
     clears nothing. A press that lands on the modebar or the legend is

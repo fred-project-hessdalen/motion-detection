@@ -119,29 +119,35 @@ OTHER_COLORS = qualitative.Dark24
 @dataclass(frozen=True, slots=True)
 class Detail:
     """A line of the panel under the map: the column its value is read from,
-    the name it stands under, and the digits a number is shown to, with none
-    where the value is shown as it stands."""
+    the name it stands under, the digits a number is shown to, with none where
+    the value is shown as it stands, and whether it takes two of the panel's
+    columns."""
 
     column: str
     label: str
     digits: int | None
+    wide: bool
 
 
 DETAILS = (
-    Detail(column=TRACK_NAME_COLUMN, label="Track label", digits=None),
-    Detail(column=NAME_COLUMN, label="Cluster label", digits=None),
-    Detail(column="cluster", label="Cluster", digits=None),
-    Detail(column="side", label="Side", digits=None),
-    Detail(column="clip", label="Recording", digits=None),
-    Detail(column="track_id", label="Track", digits=None),
-    Detail(column="frames", label="Frames", digits=None),
-    Detail(column="straightness", label="Straightness", digits=2),
-    Detail(column="peak_deviation_max", label="Peak deviation", digits=1),
-    Detail(column="label", label="Folder", digits=None),
+    Detail(column=TRACK_NAME_COLUMN, label="Track label", digits=None, wide=False),
+    Detail(column=NAME_COLUMN, label="Cluster label", digits=None, wide=False),
+    Detail(column="cluster", label="Cluster", digits=None, wide=False),
+    Detail(column="side", label="Side", digits=None, wide=False),
+    Detail(column="clip", label="Recording", digits=None, wide=True),
+    Detail(column="track_id", label="Track", digits=None, wide=False),
+    Detail(column="frames", label="Frames", digits=None, wide=False),
+    Detail(column="straightness", label="Straightness", digits=2, wide=False),
+    Detail(column="peak_deviation_max", label="Peak deviation", digits=1, wide=False),
+    Detail(column="label", label="Folder", digits=None, wide=False),
 )
-"""What the panel under the map tells of the track under the pointer."""
+"""What the panel under the map tells of the track under the pointer.
 
-DETAIL_LINES = [{"label": detail.label, "digits": detail.digits} for detail in DETAILS]
+A recording's name is as long as the rest of the line put together, so
+it is given two of the panel's columns and the others one each.
+"""
+
+DETAIL_LINES = [{"label": detail.label, "digits": detail.digits, "wide": detail.wide} for detail in DETAILS]
 """The same lines as the map's component takes them, which holds no column
 because a point carries its values in the order the details are given in."""
 
@@ -200,6 +206,16 @@ NEAREST_COLOR = "#0091d5"
 SAMPLE_MARKER = {"color": SAMPLE_COLOR, "symbol": "circle-open", "size": 12, "line": {"width": 2}}
 NEAREST_MARKER = {"color": NEAREST_COLOR, "symbol": "diamond-open", "size": 12, "line": {"width": 2}}
 SELECTED_MARKER = {"color": "#ffd400", "symbol": "star", "size": 18, "line": {"width": 1, "color": "#333333"}}
+POINT_REACH = 6
+"""How near a point the pointer has to come, in pixels, for the point to be the
+one it is on.
+
+A point is drawn 6 pixels across, so this reaches a few pixels past its
+edge. Plotly stands at 20 pixels, which in a crowd takes a point the
+pointer is nowhere near, and the arrow then stands over a point beside
+the one being pointed at.
+"""
+
 NAMES_FONT = {"size": 13}
 """Size the name of a cluster is written at.
 
@@ -263,7 +279,8 @@ MAP_HELP = (
     "Scroll to zoom, drag to pan, and double-click to zoom back out. Click an entry in the legend to hide "
     "or show its tracks. A click away from every track takes the selection off, and so does Escape, "
     "which leaves the steps to go back through the tracks selected so far. A star marks the selected "
-    "track, and rings mark the tracks the galleries below the map show. The name a cluster has been "
+    "track, and rings mark the tracks the galleries below the map show, which the top of the legend "
+    "names. Both stand on the map while a track is selected. The name a cluster has been "
     "given stands over the middle of its points, and the "
     f"{NAMES_TITLE} entry in the legend takes every name off the map."
 )
@@ -784,7 +801,14 @@ def _scatter(
     handed the next figure, and each trace's uid keeps it hidden or
     shown as the legend left it. The rings over the selected track and
     the tracks the galleries show take no hover or click, so a click on
-    a ringed track selects the track under the ring.
+    a ringed track selects the track under the ring. They stand at the
+    top of the legend, which is what says what each mark on the map
+    means, and the colours the map is drawn in run to as many entries as
+    there are clusters.
+
+    A point is taken as pointed at within a few pixels of it, so the
+    panel under the map and the arrow over the point both follow the
+    point the pointer is on rather than one lying near it.
 
     The names of the clusters are drawn by the browser, which puts them
     over the points the card draws.
@@ -805,7 +829,7 @@ def _scatter(
                 hoverinfo="none",
             )
         )
-    for ring in rings:
+    for place, ring in enumerate(rings):
         if ring.tracks.empty:
             continue
         traces.append(
@@ -815,6 +839,7 @@ def _scatter(
                 mode="markers",
                 name=ring.name,
                 uid=ring.name,
+                legendrank=place,
                 marker=ring.marker,
                 hoverinfo="skip",
             )
@@ -827,6 +852,7 @@ def _scatter(
                 mode="text",
                 name=NAMES_TITLE,
                 uid=NAMES_TITLE,
+                legendrank=len(rings),
                 text=names["name"],
                 textfont=NAMES_FONT,
                 hoverinfo="skip",
@@ -838,6 +864,7 @@ def _scatter(
         height=MAP_HEIGHT,
         dragmode="pan",
         hovermode="closest",
+        hoverdistance=POINT_REACH,
         uirevision="track-map",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",

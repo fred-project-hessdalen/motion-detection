@@ -268,7 +268,8 @@ track takes the selection off, and so does Escape, while a drag pans and
 leaves the selection alone. The steps still go back through the tracks
 selected before it. The map marks the selected track with a star and
 rings the tracks of each gallery in the colour that gallery frames its
-panels in. The name a cluster has
+panels in. The top of the legend names those three marks, and all of
+them stand on the map while a track is selected. The name a cluster has
 been given stands over the middle of its points, and the Cluster labels
 entry in the legend takes every name off the map. The map is drawn by
 plotly.js, which the page loads from the jsDelivr CDN, so the page
