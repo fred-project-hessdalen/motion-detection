@@ -323,16 +323,18 @@ LABEL_HELP = (
     "set is built from. It is kept in small letters with single spaces between its words and every word "
     'in the singular, so that "Street Lights" and "streetLight" come to the one name. A name within a '
     "letter or two of one already in use is put to you before it is written. Naming the cluster again "
-    "moves its tracks to the new name, and clearing the box takes them out of the one they are under. A "
-    "track reassigned to another cluster on its own stays where it was put."
+    "moves its tracks to the new name, and clearing the box takes them out of the one they are under. "
+    "The selected track takes the name whichever group is named, and any other track reassigned to "
+    "another cluster on its own stays where it was put."
 )
 SAVE_LABEL_HELP = "Keep this name against every track the name is being given to."
 NAMING_HELP = (
     "Which tracks the name is given to. Cluster gives it to every track of the cluster the gallery above "
-    "draws, wherever those tracks lie on the map. Neighbours gives it to the tracks nearest the selected "
-    "one, which the Nearest tracks gallery draws, whichever cluster each of them is in, and is how a name "
-    "is given to a neighbourhood the clustering cut in two. Naming a cluster leaves alone the tracks put "
-    "under a name of their own, and naming the nearest tracks takes all of them."
+    "draws, wherever those tracks lie on the map. Neighbours gives it to the selected track and the "
+    "tracks nearest it, which the Nearest tracks gallery draws, whichever cluster each of them is in, and "
+    "is how a name is given to a neighbourhood the clustering cut in two. The selected track takes the "
+    "name either way. Naming a cluster leaves alone the other tracks put under a name of their own, and "
+    "naming the nearest tracks takes all of them."
 )
 SIMILAR_TEXT = (
     "A name holds the tracks given it and nothing more, so two spellings of one thing keep their tracks "
@@ -397,6 +399,18 @@ class Ring:
     name: str
     marker: dict[str, Any]
     tracks: pd.DataFrame
+
+
+@dataclass(frozen=True, slots=True)
+class Group:
+    """The tracks a name is being given to: the whole group, the ones the name
+    is written against, the name they stand under now, and how many of them are
+    under it."""
+
+    keys: tuple[str, ...]
+    moving: tuple[str, ...]
+    given: str
+    under: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -1319,11 +1333,9 @@ def _labelling(tracks: pd.DataFrame, *, cluster: str, nearest: pd.DataFrame, sel
 
     Every track of a cluster takes the name, including the tracks the
     sidebar's filters leave off the map, because the name is about what
-    the cluster holds. A track put under a name of its own is left
-    alone, so that naming the cluster again does not take a reassignment
-    back. The nearest tracks all take it, because they were picked by
-    hand and each one stands under the name of whichever cluster it came
-    from.
+    the cluster holds. The nearest tracks all take it, because they were
+    picked by hand and each one stands under the name of whichever
+    cluster it came from.
 
     The box is keyed by the group it names, so that it opens on that
     group's own name. The nearest tracks are the group of the selected
@@ -1338,17 +1350,14 @@ def _labelling(tracks: pd.DataFrame, *, cluster: str, nearest: pd.DataFrame, sel
     )
 
     labels = _cluster_labels(_labels_stamp())
-    held = _by_key(labels)
     neighbours = given_to == NEIGHBOUR_TRACKS
-    keys = nearest["key"].tolist() if neighbours else tracks.loc[tracks["cluster"] == cluster, "key"].tolist()
-    given = label_of(labels, keys=keys)
-    moving = tuple(keys) if neighbours else tuple(key for key in keys if held.get(key, "") in ("", given))
-    under = sum(1 for key in keys if held.get(key) == given)
-    group = f"{given_to}:{selected}" if neighbours else f"{given_to}:{cluster}"
-    naming = Naming(path=LABELS_PATH, keys=moving, box=f"{LABEL_KEY}:{group}", confirms=False)
+    members = nearest["key"].tolist() if neighbours else tracks.loc[tracks["cluster"] == cluster, "key"].tolist()
+    group = named_group(labels, members=members, selected=selected, neighbours=neighbours)
+    box = f"{given_to}:{selected}" if neighbours else f"{given_to}:{cluster}"
+    naming = Naming(path=LABELS_PATH, keys=group.moving, box=f"{LABEL_KEY}:{box}", confirms=False)
 
-    _name_box(chooser, label="Cluster label", given=given, naming=naming, help=LABEL_HELP)
-    st.caption(_naming_caption(given_to, given=given, under=under, held=len(keys)))
+    _name_box(chooser, label="Cluster label", given=group.given, naming=naming, help=LABEL_HELP)
+    st.caption(_naming_caption(group))
     save.button(
         "Save",
         key=f"{SAVE_KEY}:{cluster}",
@@ -1359,15 +1368,38 @@ def _labelling(tracks: pd.DataFrame, *, cluster: str, nearest: pd.DataFrame, sel
     )
 
 
-def _naming_caption(given_to: str, *, given: str, under: int, held: int) -> str:
+def named_group(labels: dict[str, list[str]], *, members: list[str], selected: str, neighbours: bool) -> Group:
+    """The tracks a name is given to, out of the group it is being given to.
+
+    The selected track takes the name whichever group is named, because
+    it is the track the person is looking at while they name it. It
+    stands at the middle of its neighbourhood, which is drawn as the
+    tracks nearest it and holds none of itself.
+
+    Any other track of a cluster that stands under a name of its own is
+    left alone, so that naming the cluster again does not take a
+    reassignment back.
+    """
+    keys = [selected, *members] if neighbours and selected else list(members)
+    given = label_of(labels, keys=keys)
+    held = _by_key(labels)
+    moving = keys if neighbours else [key for key in keys if key == selected or held.get(key, "") in ("", given)]
+    return Group(
+        keys=tuple(keys),
+        moving=tuple(moving),
+        given=given,
+        under=sum(1 for key in keys if held.get(key) == given),
+    )
+
+
+def _naming_caption(group: Group) -> str:
     """How many of the tracks the name would be given to are under it
     already."""
-    group = "nearest tracks" if given_to == NEIGHBOUR_TRACKS else "tracks"
-    if not held:
+    if not group.keys:
         return "Select a track to name the ones nearest it."
-    if not given:
-        return f"None of these {held} {group} has a name yet."
-    return f"{under} of {held} {group} under {given}"
+    if not group.given:
+        return f"None of these {len(group.keys)} tracks has a name yet."
+    return f"{group.under} of {len(group.keys)} tracks under {group.given}"
 
 
 def _neighbours(nearest: pd.DataFrame, *, radius: float, playing: pd.Series | None) -> None:

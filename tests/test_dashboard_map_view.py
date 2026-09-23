@@ -14,6 +14,7 @@ from hessdalen.dashboard.map_view import (
     by_validation,
     cluster_names,
     labelled,
+    named_group,
     searched,
 )
 
@@ -109,6 +110,50 @@ def test_the_map_holds_to_the_tracks_someone_confirmed() -> None:
 
 def test_the_map_holds_to_the_tracks_still_to_go_through() -> None:
     assert by_validation(_gone_through(), choice=UNVALIDATED)["key"].tolist() == ["a/1", "a/3"]
+
+
+def test_naming_a_cluster_names_every_track_of_it_that_has_no_name() -> None:
+    group = named_group({}, members=["a/1", "a/2"], selected="a/1", neighbours=False)
+
+    assert group.moving == ("a/1", "a/2")
+    assert group.given == ""
+
+
+def test_naming_a_cluster_names_the_selected_track_whatever_it_stands_under() -> None:
+    """The selected track is the one being looked at while the name is given,
+    so the name is about it before it is about the rest of the cluster."""
+    labels = {"bird": ["a/1", "a/2"], "plane": ["a/3"]}
+
+    group = named_group(labels, members=["a/1", "a/2", "a/3"], selected="a/3", neighbours=False)
+
+    assert group.moving == ("a/1", "a/2", "a/3")
+    assert group.given == "bird"
+
+
+def test_naming_a_cluster_leaves_the_other_tracks_under_a_name_of_their_own() -> None:
+    labels = {"bird": ["a/1", "a/2"], "plane": ["a/3"]}
+
+    group = named_group(labels, members=["a/1", "a/2", "a/3"], selected="a/1", neighbours=False)
+
+    assert group.moving == ("a/1", "a/2")
+    assert group.under == 2
+
+
+def test_naming_the_nearest_tracks_names_the_track_they_were_drawn_around() -> None:
+    """A neighbourhood is the tracks nearest the selected one, which holds none
+    of the selected track itself."""
+    group = named_group({"bird": ["a/2"]}, members=["a/2", "a/3"], selected="a/1", neighbours=True)
+
+    assert group.keys == ("a/1", "a/2", "a/3")
+    assert group.moving == ("a/1", "a/2", "a/3")
+    assert group.under == 1
+
+
+def test_the_nearest_tracks_of_no_selected_track_are_no_group() -> None:
+    group = named_group({}, members=[], selected="", neighbours=True)
+
+    assert group.keys == ()
+    assert group.moving == ()
 
 
 def _gone_through() -> pd.DataFrame:

@@ -230,12 +230,13 @@ of your own and Save keeps it against every one of them in
 `data/out/analysis/cluster-labels.json`, which holds each name with the
 tracks under it and is what a training set is built from. Apply to
 beside the box chooses the group. Cluster names every track of the
-cluster the gallery draws. Neighbours names the tracks nearest the
-selected one, the ones the Nearest tracks gallery draws, whichever
+cluster the gallery draws. Neighbours names the selected track and the
+tracks nearest it, the ones the Nearest tracks gallery draws, whichever
 cluster each of them is in, which is how a name is given to a
-neighbourhood the clustering cut in two. Naming a cluster leaves alone
-the tracks put under a name of their own, and naming the nearest tracks
-takes all of them. Cluster label and Track label both offer the names
+neighbourhood the clustering cut in two. The selected track takes the
+name either way, because it is the track being looked at while the name
+is given. Naming a cluster leaves alone the other tracks put under a
+name of their own, and naming the nearest tracks takes all of them. Cluster label and Track label both offer the names
 given so far, to a cluster or to a track, in a list that narrows to what
 is typed into it, and anything else typed there is a new name. A name is
 kept
