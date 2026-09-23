@@ -8,6 +8,8 @@ import pytest
 
 from hessdalen.dashboard.track_preview import (
     CACHED_MARK,
+    PLAYING_COLOUR,
+    PLAYING_MARK,
     VALIDATED_MARK,
     GalleryEntry,
     close_up,
@@ -101,10 +103,27 @@ def test_a_panel_of_a_track_nothing_is_known_of_carries_no_mark() -> None:
 
     assert CACHED_MARK not in drawn
     assert VALIDATED_MARK not in drawn
+    assert PLAYING_MARK not in drawn
 
 
-def _entry(key: str, caption: str, *, cached: bool = False, validated: bool = False) -> GalleryEntry:
-    return GalleryEntry(key=key, caption=caption, cached=cached, validated=validated)
+def test_the_panel_whose_video_plays_stands_out_from_the_gallery() -> None:
+    """A click plays the track's video, and the panel clicked has to be the one
+    the eye goes back to."""
+    entries = [_entry("a", "1. playing", playing=True), _entry("b", "2. birds")]
+
+    figures = gallery_html(_paths(), entries=entries, frame="#e6007e").split("<figure")[1:]
+
+    assert PLAYING_MARK in figures[0]
+    assert PLAYING_COLOUR in figures[0]
+    assert "#e6007e" not in figures[0]
+    assert PLAYING_MARK not in figures[1]
+    assert "#e6007e" in figures[1]
+
+
+def _entry(
+    key: str, caption: str, *, cached: bool = False, validated: bool = False, playing: bool = False
+) -> GalleryEntry:
+    return GalleryEntry(key=key, caption=caption, cached=cached, validated=validated, playing=playing)
 
 
 def _paths() -> pd.DataFrame:

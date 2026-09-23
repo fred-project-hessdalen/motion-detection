@@ -131,9 +131,18 @@ HOVER_TEMPLATE = (
 )
 GALLERY_SIZE = 30
 NEIGHBOUR_RADIUS = 0.5
+GALLERY_SELECTS: bool = False
+"""Whether a click on a gallery panel selects its track.
+
+While this is off a click plays the track's video and marks its panel,
+and the selected track stays where it is, so that a cluster can be gone
+through video by video without losing the track it is judged against.
+Turning it on gives a panel the whole of what a click on the map brings.
+"""
 SHUFFLE_KEY = "gallery_shuffle"
 MAP_KEY = "track_map"
 HISTORY_KEY = "track_history"
+PLAYING_KEY = "playing_track"
 SAMPLE_GALLERY_KEY = "sample_gallery"
 NEAREST_GALLERY_KEY = "nearest_gallery"
 SEARCH_KEY = "track_search"
@@ -218,7 +227,9 @@ PATH_HELP = (
     "were computed from. Colour runs from dark blue on its first frame to yellow on its last."
 )
 VIDEO_HELP = (
-    "The track on its recording, from a second before it starts to a second after it ends. In the frame "
+    "The track named under this heading on its recording, from a second before it starts to a second "
+    "after it ends. It is the selected track until a panel of a gallery is clicked, and that panel's "
+    "track from then on, so a cluster can be gone through video by video. In the frame "
     "shows the whole picture with the track's path and a box drawn on it. Close up shows a crop that "
     "keeps the detection in the middle and nothing drawn over it, so the object itself can be seen. That "
     "crop is placed on an average of the detections around each frame rather than on the detection "
@@ -235,9 +246,10 @@ PANEL_HELP = (
     "built together, so switching between them plays at once."
 )
 MARKS_HELP = (
-    "A camera stands over a track whose recording is on disk, which is a track that can be played without "
-    "waiting for a fetch, and a green tick over a track someone has confirmed. Click a panel to select its "
-    "track."
+    "Click a panel to play its track's video, which leaves the selected track where it is. The panel "
+    "whose video is playing carries a play mark and is framed in the colour of that mark. A camera "
+    "stands over a track whose recording is on disk, which is a track that can be played without waiting "
+    "for a fetch, and a green tick over a track someone has confirmed."
 )
 GALLERY_HELP = (
     f"Up to {GALLERY_SIZE} tracks drawn at random from the cluster, each drawn from its stored path and "
@@ -346,6 +358,7 @@ def page() -> None:
     shown = shown[shown["label"].isin(folders)] if folders else shown
     shown = by_validation(shown, choice=str(validation or ANY_VALIDATION))
     picked = _picked(shown, tracks=tracks, key=_history().standing)
+    playing = _playing(tracks, picked=picked)
     cluster = _gallery_cluster(str(chosen_cluster), picked=picked)
     sample = shown.iloc[0:0] if cluster is None else _sample(shown, cluster=cluster)
     nearest = shown.iloc[0:0] if picked is None else _nearest(shown, track=picked, radius=float(radius))
@@ -369,11 +382,11 @@ def page() -> None:
             names=cluster_names(shown, labels=_cluster_labels(_labels_stamp())),
         )
         track_map_chart(figure, key=MAP_KEY, on_click=_map_clicked)
-        _gallery(shown, cluster=cluster, sample=sample)
+        _gallery(shown, cluster=cluster, sample=sample, playing=playing)
         if cluster is not None:
             _labelling(tracks, cluster=cluster)
         if picked is not None:
-            _neighbours(nearest, radius=float(radius))
+            _neighbours(nearest, radius=float(radius), playing=playing)
 
     with track_column:
         _steps()
@@ -381,6 +394,8 @@ def page() -> None:
             st.caption("No track selected.")
         else:
             _selected(picked, points=_points(paths, key=str(picked["key"])))
+        if playing is not None:
+            _video(playing, points=_points(paths, key=str(playing["key"])))
 
 
 def _steps() -> None:
@@ -392,18 +407,6 @@ def _steps() -> None:
 
 
 def _map_clicked() -> None:
-    _clicked(MAP_KEY)
-
-
-def _sample_clicked() -> None:
-    _clicked(SAMPLE_GALLERY_KEY)
-
-
-def _nearest_clicked() -> None:
-    _clicked(NEAREST_GALLERY_KEY)
-
-
-def _clicked(component: str) -> None:
     """Keep the clicked track as the selected one until another is clicked.
 
     A click is taken here rather than while the page is drawn, because
@@ -411,9 +414,36 @@ def _clicked(component: str) -> None:
     rings the tracks the galleries show, which follow the selected
     track.
     """
-    clicked = st.session_state[component].get("clicked")
+    clicked = _reported(MAP_KEY)
     if clicked:
-        _select(str(clicked))
+        _select(clicked)
+
+
+def _sample_clicked() -> None:
+    _gallery_clicked(SAMPLE_GALLERY_KEY)
+
+
+def _nearest_clicked() -> None:
+    _gallery_clicked(NEAREST_GALLERY_KEY)
+
+
+def _gallery_clicked(component: str) -> None:
+    """Play the video of the clicked track, leaving the selected track where it
+    is, or select it while GALLERY_SELECTS is on."""
+    clicked = _reported(component)
+    if not clicked:
+        return
+
+    if GALLERY_SELECTS:
+        _select(clicked)
+    else:
+        st.session_state[PLAYING_KEY] = clicked
+
+
+def _reported(component: str) -> str:
+    """The track a component reports a click on, and nothing while it reports
+    no click."""
+    return str(st.session_state[component].get("clicked") or "")
 
 
 def _search() -> None:
@@ -434,8 +464,13 @@ def _history() -> History:
 
 def _select(key: str) -> None:
     """Stand on this track, and keep it among the tracks the steps go back
-    through."""
+    through.
+
+    Its video is the one that plays from here, until a gallery panel is
+    clicked.
+    """
     st.session_state[HISTORY_KEY] = visited(_history(), key=key)
+    st.session_state.pop(PLAYING_KEY, None)
 
 
 def _step(offset: int) -> None:
@@ -479,6 +514,14 @@ def searched(tracks: pd.DataFrame, *, wanted: str) -> pd.DataFrame:
         else:
             found = found[found["clip"].str.contains(word, case=False, regex=False)]
     return found
+
+
+def _playing(tracks: pd.DataFrame, *, picked: pd.Series | None) -> pd.Series | None:
+    """The track whose video plays, which is the track a gallery panel was last
+    clicked on and the selected track until one was."""
+    clicked = str(st.session_state.get(PLAYING_KEY) or "")
+    held = tracks.loc[tracks["key"] == clicked]
+    return picked if held.empty else held.iloc[0]
 
 
 def _picked(shown: pd.DataFrame, *, tracks: pd.DataFrame, key: str | None) -> pd.Series | None:
@@ -669,17 +712,13 @@ def _colours(tracks: pd.DataFrame, *, column: str) -> dict[str, str]:
 
 
 def _selected(track: pd.Series, *, points: pd.DataFrame) -> None:
-    """The picked track drawn at once from its stored path, and its video once
-    that is built."""
+    """The picked track drawn at once from its stored path."""
     st.subheader(f"Track {int(track['track_id'])} in {track['clip']}", help=PATH_HELP)
     st.caption(_facts(track))
     _track_labelling(track)
     st.altair_chart(frame_view(points))
     st.altair_chart(close_up(points))
     st.altair_chart(light_curve(points))
-
-    st.subheader("Video", help=VIDEO_HELP)
-    _video(str(track["key"]), recording=str(track["recording"]), stored=_stored_track(points))
 
 
 def _track_labelling(track: pd.Series) -> None:
@@ -751,7 +790,19 @@ def _confirm(key: str, *, confirmed: bool) -> None:
     st.session_state[f"{VALIDATED_KEY}:{key}"] = confirmed
 
 
-def _video(key: str, *, recording: str, stored: StoredTrack) -> None:
+def _video(track: pd.Series, *, points: pd.DataFrame) -> None:
+    """The video of the track that is playing, under a line naming it.
+
+    The selected track's video plays until a gallery panel is clicked,
+    and that panel's track plays from then on, so a cluster can be gone
+    through video by video while the selected track stays where it is.
+    """
+    st.subheader("Video", help=VIDEO_HELP)
+    st.caption(f"Track {int(track['track_id'])} in {track['clip']}")
+    _clip(str(track["key"]), recording=str(track["recording"]), stored=_stored_track(points))
+
+
+def _clip(key: str, *, recording: str, stored: StoredTrack) -> None:
     """The clips of the track when they are built, and their progress until
     then."""
     source = _source(recording)
@@ -913,7 +964,7 @@ def _clips(video: Path, *, track: StoredTrack) -> TrackClips:
     return track_clip_paths(video, track=track, stretch=stretch, settings=config().settings, output_dir=CLIPS_DIR)
 
 
-def _gallery(tracks: pd.DataFrame, *, cluster: str | None, sample: pd.DataFrame) -> None:
+def _gallery(tracks: pd.DataFrame, *, cluster: str | None, sample: pd.DataFrame, playing: pd.Series | None) -> None:
     """The random sample of the cluster, framed in the colour that rings it on
     the map."""
     if cluster is None:
@@ -926,7 +977,14 @@ def _gallery(tracks: pd.DataFrame, *, cluster: str | None, sample: pd.DataFrame)
     members = int((tracks["cluster"] == cluster).sum())
     st.caption(f"{_cluster_title(cluster)} · {len(sample)} of {members} tracks")
     captions = [f"{place}. folder {folder}" for place, folder in enumerate(sample["label"], start=1)]
-    _panels(sample, captions=captions, frame=SAMPLE_COLOR, key=SAMPLE_GALLERY_KEY, on_click=_sample_clicked)
+    _panels(
+        sample,
+        captions=captions,
+        frame=SAMPLE_COLOR,
+        playing=playing,
+        key=SAMPLE_GALLERY_KEY,
+        on_click=_sample_clicked,
+    )
 
 
 def _shuffle() -> None:
@@ -952,7 +1010,7 @@ def _labelling(tracks: pd.DataFrame, *, cluster: str) -> None:
         st.rerun()
 
 
-def _neighbours(nearest: pd.DataFrame, *, radius: float) -> None:
+def _neighbours(nearest: pd.DataFrame, *, radius: float, playing: pd.Series | None) -> None:
     """The tracks nearest the selected one, each captioned with the cluster it
     is in and framed in the colour that rings them on the map."""
     st.subheader(NEAREST_TITLE, help=NEIGHBOURS_HELP)
@@ -961,19 +1019,41 @@ def _neighbours(nearest: pd.DataFrame, *, radius: float) -> None:
         f"{place}. {_cluster_caption(cluster)} · {name}"
         for place, (cluster, name) in enumerate(zip(nearest["cluster"], nearest[NAME_COLUMN]), start=1)
     ]
-    _panels(nearest, captions=captions, frame=NEAREST_COLOR, key=NEAREST_GALLERY_KEY, on_click=_nearest_clicked)
+    _panels(
+        nearest,
+        captions=captions,
+        frame=NEAREST_COLOR,
+        playing=playing,
+        key=NEAREST_GALLERY_KEY,
+        on_click=_nearest_clicked,
+    )
 
 
 def _cluster_caption(cluster: str) -> str:
     return "no cluster" if cluster == UNASSIGNED_NAME else f"cluster {cluster}"
 
 
-def _panels(chosen: pd.DataFrame, *, captions: list[str], frame: str, key: str, on_click: Callable[[], None]) -> None:
+def _panels(
+    chosen: pd.DataFrame,
+    *,
+    captions: list[str],
+    frame: str,
+    playing: pd.Series | None,
+    key: str,
+    on_click: Callable[[], None],
+) -> None:
     """The chosen tracks drawn from their stored paths, a panel each, in rows
-    that wrap to the width of the column, each panel selecting its track when
-    it is clicked."""
+    that wrap to the width of the column, each panel playing its track's video
+    when it is clicked."""
+    played = "" if playing is None else str(playing["key"])
     entries = tuple(
-        GalleryEntry(key=str(track), caption=caption, cached=bool(cached), validated=bool(validated))
+        GalleryEntry(
+            key=str(track),
+            caption=caption,
+            cached=bool(cached),
+            validated=bool(validated),
+            playing=str(track) == played,
+        )
         for track, cached, validated, caption in zip(
             chosen["key"], chosen[CACHED_COLUMN], chosen[VALIDATED_COLUMN], captions
         )

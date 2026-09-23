@@ -32,11 +32,22 @@ CLOSE_UP_MARGIN = 0.55
 extent, so a path fills most of its panel and never touches the edge."""
 
 CAPTION_FONT_PIXELS = 10
+FRAME_PIXELS = 2
+PLAYING_FRAME_PIXELS = 3
 CACHED_MARK = "🎥"
 CACHED_TITLE = "The recording is on disk"
 VALIDATED_MARK = "✓"
 VALIDATED_TITLE = "Confirmed by a person"
 VALIDATED_COLOUR = "#2e9e4f"
+PLAYING_MARK = "▶"
+PLAYING_TITLE = "Its video is the one playing"
+PLAYING_COLOUR = "#7b3fe4"
+"""Colour the panel of the track whose video plays is framed in.
+
+It stands apart from the colours the galleries frame their panels in and
+from the star over the selected track, because a track playing and a
+track selected are two different things.
+"""
 
 TIME = alt.Color("phase:Q", scale=alt.Scale(scheme="viridis"), legend=None)
 """Colour along a path, from its first frame in dark blue to its last in
@@ -45,14 +56,15 @@ yellow, so direction and pace read off the spacing of the dots."""
 
 @dataclass(frozen=True, slots=True)
 class GalleryEntry:
-    """One panel of a gallery: the track it draws, what stands over it, and
-    whether the track's recording is on disk and the track itself
-    confirmed."""
+    """One panel of a gallery: the track it draws, what stands over it,
+    whether the track's recording is on disk, whether the track itself is
+    confirmed, and whether its video is the one playing."""
 
     key: str
     caption: str
     cached: bool
     validated: bool
+    playing: bool
 
 
 def frame_view(points: pd.DataFrame) -> alt.Chart:
@@ -137,6 +149,7 @@ def _panel_svg(points: pd.DataFrame, *, entry: GalleryEntry, frame: str) -> str:
     )
     source = "data:image/svg+xml;base64," + base64.b64encode(svg.encode()).decode()
     caption = html.escape(entry.caption)
+    thickness = PLAYING_FRAME_PIXELS if entry.playing else FRAME_PIXELS
     return (
         f'<figure data-track="{html.escape(entry.key)}" '
         f'style="margin:0;width:{PANEL_PIXELS}px;cursor:pointer">'
@@ -144,14 +157,17 @@ def _panel_svg(points: pd.DataFrame, *, entry: GalleryEntry, frame: str) -> str:
         f'<span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{caption}</span>'
         f'<span style="margin-left:auto;white-space:nowrap">{_marks(entry)}</span></figcaption>'
         f'<img src="{source}" width="{PANEL_PIXELS}" height="{PANEL_PIXELS}" alt="{caption}" '
-        f'style="border:2px solid {frame}"></figure>'
+        f'style="border:{thickness}px solid {PLAYING_COLOUR if entry.playing else frame}"></figure>'
     )
 
 
 def _marks(entry: GalleryEntry) -> str:
-    """The camera a panel carries while its recording is on disk, and the tick
-    it carries once someone has confirmed the track."""
+    """What a panel carries beside its caption: a camera while its recording is
+    on disk, a tick once someone has confirmed the track, and a play mark while
+    its video is the one playing."""
     marks = []
+    if entry.playing:
+        marks.append(f'<span title="{PLAYING_TITLE}" style="color:{PLAYING_COLOUR}">{PLAYING_MARK}</span>')
     if entry.cached:
         marks.append(f'<span title="{CACHED_TITLE}">{CACHED_MARK}</span>')
     if entry.validated:
