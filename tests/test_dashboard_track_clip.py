@@ -167,29 +167,45 @@ def test_the_close_up_holds_where_the_track_goes_unmatched() -> None:
     where the object was rather than jumping back to the start."""
     centres = close_up_centres(_track(frames=[5, 9]), stretch=Stretch(begin_frame=3, end_frame=10), size=JUMPING)
 
-    assert centres[0].tolist() == list(_position(5))
-    assert centres[4].tolist() == list(_position(5))
-    assert centres[-1].tolist() == list(_position(9))
+    assert abs(int(centres[0][0]) - _position(5)[0]) <= JUMPING
+    assert abs(int(centres[4][0]) - _position(5)[0]) <= JUMPING
+    assert abs(int(centres[-1][0]) - _position(9)[0]) <= JUMPING
 
 
 def test_a_detection_that_hops_about_hardly_moves_the_close_up() -> None:
     """A track is matched on its blob's brightest pixel, which hops about
-    inside the blob, and a crop cut around it straight shakes."""
+    inside the blob, and a crop cut around it straight shakes.
+
+    The detection here moves two pixels every frame and turns back on
+    itself every frame. The crop is asked to do neither.
+    """
     hopping = _moving_track([100.0 + 2.0 * (frame % 2) for frame in range(20)])
 
     centres = close_up_centres(hopping, stretch=Stretch(begin_frame=0, end_frame=19), size=SIZE)
 
-    assert int(centres[:, 0].max() - centres[:, 0].min()) <= 1
+    steps = np.diff(centres[:, 0])
+    assert int(np.abs(steps).max()) <= 1
+    assert not (np.sign(steps[1:]) * np.sign(steps[:-1]) < 0).any()
 
 
-def test_an_object_the_close_up_cannot_keep_up_with_stays_near_its_middle() -> None:
-    """Following alone falls behind an object that goes somewhere, and it is
-    the crop jumping to such a detection that keeps it in the picture."""
-    fast = _moving_track([100.0 + 5.0 * frame for frame in range(20)])
+def test_an_object_holding_its_course_is_followed_with_no_lag() -> None:
+    """The whole track is known before a frame is decoded, so an average taken
+    around each frame places the crop on the course itself."""
+    steady = _moving_track([100.0 + 5.0 * frame for frame in range(40)])
 
-    centres = close_up_centres(fast, stretch=Stretch(begin_frame=0, end_frame=19), size=SIZE)
+    centres = close_up_centres(steady, stretch=Stretch(begin_frame=0, end_frame=39), size=SIZE)
 
-    assert int(np.abs(fast.x - centres[:, 0]).max()) <= SIZE
+    assert int(np.abs(steady.x - centres[:, 0]).max()) == 0
+
+
+def test_the_close_up_never_sits_further_from_the_detection_than_a_box() -> None:
+    """Averaging cuts the corner of a turn, and the crop is held back to the
+    box's own edge so that a hard turn cannot carry it off the object."""
+    turning = _moving_track([100.0 + 40.0 * min(frame, 20) for frame in range(40)])
+
+    centres = close_up_centres(turning, stretch=Stretch(begin_frame=0, end_frame=39), size=SIZE)
+
+    assert int(np.abs(turning.x - centres[:, 0]).max()) <= SIZE
 
 
 def test_the_close_up_is_cut_around_the_detection() -> None:

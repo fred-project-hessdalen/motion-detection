@@ -177,10 +177,12 @@ the detection on every side, which follows it from frame to frame and
 carries nothing drawn over it. The deviation is measured over the
 stretch alone, so the background model opens on the stretch's first
 frame and the second before the track starts is what it has to settle
-in. The crop eases a quarter of the way towards the detection each
-frame, so the hop of the matched pixel inside its blob hardly moves it,
-and it jumps to the detection outright once that sits more than a box
-half-width from the middle. The crop is black where it reaches past the
+in. The crop is placed on an average of the detections over the 15
+frames around each one, taken from the stored track before any frame is
+decoded, so the hop of the matched pixel inside its blob averages away
+while an object holding its course is followed with no lag at all. A
+turn sharper than that average follows is held to a box half-width from
+the detection on each axis. The crop is black where it reaches past the
 edge of the picture. All four come out of the one pass over the recording, because
 reaching the track is most of what a build costs. A track deep in a
 recording is reached by seeking to the keyframe before it, which needs

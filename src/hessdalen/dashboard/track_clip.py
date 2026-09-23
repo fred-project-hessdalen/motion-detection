@@ -88,23 +88,25 @@ The box is drawn a half-width out from the detection on every side, so
 the close-up holds the box and as much again around it.
 """
 
-CLOSE_UP_FOLLOW = 0.25
-"""Share of the way the close-up moves towards the detection each frame.
+CLOSE_UP_WINDOW = 15
+"""Frames of the track averaged to place the close-up on one of them.
 
 A track is matched on its blob's brightest pixel, which hops about
 inside the blob from one frame to the next, and a crop cut around that
-pixel shakes. Taking a quarter of the step each frame leaves a hop of a
-few pixels almost nothing to move the crop by, and still follows an
-object that is going somewhere.
+pixel shakes. The whole track is known before a frame is decoded, so the
+average is taken around each frame rather than over the frames before
+it. An object holding its course is then followed with no lag at all,
+and the crop walks along the course itself instead of chasing the hop.
 """
 
 CLOSE_UP_SNAP_RADII = 1
-"""How far the detection may sit from the middle of the close-up before the
-crop jumps to it, in box half-widths.
+"""How far a detection may sit from the middle of the close-up.
 
-An object moving faster than the crop follows would otherwise walk
-towards the edge of the picture. A jump keeps it within a third of the
-way out to the edge of the crop, which is where the box's own edge sits.
+Measured in box half-widths. Averaging cuts the corner of a turn, and an
+object that turns hard enough would walk towards the edge of the
+picture. Holding it this far out at most keeps it within a third of the
+way to the edge of the crop on each axis, which is where the box's own
+edge sits.
 """
 
 
@@ -333,7 +335,8 @@ def close_up_centres(track: StoredTrack, *, stretch: Stretch, size: int) -> np.n
 
     A track goes unmatched for a frame here and there, and holding its
     last position over those frames keeps the crop where the object was
-    rather than jumping back to where the track started.
+    rather than jumping back to where the track started. The whole
+    stretch is placed at once, before any frame is decoded.
     """
     numbers = np.arange(stretch.begin_frame, stretch.end_frame + 1)
     reached = np.clip(np.searchsorted(track.frame_numbers, numbers, side="right") - 1, 0, None)
@@ -342,20 +345,24 @@ def close_up_centres(track: StoredTrack, *, stretch: Stretch, size: int) -> np.n
 
 
 def _followed(detections: np.ndarray, *, snap: int) -> np.ndarray:
-    """The detections followed rather than cut around, as whole pixels.
+    """The detections averaged around each frame, as whole pixels.
 
-    Each frame closes part of the distance to the detection, so the
-    shake of the matched pixel hardly moves the crop. A detection
-    further out than the snap is taken as it stands, which is what keeps
-    an object the crop cannot keep up with in the middle of the picture.
+    The average runs over the frames on both sides, so a detection
+    holding its course is followed exactly and the shake around that
+    course averages away. Past either end of the track the detections
+    are carried on by reflecting them through the end itself, which
+    keeps the course they were on going and leaves the first and last
+    frames as well placed as the ones between them.
+
+    A centre further from its detection than the snap is brought back to
+    that distance, which bounds how far a turn sharper than the average
+    follows can carry the crop off the object.
     """
-    followed = np.empty_like(detections)
-    centre = detections[0]
-    for index, detection in enumerate(detections):
-        near = np.abs(detection - centre).max() <= snap
-        centre = centre + CLOSE_UP_FOLLOW * (detection - centre) if near else detection
-        followed[index] = centre
-    return followed.round().astype(np.int32)
+    edge = CLOSE_UP_WINDOW // 2
+    padded = np.pad(detections, ((edge, edge), (0, 0)), mode="reflect", reflect_type="odd")
+    over = np.ones(CLOSE_UP_WINDOW) / CLOSE_UP_WINDOW
+    smoothed = np.column_stack([np.convolve(padded[:, axis], over, mode="valid") for axis in (0, 1)])
+    return (detections + np.clip(smoothed - detections, -snap, snap)).round().astype(np.int32)
 
 
 def cut_close_up(crop: np.ndarray, *, frame: np.ndarray, centre: np.ndarray) -> None:

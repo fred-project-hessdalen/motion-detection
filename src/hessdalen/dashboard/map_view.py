@@ -192,8 +192,9 @@ VIDEO_HELP = (
     "The track on its recording, from a second before it starts to a second after it ends. In the frame "
     "shows the whole picture with the track's path and a box drawn on it. Close up shows a crop that "
     "keeps the detection in the middle and nothing drawn over it, so the object itself can be seen. That "
-    "crop eases towards the detection rather than sitting on it, because the pixel a track is matched on "
-    "hops about inside its blob and would shake the picture. All of them "
+    "crop is placed on an average of the detections around each frame rather than on the detection "
+    "itself, because the pixel a track is matched on hops about inside its blob and would shake the "
+    "picture. An object holding its course is still followed with no lag. All of them "
     "are built in the background, one track at a time, and choosing another track stops the build under "
     "way."
 )
