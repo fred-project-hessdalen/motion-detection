@@ -249,11 +249,14 @@ uneven, which most clutter is, are left off the page until the Rough
 tracks switch in the sidebar is turned on, and the Video cached switch
 there, which starts on, draws the tracks whose recording is not on disk
 faintly. Search in the sidebar selects a track by its number, by its
-recording or by both, in
-the form the heading over a selected track gives them, such as `Track
-7484 in Cam1_2025-06-03__12-40-00_noInsect`. The map marks
-the selected track with a star and rings the tracks of each gallery in
-the colour that gallery frames its panels in. The name a cluster has
+recording or by both, in the form the heading over a selected track
+gives them, such as `Track 7484 in
+Cam1_2025-06-03__12-40-00_noInsect`. Clicking the map away from every
+track takes the selection off, and so does Escape, while a drag pans and
+leaves the selection alone. The steps still go back through the tracks
+selected before it. The map marks the selected track with a star and
+rings the tracks of each gallery in the colour that gallery frames its
+panels in. The name a cluster has
 been given stands over the middle of its points, and the Cluster labels
 entry in the legend takes every name off the map. The map is drawn by
 plotly.js, which the page loads from the jsDelivr CDN, so the page

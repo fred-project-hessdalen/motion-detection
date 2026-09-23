@@ -57,6 +57,16 @@ def visited(history: History, *, key: str) -> History:
     return History(keys=kept, place=len(kept) - 1)
 
 
+def cleared(history: History) -> History:
+    """The history standing on no track, with the tracks selected so far kept.
+
+    It stands one past the end, so the step back reaches the track it
+    was standing on and taking the selection off is undone the way
+    everything else is.
+    """
+    return History(keys=history.keys, place=len(history.keys))
+
+
 def stepped(history: History, *, offset: int) -> History:
     """The history moved this many tracks back or forward, held at its ends."""
     if not history.keys:

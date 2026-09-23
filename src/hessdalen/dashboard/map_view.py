@@ -48,7 +48,7 @@ from hessdalen.dashboard.track_clip import (
     track_clip_paths,
 )
 from hessdalen.dashboard.track_gallery import track_gallery
-from hessdalen.dashboard.track_history import History, stepped, visited
+from hessdalen.dashboard.track_history import History, cleared, stepped, visited
 from hessdalen.dashboard.track_map_chart import MAP_HEIGHT, track_map_chart
 from hessdalen.dashboard.track_preview import GalleryEntry, close_up, frame_view, gallery_html, light_curve
 from hessdalen.dashboard.track_validation import read_validated, write_validated
@@ -232,8 +232,10 @@ MAP_HELP = (
     "Every track the corpus holds, placed so that tracks with similar descriptors sit close together. "
     "Grey points are tracks the clustering left out of every cluster. Click a point to see its track. "
     "Scroll to zoom, drag to pan, and double-click to zoom back out. Click an entry in the legend to hide "
-    "or show its tracks. A star marks the selected track, and rings mark the tracks the galleries below "
-    "the map show. The name a cluster has been given stands over the middle of its points, and the "
+    "or show its tracks. A click away from every track takes the selection off, and so does Escape, "
+    "which leaves the steps to go back through the tracks selected so far. A star marks the selected "
+    "track, and rings mark the tracks the galleries below the map show. The name a cluster has been "
+    "given stands over the middle of its points, and the "
     f"{NAMES_TITLE} entry in the legend takes every name off the map."
 )
 PATH_HELP = (
@@ -461,7 +463,7 @@ def page() -> None:
             dimmed=dimmed,
             names=cluster_names(shown, labels=_cluster_labels(_labels_stamp())),
         )
-        track_map_chart(figure, key=MAP_KEY, on_click=_map_clicked)
+        track_map_chart(figure, key=MAP_KEY, on_click=_map_clicked, on_clear=_map_cleared)
         _gallery(shown, cluster=cluster, sample=sample, playing=playing)
         if cluster is not None:
             _labelling(tracks, cluster=cluster)
@@ -503,6 +505,14 @@ def _map_clicked() -> None:
     clicked = _reported(MAP_KEY, event="clicked")
     if clicked:
         _select(clicked)
+
+
+def _map_cleared() -> None:
+    """Take the selection off, leaving the tracks selected so far to step back
+    through."""
+    if _reported(MAP_KEY, event="cleared"):
+        st.session_state[HISTORY_KEY] = cleared(_history())
+        st.session_state.pop(PLAYING_KEY, None)
 
 
 def _sample_clicked() -> None:
