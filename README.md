@@ -165,6 +165,11 @@ someone gave a cluster on this
 page, and the second is where the recording sits in the archive, which
 names the whole recording rather than the track.
 
+Pointing at a point fills the lines under the map with that track: the
+names it stands under, its cluster, its recording and the numbers the
+clustering read from it. The point they are read from carries an arrow
+above it, and the points around it stay in view.
+
 Clicking a point draws that track at once from its stored path: where it
 was in the frame, its shape fitted to a box of its own, and its
 brightness and size frame by frame. Back and Forward over the selected

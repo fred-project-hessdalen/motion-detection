@@ -114,25 +114,41 @@ CLUSTER_TRACKS, NEIGHBOUR_TRACKS = NAMING_CHOICES
 SELECTED_CLUSTER = "Selected track's cluster"
 ROUGH_SIDE = "rough"
 OTHER_COLORS = qualitative.Dark24
-HOVER_COLUMNS = [
-    "key",
-    TRACK_NAME_COLUMN,
-    NAME_COLUMN,
-    "cluster",
-    "side",
-    "clip",
-    "track_id",
-    "frames",
-    "straightness",
-    "peak_deviation_max",
-    "label",
-]
-HOVER_TEMPLATE = (
-    "Track label %{customdata[1]}<br>Cluster label %{customdata[2]}<br>Cluster %{customdata[3]}<br>"
-    "Side %{customdata[4]}<br>Recording %{customdata[5]}<br>Track %{customdata[6]}<br>"
-    "Frames %{customdata[7]}<br>Straightness %{customdata[8]:.2f}<br>"
-    "Peak deviation %{customdata[9]:.1f}<br>Folder %{customdata[10]}<extra></extra>"
+
+
+@dataclass(frozen=True, slots=True)
+class Detail:
+    """A line of the panel under the map: the column its value is read from,
+    the name it stands under, and the digits a number is shown to, with none
+    where the value is shown as it stands."""
+
+    column: str
+    label: str
+    digits: int | None
+
+
+DETAILS = (
+    Detail(column=TRACK_NAME_COLUMN, label="Track label", digits=None),
+    Detail(column=NAME_COLUMN, label="Cluster label", digits=None),
+    Detail(column="cluster", label="Cluster", digits=None),
+    Detail(column="side", label="Side", digits=None),
+    Detail(column="clip", label="Recording", digits=None),
+    Detail(column="track_id", label="Track", digits=None),
+    Detail(column="frames", label="Frames", digits=None),
+    Detail(column="straightness", label="Straightness", digits=2),
+    Detail(column="peak_deviation_max", label="Peak deviation", digits=1),
+    Detail(column="label", label="Folder", digits=None),
 )
+"""What the panel under the map tells of the track under the pointer."""
+
+DETAIL_LINES = [{"label": detail.label, "digits": detail.digits} for detail in DETAILS]
+"""The same lines as the map's component takes them, which holds no column
+because a point carries its values in the order the details are given in."""
+
+POINT_COLUMNS = ["key", *(detail.column for detail in DETAILS)]
+"""What every point on the map carries: the track's key, which a click
+reports, and the values the panel under the map shows."""
+
 GALLERY_SIZE = 30
 NEIGHBOUR_RADIUS = 0.5
 SHUFFLE_KEY = "gallery_shuffle"
@@ -241,7 +257,9 @@ CACHED_HELP = (
 GALLERY_CHOICE_HELP = "The cluster the gallery below the map draws a sample of."
 MAP_HELP = (
     "Every track the corpus holds, placed so that tracks with similar descriptors sit close together. "
-    "Grey points are tracks the clustering left out of every cluster. Click a point to see its track. "
+    "Grey points are tracks the clustering left out of every cluster. Pointing at a track fills the "
+    "lines under the map with what it is and marks it with an arrow above it, so that the points around "
+    "it stay in view. Click a point to see its track. "
     "Scroll to zoom, drag to pan, and double-click to zoom back out. Click an entry in the legend to hide "
     "or show its tracks. A click away from every track takes the selection off, and so does Escape, "
     "which leaves the steps to go back through the tracks selected so far. A star marks the selected "
@@ -481,7 +499,7 @@ def page() -> None:
             dimmed=dimmed,
             names=cluster_names(shown, labels=_cluster_labels(_labels_stamp())),
         )
-        track_map_chart(figure, key=MAP_KEY, on_click=_map_clicked, on_clear=_map_cleared)
+        track_map_chart(figure, key=MAP_KEY, details=DETAIL_LINES, on_click=_map_clicked, on_clear=_map_cleared)
         _gallery(shown, cluster=cluster, sample=sample, playing=playing)
         if cluster is not None:
             _labelling(
@@ -769,8 +787,8 @@ def _scatter(
                 name=str(name),
                 uid=f"{column}:{name}",
                 marker={"color": _point_colours(members, colour=shade, dimmed=dimmed), "size": 6, "opacity": 0.7},
-                customdata=members[HOVER_COLUMNS].to_numpy(dtype=object),
-                hovertemplate=HOVER_TEMPLATE,
+                customdata=members[POINT_COLUMNS].to_numpy(dtype=object),
+                hoverinfo="none",
             )
         )
     for ring in rings:
@@ -805,6 +823,7 @@ def _scatter(
         template="plotly_white",
         height=MAP_HEIGHT,
         dragmode="pan",
+        hovermode="closest",
         uirevision="track-map",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
