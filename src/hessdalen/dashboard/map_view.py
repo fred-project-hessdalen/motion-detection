@@ -195,6 +195,15 @@ DIM_ALPHA = 0.2
 PANEL_CACHE_ENTRIES = 64
 POLL_SECONDS = 2.0
 
+GIGABYTE = 1024**3
+"""What a gigabyte is taken to be wherever the page writes one.
+
+The room left on the disk is held against the room the archive sift
+needs, so the two are counted the same way or the sentence that puts
+them side by side says one is under the other while the numbers say it
+is not.
+"""
+
 AUTO_FETCH_BYTES = 100 * 1024**2
 """Largest video a click fetches without being asked.
 
@@ -1153,8 +1162,9 @@ def _may_fetch(source: VideoSource, *, player: str) -> bool:
     free = free_bytes(FETCHED_DIR)
     if not room_to_fetch(archived, free_bytes=free):
         st.warning(
-            f"Fetching this {megabytes:.0f} MB video would leave {(free - archived.size_bytes) / 1e9:.1f} GB "
-            f"free, under the {MIN_FREE_BYTES / 1024**3:.0f} GB the archive sift needs to keep fetching."
+            f"Fetching this {megabytes:.0f} MB video would leave "
+            f"{(free - archived.size_bytes) / GIGABYTE:.1f} GB free, under the "
+            f"{MIN_FREE_BYTES / GIGABYTE:.0f} GB the archive sift needs to keep fetching."
         )
         if source.link:
             st.link_button("Open on Drive", source.link)
