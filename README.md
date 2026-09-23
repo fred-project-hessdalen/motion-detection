@@ -272,8 +272,8 @@ The page runs no detection. A track whose video the sift did not keep
 has its video fetched from the archive into `data/out/dashboard/videos`
 before it is drawn. A one-minute cut is fetched on the click, and a
 whole 20-minute recording waits for a press of Fetch video. No fetch is
-made that would leave less than 12 GB free on the disk, which the
-archive sift needs to keep running.
+made that would leave less than 2 GB free on the disk, which is what a
+recording and the clips drawn from it need between them.
 
 The map and the paths it draws from are written by a separate step,
 which needs the analysis group:

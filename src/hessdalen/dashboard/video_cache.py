@@ -21,12 +21,14 @@ REMOTE = "hessdalen:"
 """The rclone remote the archive is reached through, signed in with the
 project's own client."""
 
-MIN_FREE_BYTES = 12 * 1024**3
+MIN_FREE_BYTES = 2 * 1024**3
 """Space a fetch has to leave on the disk.
 
-The archive sift stops fetching below 8 GB free and skips every video it
-reaches until it is run again, and its own queue holds up to about 12 GB
-at a time, so a fetch here must not take the disk under that.
+A fetch pulls a whole recording down and the clips drawn from it are
+written beside it, so the page holds a recording's worth twice over
+before it has anything to show. This leaves room for that and for
+whatever else the machine is doing, and it is the page's own floor,
+reached from what the page itself does.
 """
 
 FETCH_RATE = 31e6 / 26.0
@@ -74,7 +76,8 @@ def cached_video(directory: Path, *, video: ArchiveVideo) -> Path | None:
 
 
 def room_to_fetch(video: ArchiveVideo, *, free_bytes: int) -> bool:
-    """Whether fetching the video leaves the space the archive sift needs."""
+    """Whether fetching the video leaves the disk the space the page keeps
+    free."""
     return free_bytes - video.size_bytes >= MIN_FREE_BYTES
 
 

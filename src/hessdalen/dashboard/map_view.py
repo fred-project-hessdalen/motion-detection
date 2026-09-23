@@ -198,10 +198,9 @@ POLL_SECONDS = 2.0
 GIGABYTE = 1024**3
 """What a gigabyte is taken to be wherever the page writes one.
 
-The room left on the disk is held against the room the archive sift
-needs, so the two are counted the same way or the sentence that puts
-them side by side says one is under the other while the numbers say it
-is not.
+The room left on the disk is written beside the room the page keeps
+free, so the two are counted the same way or the sentence holding both
+says one is under the other while the numbers say it is not.
 """
 
 AUTO_FETCH_BYTES = 100 * 1024**2
@@ -1163,8 +1162,8 @@ def _may_fetch(source: VideoSource, *, player: str) -> bool:
     if not room_to_fetch(archived, free_bytes=free):
         st.warning(
             f"Fetching this {megabytes:.0f} MB video would leave "
-            f"{(free - archived.size_bytes) / GIGABYTE:.1f} GB free, under the "
-            f"{MIN_FREE_BYTES / GIGABYTE:.0f} GB the archive sift needs to keep fetching."
+            f"{(free - archived.size_bytes) / GIGABYTE:.1f} GB free on the disk, under the "
+            f"{MIN_FREE_BYTES / GIGABYTE:.0f} GB this page keeps free. Make room and try again."
         )
         if source.link:
             st.link_button("Open on Drive", source.link)
@@ -1173,7 +1172,7 @@ def _may_fetch(source: VideoSource, *, player: str) -> bool:
     return archived.size_bytes <= AUTO_FETCH_BYTES or st.button(
         "Fetch video",
         key=f"{FETCH_KEY}:{player}",
-        help=f"The sift did not keep this {megabytes:.0f} MB recording. Fetching it takes about "
+        help=f"This {megabytes:.0f} MB recording is not on disk. Fetching it takes about "
         f"{fetch_seconds(archived) / 60.0:.0f} minutes, and no other clip is built meanwhile.",
     )
 

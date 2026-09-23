@@ -49,7 +49,7 @@ def test_a_copy_of_any_other_size_is_treated_as_absent(tmp_path) -> None:
     assert cached_video(tmp_path, video=archive_video(ENTRY)) is None
 
 
-def test_a_fetch_must_leave_the_space_the_sift_needs() -> None:
+def test_a_fetch_must_leave_the_space_the_page_keeps_free() -> None:
     video = archive_video(ENTRY)
 
     assert room_to_fetch(video, free_bytes=MIN_FREE_BYTES + 1000)
