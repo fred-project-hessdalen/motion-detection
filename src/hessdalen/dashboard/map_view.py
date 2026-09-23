@@ -8,7 +8,9 @@ has to pass every frame of the recording ahead of the track and can take
 a minute. A gallery below draws a random sample of any one cluster from
 the stored paths alone, which is how a cluster is judged at a glance,
 and a second one draws the tracks nearest the selected one, from
-whatever cluster they are in.
+whatever cluster they are in. A panel of either gallery selects its
+track when it is clicked, and the steps over the selected track go back
+through the tracks selected before it.
 
 The page never detects anything. A track whose video the sift did not
 keep has its video fetched from the archive before it is drawn.
@@ -18,6 +20,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -31,7 +34,7 @@ from plotly.colors import hex_to_rgb, qualitative
 
 from hessdalen.config import config
 from hessdalen.dashboard.clip_queue import ClipQueue, Job, Report
-from hessdalen.dashboard.cluster_labels import label_of, read_labels, write_labels
+from hessdalen.dashboard.cluster_labels import canonical_label, label_of, read_labels, write_labels
 from hessdalen.dashboard.panels import DEVIATION, RECORDING
 from hessdalen.dashboard.runs import probe
 from hessdalen.dashboard.track_clip import (
@@ -42,8 +45,11 @@ from hessdalen.dashboard.track_clip import (
     stretch_around,
     track_clip_paths,
 )
+from hessdalen.dashboard.track_gallery import track_gallery
+from hessdalen.dashboard.track_history import History, stepped, visited
 from hessdalen.dashboard.track_map_chart import MAP_HEIGHT, track_map_chart
-from hessdalen.dashboard.track_preview import close_up, frame_view, gallery_html, light_curve
+from hessdalen.dashboard.track_preview import GalleryEntry, close_up, frame_view, gallery_html, light_curve
+from hessdalen.dashboard.track_validation import read_validated, write_validated
 from hessdalen.dashboard.video_cache import (
     MIN_FREE_BYTES,
     FetchProgress,
@@ -60,6 +66,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 MAP_PATH = REPO_ROOT / "data" / "out" / "analysis" / "track-map.parquet"
 PATHS_PATH = MAP_PATH.with_name("track-paths.parquet")
 LABELS_PATH = MAP_PATH.with_name("cluster-labels.json")
+TRACK_LABELS_PATH = MAP_PATH.with_name("track-labels.json")
+VALIDATED_PATH = MAP_PATH.with_name("validated-tracks.json")
 VIDEOS_DIR = REPO_ROOT / "data" / "corpus" / "videos"
 FETCHED_DIR = REPO_ROOT / "data" / "out" / "dashboard" / "videos"
 CLIPS_DIR = REPO_ROOT / "data" / "out" / "dashboard" / "tracks"
@@ -75,22 +83,36 @@ CLUSTER_COLORS = ("#4c78a8", "#f58518", "#54a24b", "#e45756", "#72b7b2", "#eeca3
 NAME_COLUMN = "cluster_label"
 """Column holding the name given to the cluster each track is in."""
 
+TRACK_NAME_COLUMN = "track_label"
+"""Column holding the name a track itself stands under, which is the name of
+its cluster until the track is given one of its own."""
+
+CACHED_COLUMN = "cached"
+"""Column saying whether the track's recording is on disk."""
+
+VALIDATED_COLUMN = "validated"
+"""Column saying whether someone has confirmed the track."""
+
 UNNAMED = "unlabelled"
 """What a track whose cluster has no name yet is shown under."""
 
-COLOUR_CHOICES = ("Cluster", "Cluster label", "Side", "Folder", "Camera")
+COLOUR_CHOICES = ("Cluster", "Cluster label", "Track label", "Side", "Folder", "Camera")
 COLOUR_COLUMNS = {
     "Cluster": "cluster",
     "Cluster label": NAME_COLUMN,
+    "Track label": TRACK_NAME_COLUMN,
     "Side": "side",
     "Folder": "label",
     "Camera": "camera",
 }
+VALIDATION_CHOICES = ("All", "Validated", "Unvalidated")
+ANY_VALIDATION, VALIDATED, UNVALIDATED = VALIDATION_CHOICES
 SELECTED_CLUSTER = "Selected track's cluster"
 ROUGH_SIDE = "rough"
 OTHER_COLORS = qualitative.Dark24
 HOVER_COLUMNS = [
     "key",
+    TRACK_NAME_COLUMN,
     NAME_COLUMN,
     "cluster",
     "side",
@@ -102,19 +124,24 @@ HOVER_COLUMNS = [
     "label",
 ]
 HOVER_TEMPLATE = (
-    "Cluster label %{customdata[1]}<br>Cluster %{customdata[2]}<br>Side %{customdata[3]}<br>"
-    "Recording %{customdata[4]}<br>Track %{customdata[5]}<br>Frames %{customdata[6]}<br>"
-    "Straightness %{customdata[7]:.2f}<br>Peak deviation %{customdata[8]:.1f}<br>"
-    "Folder %{customdata[9]}<extra></extra>"
+    "Track label %{customdata[1]}<br>Cluster label %{customdata[2]}<br>Cluster %{customdata[3]}<br>"
+    "Side %{customdata[4]}<br>Recording %{customdata[5]}<br>Track %{customdata[6]}<br>"
+    "Frames %{customdata[7]}<br>Straightness %{customdata[8]:.2f}<br>"
+    "Peak deviation %{customdata[9]:.1f}<br>Folder %{customdata[10]}<extra></extra>"
 )
 GALLERY_SIZE = 30
 NEIGHBOUR_RADIUS = 0.5
 SHUFFLE_KEY = "gallery_shuffle"
 MAP_KEY = "track_map"
-PICKED_KEY = "picked_track"
+HISTORY_KEY = "track_history"
+SAMPLE_GALLERY_KEY = "sample_gallery"
+NEAREST_GALLERY_KEY = "nearest_gallery"
 SEARCH_KEY = "track_search"
 LABEL_KEY = "cluster_label"
 SAVE_KEY = "save_cluster_label"
+TRACK_LABEL_KEY = "track_label"
+SAVE_TRACK_LABEL_KEY = "save_track_label"
+VALIDATED_KEY = "track_validated"
 SEARCH_WORDS = ("track", "in")
 """Words a search may carry around what it names, from the heading over a
 selected track."""
@@ -152,10 +179,12 @@ other clip meanwhile, so that fetch waits for a press.
 
 COLOUR_HELP = (
     "What the points are coloured by. Clusters come from the descriptors alone, and a cluster label is "
-    "the name someone gave one of them. The side says whether a track moves evenly from step to step, as "
-    "a clean path does, or hops about as clutter does, and each side is clustered on its own. A folder is "
-    "where the recording was filed in the archive, which names the whole recording, so most tracks under "
-    "a folder are that scene's background activity and not the thing the folder is named for."
+    "the name someone gave one of them. A track label is the name one track stands under, which is its "
+    "cluster's name until the track is given a name of its own. The side says whether a track moves "
+    "evenly from step to step, as a clean path does, or hops about as clutter does, and each side is "
+    "clustered on its own. A folder is where the recording was filed in the archive, which names the "
+    "whole recording, so most tracks under a folder are that scene's background activity and not the "
+    "thing the folder is named for."
 )
 SEARCH_HELP = (
     "Select a track by its number, by its recording, or by both, as the heading over a selected track "
@@ -205,11 +234,16 @@ PANEL_HELP = (
     "first frame and the frames before the track starts are what it has to settle in. Both panels are "
     "built together, so switching between them plays at once."
 )
+MARKS_HELP = (
+    "A camera stands over a track whose recording is on disk, which is a track that can be played without "
+    "waiting for a fetch, and a green tick over a track someone has confirmed. Click a panel to select its "
+    "track."
+)
 GALLERY_HELP = (
     f"Up to {GALLERY_SIZE} tracks drawn at random from the cluster, each drawn from its stored path and "
     "fitted to its own panel. Colour runs from dark blue on a track's first frame to yellow on its last. "
-    "Each panel names the folder of the archive its recording was filed in. The map rings these tracks "
-    "in the colour their panels are framed in."
+    f"Each panel names the folder of the archive its recording was filed in. {MARKS_HELP} The map rings "
+    "these tracks in the colour their panels are framed in."
 )
 SHUFFLE_HELP = "Draw another random sample of the cluster."
 LABEL_HELP = (
@@ -220,10 +254,31 @@ LABEL_HELP = (
     "to the new name, and an empty name takes them out of the one they are under."
 )
 SAVE_LABEL_HELP = "Keep this name against every track of the cluster."
+TRACK_LABEL_HELP = (
+    "What this one track holds, in a word of your own. It starts as the name the track's cluster is "
+    "under, and is changed where the track is not what the rest of its cluster is. The name is kept "
+    f"against the track alone in {TRACK_LABELS_PATH.name}, in the same form as a cluster label, and it is "
+    "what a training set reads for this track. An empty name takes the track back to its cluster's name."
+)
+SAVE_TRACK_LABEL_HELP = (
+    "Keep this name against this track alone. Naming a track is someone looking at it and saying what it "
+    "is, so the track is marked validated at the same time."
+)
+VALIDATED_HELP = (
+    "Mark that you have watched this track and stand by the name it is under. Saving a track label marks "
+    f"it as well. The tracks marked so far are kept in {VALIDATED_PATH.name}, a gallery draws a green "
+    "tick over each of them, and the map can be held to them or to the tracks still to go through."
+)
+VALIDATION_HELP = (
+    "Show the tracks someone has confirmed, the tracks still to go through, or every track whichever it is."
+)
+BACK_HELP = "Go back to the track selected before this one."
+FORWARD_HELP = "Go forward to the track selected after this one."
 NEIGHBOURS_HELP = (
     f"The {GALLERY_SIZE} tracks that lie nearest the selected track on the map, from any cluster, and no "
     "further from it than the neighbour radius. Each panel names the cluster its track is in and the name "
-    "that cluster is under. The map rings these tracks in the colour their panels are framed in."
+    f"that cluster is under. {MARKS_HELP} The map rings these tracks in the colour their panels are "
+    "framed in."
 )
 RADIUS_HELP = (
     "How far from the selected track, in the map's own units, a track may lie to count among its nearest "
@@ -262,7 +317,7 @@ def page() -> None:
         st.error(f"No track map at {MAP_PATH}. Write it with `{MAP_COMMAND}`.")
         return
 
-    tracks = named(_map_frame(MAP_PATH.stat().st_mtime), labels=_cluster_labels(_labels_stamp()))
+    tracks = _tracks_frame()
     paths = _path_frame(PATHS_PATH.stat().st_mtime)
     with st.sidebar:
         wanted = str(st.text_input("Search", key=SEARCH_KEY, on_change=_search, help=SEARCH_HELP))
@@ -271,6 +326,9 @@ def page() -> None:
         colour = st.segmented_control("Colour", options=COLOUR_CHOICES, default="Cluster", help=COLOUR_HELP)
         chosen_names = st.multiselect("Cluster labels", options=sorted(tracks[NAME_COLUMN].unique()), help=NAMES_HELP)
         folders = st.multiselect("Folders", options=sorted(tracks["label"].unique()), help=FOLDERS_HELP)
+        validation = st.segmented_control(
+            "Validation", options=VALIDATION_CHOICES, default=ANY_VALIDATION, help=VALIDATION_HELP
+        )
         rough = st.toggle("Rough tracks", value=True, help=ROUGH_HELP)
         cached = st.toggle("Video cached", value=False, help=CACHED_HELP)
         chosen_cluster = st.selectbox(
@@ -286,7 +344,8 @@ def page() -> None:
     shown = tracks if rough else tracks[tracks["side"] != ROUGH_SIDE]
     shown = shown[shown[NAME_COLUMN].isin(chosen_names)] if chosen_names else shown
     shown = shown[shown["label"].isin(folders)] if folders else shown
-    picked = _picked(shown, tracks=tracks, key=st.session_state.get(PICKED_KEY))
+    shown = by_validation(shown, choice=str(validation or ANY_VALIDATION))
+    picked = _picked(shown, tracks=tracks, key=_history().standing)
     cluster = _gallery_cluster(str(chosen_cluster), picked=picked)
     sample = shown.iloc[0:0] if cluster is None else _sample(shown, cluster=cluster)
     nearest = shown.iloc[0:0] if picked is None else _nearest(shown, track=picked, radius=float(radius))
@@ -309,7 +368,7 @@ def page() -> None:
             dimmed=dimmed,
             names=cluster_names(shown, labels=_cluster_labels(_labels_stamp())),
         )
-        track_map_chart(figure, key=MAP_KEY, on_click=_remember_click)
+        track_map_chart(figure, key=MAP_KEY, on_click=_map_clicked)
         _gallery(shown, cluster=cluster, sample=sample)
         if cluster is not None:
             _labelling(tracks, cluster=cluster)
@@ -317,21 +376,44 @@ def page() -> None:
             _neighbours(nearest, radius=float(radius))
 
     with track_column:
+        _steps()
         if picked is None:
             st.caption("No track selected.")
         else:
             _selected(picked, points=_points(paths, key=str(picked["key"])))
 
 
-def _remember_click() -> None:
+def _steps() -> None:
+    """The step back and forward through the tracks selected so far."""
+    history = _history()
+    back, forward, _ = st.columns([1, 1, 3])
+    back.button("Back", on_click=_step, args=(-1,), disabled=not history.behind, help=BACK_HELP, width="stretch")
+    forward.button("Forward", on_click=_step, args=(1,), disabled=not history.ahead, help=FORWARD_HELP, width="stretch")
+
+
+def _map_clicked() -> None:
+    _clicked(MAP_KEY)
+
+
+def _sample_clicked() -> None:
+    _clicked(SAMPLE_GALLERY_KEY)
+
+
+def _nearest_clicked() -> None:
+    _clicked(NEAREST_GALLERY_KEY)
+
+
+def _clicked(component: str) -> None:
     """Keep the clicked track as the selected one until another is clicked.
 
-    The page reads it before the map is drawn, because the map rings the
-    tracks the galleries show, and those follow the selected track.
+    A click is taken here rather than while the page is drawn, because
+    the page reads the selection before the map is drawn, and the map
+    rings the tracks the galleries show, which follow the selected
+    track.
     """
-    clicked = st.session_state[MAP_KEY].get("clicked")
+    clicked = st.session_state[component].get("clicked")
     if clicked:
-        st.session_state[PICKED_KEY] = str(clicked)
+        _select(str(clicked))
 
 
 def _search() -> None:
@@ -343,7 +425,39 @@ def _search() -> None:
     """
     found = searched(_map_frame(MAP_PATH.stat().st_mtime), wanted=str(st.session_state[SEARCH_KEY]))
     if not found.empty:
-        st.session_state[PICKED_KEY] = str(found.iloc[0]["key"])
+        _select(str(found.iloc[0]["key"]))
+
+
+def _history() -> History:
+    return st.session_state.get(HISTORY_KEY, History())
+
+
+def _select(key: str) -> None:
+    """Stand on this track, and keep it among the tracks the steps go back
+    through."""
+    st.session_state[HISTORY_KEY] = visited(_history(), key=key)
+
+
+def _step(offset: int) -> None:
+    st.session_state[HISTORY_KEY] = stepped(_history(), offset=offset)
+
+
+def _tracks_frame() -> pd.DataFrame:
+    """Every mapped track with the names it stands under, whether its recording
+    is on disk, and whether someone has confirmed it."""
+    tracks = labelled(
+        _map_frame(MAP_PATH.stat().st_mtime),
+        clusters=_cluster_labels(_labels_stamp()),
+        own=_track_labels(_track_labels_stamp()),
+    )
+    on_disk = _videos_on_disk(_videos_stamp())
+    validated = _validated_tracks(_validated_stamp())
+    return tracks.assign(
+        **{
+            CACHED_COLUMN: tracks["recording"].isin(on_disk),
+            VALIDATED_COLUMN: tracks["key"].isin(validated),
+        }
+    )
 
 
 def searched(tracks: pd.DataFrame, *, wanted: str) -> pd.DataFrame:
@@ -376,6 +490,15 @@ def _picked(shown: pd.DataFrame, *, tracks: pd.DataFrame, key: str | None) -> pd
     return None if held.empty else held.iloc[0]
 
 
+def by_validation(tracks: pd.DataFrame, *, choice: str) -> pd.DataFrame:
+    """The tracks the validation choice leaves on the map."""
+    if choice == VALIDATED:
+        return tracks[tracks[VALIDATED_COLUMN]]
+    if choice == UNVALIDATED:
+        return tracks[~tracks[VALIDATED_COLUMN]]
+    return tracks
+
+
 def _sample(tracks: pd.DataFrame, *, cluster: str) -> pd.DataFrame:
     """A random sample of the cluster's tracks, drawn anew on Shuffle."""
     members = tracks[tracks["cluster"] == cluster]
@@ -393,20 +516,32 @@ def _nearest(tracks: pd.DataFrame, *, track: pd.Series, radius: float) -> pd.Dat
 def _uncached(tracks: pd.DataFrame) -> frozenset[str]:
     """The tracks whose recording is on neither the sift's shelf nor the page's
     own, which the map draws faintly."""
-    on_disk = _videos_on_disk(_videos_stamp())
-    return frozenset(tracks.loc[~tracks["recording"].isin(on_disk), "key"])
+    return frozenset(tracks.loc[~tracks[CACHED_COLUMN], "key"])
 
 
-def named(tracks: pd.DataFrame, *, labels: dict[str, list[str]]) -> pd.DataFrame:
-    """The tracks with the name of the cluster each one is in beside it.
+def labelled(tracks: pd.DataFrame, *, clusters: dict[str, list[str]], own: dict[str, list[str]]) -> pd.DataFrame:
+    """The tracks with the name of the cluster each one is in beside it, and
+    the name the track itself stands under.
 
     A track whose cluster has no name yet, and a track the clustering
     left out of every cluster, stand under one name of their own, so
     that the map can be coloured and filtered by the name without those
-    tracks falling off it.
+    tracks falling off it. A track stands under its cluster's name until
+    it is given a name of its own, which is then the name it stands
+    under wherever the page gives one.
     """
-    under = {key: name for name, keys in labels.items() for key in keys}
-    return tracks.assign(**{NAME_COLUMN: tracks["key"].map(under).fillna(UNNAMED)})
+    cluster_name = tracks["key"].map(_by_key(clusters)).fillna(UNNAMED)
+    return tracks.assign(
+        **{
+            NAME_COLUMN: cluster_name,
+            TRACK_NAME_COLUMN: tracks["key"].map(_by_key(own)).fillna(cluster_name),
+        }
+    )
+
+
+def _by_key(labels: dict[str, list[str]]) -> dict[str, str]:
+    """The name each track is under, from the tracks kept under each name."""
+    return {key: name for name, keys in labels.items() for key in keys}
 
 
 def cluster_names(tracks: pd.DataFrame, *, labels: dict[str, list[str]]) -> pd.DataFrame:
@@ -538,12 +673,82 @@ def _selected(track: pd.Series, *, points: pd.DataFrame) -> None:
     that is built."""
     st.subheader(f"Track {int(track['track_id'])} in {track['clip']}", help=PATH_HELP)
     st.caption(_facts(track))
+    _track_labelling(track)
     st.altair_chart(frame_view(points))
     st.altair_chart(close_up(points))
     st.altair_chart(light_curve(points))
 
     st.subheader("Video", help=VIDEO_HELP)
     _video(str(track["key"]), recording=str(track["recording"]), stored=_stored_track(points))
+
+
+def _track_labelling(track: pd.Series) -> None:
+    """The name this one track stands under, the box that changes it, and
+    whether someone has confirmed the track.
+
+    The name starts as the cluster's, so a track that is what the rest
+    of its cluster is needs no name of its own.
+    """
+    key = str(track["key"])
+    given = label_of(_track_labels(_track_labels_stamp()), keys=[key])
+    cluster_name = str(track[NAME_COLUMN])
+
+    box, save, tick = st.columns([3, 1, 1], vertical_alignment="bottom")
+    box.text_input(
+        "Track label",
+        value=given or ("" if cluster_name == UNNAMED else cluster_name),
+        key=f"{TRACK_LABEL_KEY}:{key}",
+        help=TRACK_LABEL_HELP,
+    )
+    save.button(
+        "Save",
+        key=f"{SAVE_TRACK_LABEL_KEY}:{key}",
+        on_click=_save_track_label,
+        args=(key,),
+        help=SAVE_TRACK_LABEL_HELP,
+        width="stretch",
+    )
+    tick.checkbox(
+        "Validated",
+        value=bool(track[VALIDATED_COLUMN]),
+        key=f"{VALIDATED_KEY}:{key}",
+        on_change=_validate,
+        args=(key,),
+        help=VALIDATED_HELP,
+    )
+
+
+def _save_track_label(key: str) -> None:
+    """Keep the name given to this one track, and mark the track confirmed.
+
+    Naming a track is someone looking at it and saying what it is, which
+    is what confirming it says. Withdrawing the name says nothing, and
+    leaves the track as it was.
+
+    The box is put back in the form the name is kept in, so that the
+    page shows what the file holds.
+    """
+    wanted = canonical_label(str(st.session_state[f"{TRACK_LABEL_KEY}:{key}"]))
+    write_labels(TRACK_LABELS_PATH, _track_labels(_track_labels_stamp()), name=wanted, keys=[key])
+    st.session_state[f"{TRACK_LABEL_KEY}:{key}"] = wanted
+    if wanted:
+        _confirm(key, confirmed=True)
+
+
+def _validate(key: str) -> None:
+    _confirm(key, confirmed=bool(st.session_state[f"{VALIDATED_KEY}:{key}"]))
+
+
+def _confirm(key: str, *, confirmed: bool) -> None:
+    """Keep on disk whether this track has been confirmed, and hold the box on
+    the page to it.
+
+    The box holds whatever it was left at, so naming a track has to put
+    the box where the file now stands or the next press would take the
+    track back out.
+    """
+    write_validated(VALIDATED_PATH, read_validated(VALIDATED_PATH), key=key, confirmed=confirmed)
+    st.session_state[f"{VALIDATED_KEY}:{key}"] = confirmed
 
 
 def _video(key: str, *, recording: str, stored: StoredTrack) -> None:
@@ -721,7 +926,7 @@ def _gallery(tracks: pd.DataFrame, *, cluster: str | None, sample: pd.DataFrame)
     members = int((tracks["cluster"] == cluster).sum())
     st.caption(f"{_cluster_title(cluster)} · {len(sample)} of {members} tracks")
     captions = [f"{place}. folder {folder}" for place, folder in enumerate(sample["label"], start=1)]
-    _panels(sample, captions=captions, frame=SAMPLE_COLOR)
+    _panels(sample, captions=captions, frame=SAMPLE_COLOR, key=SAMPLE_GALLERY_KEY, on_click=_sample_clicked)
 
 
 def _shuffle() -> None:
@@ -756,26 +961,31 @@ def _neighbours(nearest: pd.DataFrame, *, radius: float) -> None:
         f"{place}. {_cluster_caption(cluster)} · {name}"
         for place, (cluster, name) in enumerate(zip(nearest["cluster"], nearest[NAME_COLUMN]), start=1)
     ]
-    _panels(nearest, captions=captions, frame=NEAREST_COLOR)
+    _panels(nearest, captions=captions, frame=NEAREST_COLOR, key=NEAREST_GALLERY_KEY, on_click=_nearest_clicked)
 
 
 def _cluster_caption(cluster: str) -> str:
     return "no cluster" if cluster == UNASSIGNED_NAME else f"cluster {cluster}"
 
 
-def _panels(chosen: pd.DataFrame, *, captions: list[str], frame: str) -> None:
+def _panels(chosen: pd.DataFrame, *, captions: list[str], frame: str, key: str, on_click: Callable[[], None]) -> None:
     """The chosen tracks drawn from their stored paths, a panel each, in rows
-    that wrap to the width of the column."""
-    st.html(_gallery_markup(PATHS_PATH.stat().st_mtime, tuple(zip(chosen["key"], captions)), frame=frame))
+    that wrap to the width of the column, each panel selecting its track when
+    it is clicked."""
+    entries = tuple(
+        GalleryEntry(key=str(track), caption=caption, cached=bool(cached), validated=bool(validated))
+        for track, cached, validated, caption in zip(
+            chosen["key"], chosen[CACHED_COLUMN], chosen[VALIDATED_COLUMN], captions
+        )
+    )
+    track_gallery(_gallery_markup(PATHS_PATH.stat().st_mtime, entries, frame=frame), key=key, on_click=on_click)
 
 
 @st.cache_data(show_spinner=False, max_entries=PANEL_CACHE_ENTRIES)
-def _gallery_markup(stamp: float, captions: tuple[tuple[str, str], ...], *, frame: str) -> str:
+def _gallery_markup(stamp: float, entries: tuple[GalleryEntry, ...], *, frame: str) -> str:
     """The panels of these tracks under these captions, kept so that a gallery
     that comes out the same on the next click is not drawn again."""
-    keyed = dict(captions)
-    paths = _path_frame(stamp)
-    return gallery_html(paths[paths["key"].isin(keyed)], captions=keyed, frame=frame)
+    return gallery_html(_path_frame(stamp), entries=entries, frame=frame)
 
 
 def _gallery_cluster(chosen: str, *, picked: pd.Series | None) -> str | None:
@@ -796,7 +1006,7 @@ def _cluster_title(cluster: str) -> str:
 
 def _facts(track: pd.Series) -> str:
     parts = [
-        str(track[NAME_COLUMN]),
+        str(track[TRACK_NAME_COLUMN]),
         _cluster_caption(str(track["cluster"])),
         f"folder {track['label']}",
         f"{track['side']} side",
@@ -892,6 +1102,37 @@ def _cluster_labels(stamp: float) -> dict[str, list[str]]:
     it.
     """
     return read_labels(LABELS_PATH)
+
+
+def _track_labels_stamp() -> float:
+    return TRACK_LABELS_PATH.stat().st_mtime if TRACK_LABELS_PATH.is_file() else 0.0
+
+
+@st.cache_data(show_spinner=False)
+def _track_labels(stamp: float) -> dict[str, list[str]]:
+    """The names given to single tracks so far, read again whenever the file
+    changes.
+
+    The stamp is the file's modification time, and is what the cache is
+    keyed on, which is why it is passed although the body never reads
+    it.
+    """
+    return read_labels(TRACK_LABELS_PATH)
+
+
+def _validated_stamp() -> float:
+    return VALIDATED_PATH.stat().st_mtime if VALIDATED_PATH.is_file() else 0.0
+
+
+@st.cache_data(show_spinner=False)
+def _validated_tracks(stamp: float) -> frozenset[str]:
+    """The tracks confirmed so far, read again whenever the file changes.
+
+    The stamp is the file's modification time, and is what the cache is
+    keyed on, which is why it is passed although the body never reads
+    it.
+    """
+    return read_validated(VALIDATED_PATH)
 
 
 def _ledger_stamp() -> tuple[float, ...]:

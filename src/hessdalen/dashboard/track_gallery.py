@@ -1,0 +1,46 @@
+"""A gallery of drawn tracks that selects the track a panel is clicked on.
+
+The panels are one block of markup rather than an element each, because
+Streamlit renders the whole page for every element it holds and a
+gallery holds dozens. That block takes no clicks of its own, so it is
+handed to a component of the page's own, which reports the track behind
+the panel the click landed in.
+
+Each panel carries its track under a data-track attribute, which is what
+the click is read from and what the markup is written with.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+
+import streamlit as st
+
+HTML = '<div class="track-gallery"></div>'
+
+JS = """
+export default function (component) {
+  const { data, parentElement, setTriggerValue } = component;
+  const gallery = parentElement.querySelector(".track-gallery");
+  gallery.innerHTML = data.markup;
+  gallery.reportClick = setTriggerValue;
+  if (gallery.dataset.listening) return;
+  gallery.dataset.listening = "yes";
+  gallery.addEventListener("click", (event) => {
+    const panel = event.target.closest("[data-track]");
+    if (panel) gallery.reportClick("clicked", panel.getAttribute("data-track"));
+  });
+}
+"""
+
+_component = st.components.v2.component("track_gallery", html=HTML, js=JS, isolate_styles=False)
+
+
+def track_gallery(markup: str, *, key: str, on_click: Callable[[], None]) -> None:
+    """Draw this gallery markup, and call on_click when a panel is clicked,
+    with the track's key under "clicked" in the component's state.
+
+    The key names the one gallery the page keeps in that place, so it
+    has to stay the same from one run of the page to the next.
+    """
+    _component(key=key, data={"markup": markup}, on_clicked_change=on_click)

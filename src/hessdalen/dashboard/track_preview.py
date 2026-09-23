@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import base64
 import html
-from collections.abc import Mapping
+from collections.abc import Sequence
+from dataclasses import dataclass
 
 import altair as alt
 import numpy as np
@@ -30,9 +31,28 @@ CLOSE_UP_MARGIN = 0.55
 """Half the side of a fitted track's box, in units of the track's larger
 extent, so a path fills most of its panel and never touches the edge."""
 
+CAPTION_FONT_PIXELS = 10
+CACHED_MARK = "🎥"
+CACHED_TITLE = "The recording is on disk"
+VALIDATED_MARK = "✓"
+VALIDATED_TITLE = "Confirmed by a person"
+VALIDATED_COLOUR = "#2e9e4f"
+
 TIME = alt.Color("phase:Q", scale=alt.Scale(scheme="viridis"), legend=None)
 """Colour along a path, from its first frame in dark blue to its last in
 yellow, so direction and pace read off the spacing of the dots."""
+
+
+@dataclass(frozen=True, slots=True)
+class GalleryEntry:
+    """One panel of a gallery: the track it draws, what stands over it, and
+    whether the track's recording is on disk and the track itself
+    confirmed."""
+
+    key: str
+    caption: str
+    cached: bool
+    validated: bool
 
 
 def frame_view(points: pd.DataFrame) -> alt.Chart:
@@ -81,23 +101,26 @@ def light_curve(points: pd.DataFrame) -> alt.Chart:
     )
 
 
-def gallery_html(paths: pd.DataFrame, *, captions: Mapping[str, str], frame: str) -> str:
-    """Each captioned track fitted to a small panel under its caption, framed
-    in the given colour, in the order of the captions and in rows that wrap
-    to the width they are given.
+def gallery_html(paths: pd.DataFrame, *, entries: Sequence[GalleryEntry], frame: str) -> str:
+    """Each track of these entries fitted to a small panel under its caption,
+    framed in the given colour, in the order of the entries and in rows that
+    wrap to the width they are given.
 
     The panels are SVG images in one block of HTML, so a gallery is a
     single element on the page however many tracks it holds, and
     Streamlit renders the page once for it. Each SVG goes in as an image
-    because Streamlit's HTML sanitiser removes SVG written into the page.
+    because Streamlit's HTML sanitiser removes SVG written into the
+    page. Each panel carries the key of its track, which is what a click
+    on the gallery is read from.
     """
-    drawn = fitted(paths[paths["key"].isin(captions)])
+    keys = [entry.key for entry in entries]
+    drawn = fitted(paths[paths["key"].isin(keys)])
     by_key = {key: group.sort_values("frame_number") for key, group in drawn.groupby("key", sort=False)}
-    figures = "".join(_panel_svg(by_key[key], caption=caption, frame=frame) for key, caption in captions.items())
+    figures = "".join(_panel_svg(by_key[entry.key], entry=entry, frame=frame) for entry in entries)
     return f'<div style="display:flex;flex-wrap:wrap;gap:{PANEL_GAP_PIXELS}px">{figures}</div>'
 
 
-def _panel_svg(points: pd.DataFrame, *, caption: str, frame: str) -> str:
+def _panel_svg(points: pd.DataFrame, *, entry: GalleryEntry, frame: str) -> str:
     """One fitted track, its path in grey and a dot on each frame coloured by
     how far along the track it is."""
     x = (points["u"].to_numpy() + CLOSE_UP_MARGIN) / (2 * CLOSE_UP_MARGIN) * PANEL_PIXELS
@@ -113,13 +136,27 @@ def _panel_svg(points: pd.DataFrame, *, caption: str, frame: str) -> str:
         f'<polyline points="{line}" fill="none" stroke="#9a9a9a" stroke-width="1"/>{dots}</svg>'
     )
     source = "data:image/svg+xml;base64," + base64.b64encode(svg.encode()).decode()
+    caption = html.escape(entry.caption)
     return (
-        f'<figure style="margin:0;width:{PANEL_PIXELS}px">'
-        f'<figcaption style="font-size:10px;text-align:center;white-space:nowrap;overflow:hidden;'
-        f'text-overflow:ellipsis">{html.escape(caption)}</figcaption>'
-        f'<img src="{source}" width="{PANEL_PIXELS}" height="{PANEL_PIXELS}" alt="{html.escape(caption)}" '
+        f'<figure data-track="{html.escape(entry.key)}" '
+        f'style="margin:0;width:{PANEL_PIXELS}px;cursor:pointer">'
+        f'<figcaption style="display:flex;gap:4px;font-size:{CAPTION_FONT_PIXELS}px">'
+        f'<span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{caption}</span>'
+        f'<span style="margin-left:auto;white-space:nowrap">{_marks(entry)}</span></figcaption>'
+        f'<img src="{source}" width="{PANEL_PIXELS}" height="{PANEL_PIXELS}" alt="{caption}" '
         f'style="border:2px solid {frame}"></figure>'
     )
+
+
+def _marks(entry: GalleryEntry) -> str:
+    """The camera a panel carries while its recording is on disk, and the tick
+    it carries once someone has confirmed the track."""
+    marks = []
+    if entry.cached:
+        marks.append(f'<span title="{CACHED_TITLE}">{CACHED_MARK}</span>')
+    if entry.validated:
+        marks.append(f'<span title="{VALIDATED_TITLE}" style="color:{VALIDATED_COLOUR}">{VALIDATED_MARK}</span>')
+    return "".join(marks)
 
 
 def fitted(paths: pd.DataFrame) -> pd.DataFrame:

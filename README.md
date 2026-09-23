@@ -157,19 +157,29 @@ A stored run and a live clip are both written through `ffmpeg` with
 The Track map page shows every track of the corpus under `data/corpus`
 as a point. Tracks with similar descriptors sit close together, and
 Colour in the sidebar gives what the points are coloured by: the cluster
-they fell into, the name that cluster has been given, the side they were
-clustered on, the folder of the archive their recording was filed in, or
-the camera that recorded them. A cluster label and a folder are
-different things. The first is a name someone gave a cluster on this
+they fell into, the name that cluster has been given, the name the track
+itself stands under, the side they were clustered on, the folder of the
+archive their recording was filed in, or the camera that recorded them.
+A cluster label and a folder are different things. The first is a name
+someone gave a cluster on this
 page, and the second is where the recording sits in the archive, which
 names the whole recording rather than the track.
 
 Clicking a point draws that track at once from its stored path: where it
 was in the frame, its shape fitted to a box of its own, and its
-brightness and size frame by frame. Drawing it on its recording, from a
-second before it starts to a second after it ends, runs in the
-background, and four videos play once they are built. Panel chooses
-between the recording and the deviation the detector measures it
+brightness and size frame by frame. Back and Forward over the selected
+track step through the tracks selected before it, in both directions.
+Track label gives this one track a name of its own, which starts as the
+name of its cluster and is kept against the track alone in
+`data/out/analysis/track-labels.json`, in the same form a cluster label
+is kept in. An empty name takes the track back to its cluster's name.
+Validated says that a person has watched the track and stands by the
+name it is under, and saving a track label marks the track at the same
+time. The tracks marked are kept in
+`data/out/analysis/validated-tracks.json`. Drawing the track on its
+recording, from a second before it starts to a second after it ends,
+runs in the background, and four videos play once they are built. Panel
+chooses between the recording and the deviation the detector measures it
 against, and the tabs choose between the two views of the chosen panel.
 In the frame holds the whole picture with the track's path and a box
 drawn on it, and Close up holds a crop three box half-widths out from
@@ -190,8 +200,11 @@ the recording's frame stamps read first. A recording whose stamps do
 not say which frame is which has every frame ahead of the track passed
 instead, which takes a minute on a 20-minute recording. A gallery below the map
 draws 30 tracks at random from the selected track's cluster, or from any
-cluster chosen in the sidebar, from their stored paths alone. Under that
-gallery, Cluster label gives the cluster a name of your own and Save
+cluster chosen in the sidebar, from their stored paths alone. Clicking a
+panel selects its track, with everything a click on the map brings. A
+panel carries a camera while its recording is on disk and a green tick
+once someone has confirmed the track. Under that gallery, Cluster label
+gives the cluster a name of your own and Save
 keeps it against every one of the cluster's tracks in
 `data/out/analysis/cluster-labels.json`, which holds each name with the
 tracks under it and is what a training set is built from. A name is kept
@@ -207,7 +220,8 @@ names the cluster of each with the name it is under. Cluster labels in
 the sidebar holds the page to the tracks under the names picked there,
 with every track of an unnamed cluster under `unlabelled`, and Folders
 holds it to the tracks of recordings filed under the folders picked
-there. Tracks whose movement from step to step is
+there. Validation holds it to the tracks someone has confirmed or to the
+tracks still to go through. Tracks whose movement from step to step is
 uneven, which most clutter is, can be left out of the page with the
 Rough tracks switch in the sidebar, and the Video cached switch there
 draws the tracks whose recording is not on disk faintly. Search in the

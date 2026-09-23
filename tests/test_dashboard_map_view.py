@@ -3,7 +3,19 @@ goes on the map."""
 
 import pandas as pd
 
-from hessdalen.dashboard.map_view import NAME_COLUMN, UNNAMED, cluster_names, named, searched
+from hessdalen.dashboard.map_view import (
+    ANY_VALIDATION,
+    NAME_COLUMN,
+    TRACK_NAME_COLUMN,
+    UNNAMED,
+    UNVALIDATED,
+    VALIDATED,
+    VALIDATED_COLUMN,
+    by_validation,
+    cluster_names,
+    labelled,
+    searched,
+)
 
 INSECT = "Cam1_2025-06-03__12-40-00_noInsect"
 ROD = "Cam2_2025-01-09__23-20-00_rod"
@@ -67,9 +79,40 @@ def test_the_tracks_of_no_cluster_carry_no_name() -> None:
 
 
 def test_every_track_carries_the_name_of_the_cluster_it_is_in() -> None:
-    carried = named(_mapped(), labels={"bird": ["a/1", "a/3"]})
+    carried = labelled(_mapped(), clusters={"bird": ["a/1", "a/3"]}, own={})
 
     assert carried[NAME_COLUMN].tolist() == ["bird", UNNAMED, "bird", UNNAMED]
+
+
+def test_a_track_stands_under_its_cluster_name_until_it_is_given_one() -> None:
+    carried = labelled(_mapped(), clusters={"bird": ["a/1", "a/2"]}, own={})
+
+    assert carried[TRACK_NAME_COLUMN].tolist() == ["bird", "bird", UNNAMED, UNNAMED]
+
+
+def test_a_name_given_to_one_track_stands_over_its_cluster_name() -> None:
+    """A cluster holds what its descriptors group, and one track of it can be
+    something else."""
+    carried = labelled(_mapped(), clusters={"bird": ["a/1", "a/2"]}, own={"plane": ["a/2"]})
+
+    assert carried[TRACK_NAME_COLUMN].tolist() == ["bird", "plane", UNNAMED, UNNAMED]
+    assert carried[NAME_COLUMN].tolist() == ["bird", "bird", UNNAMED, UNNAMED]
+
+
+def test_every_track_is_on_the_map_whichever_of_them_was_confirmed() -> None:
+    assert by_validation(_gone_through(), choice=ANY_VALIDATION)["key"].tolist() == ["a/1", "a/2", "a/3"]
+
+
+def test_the_map_holds_to_the_tracks_someone_confirmed() -> None:
+    assert by_validation(_gone_through(), choice=VALIDATED)["key"].tolist() == ["a/2"]
+
+
+def test_the_map_holds_to_the_tracks_still_to_go_through() -> None:
+    assert by_validation(_gone_through(), choice=UNVALIDATED)["key"].tolist() == ["a/1", "a/3"]
+
+
+def _gone_through() -> pd.DataFrame:
+    return pd.DataFrame({"key": ["a/1", "a/2", "a/3"], VALIDATED_COLUMN: [False, True, False]})
 
 
 def _mapped() -> pd.DataFrame:
