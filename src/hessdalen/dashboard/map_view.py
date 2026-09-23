@@ -854,14 +854,9 @@ def _track_labelling(track: pd.Series) -> None:
         help=SAVE_TRACK_LABEL_HELP,
         width="stretch",
     )
-    tick.checkbox(
-        "Validated",
-        value=bool(track[VALIDATED_COLUMN]),
-        key=f"{VALIDATED_KEY}:{key}",
-        on_change=_validate,
-        args=(key,),
-        help=VALIDATED_HELP,
-    )
+    box = f"{VALIDATED_KEY}:{key}"
+    _seeded(box, value=bool(track[VALIDATED_COLUMN]))
+    tick.checkbox("Validated", key=box, on_change=_validate, args=(key,), help=VALIDATED_HELP)
     _reassigning(track)
 
 
@@ -898,15 +893,27 @@ def _name_box(column: DeltaGenerator, *, label: str, given: str, naming: Naming,
     stand under names of one vocabulary.
     """
     options = sorted(set(_known_names()) | ({given} if given else set()))
+    _seeded(naming.box, value=given or None)
     column.selectbox(
         label,
         options=options,
-        index=options.index(given) if given else None,
         key=naming.box,
         accept_new_options=True,
         placeholder=NAME_PLACEHOLDER,
         help=help,
     )
+
+
+def _seeded(box: str, *, value: object) -> None:
+    """Put the value a box opens on into the session, and leave a box that has
+    been opened before as the person left it.
+
+    The value is held in the session rather than handed to the box,
+    because a box that carries both and is written to as well is one
+    Streamlit warns about on every run.
+    """
+    if box not in st.session_state:
+        st.session_state[box] = value
 
 
 def _save_name(naming: Naming) -> None:
