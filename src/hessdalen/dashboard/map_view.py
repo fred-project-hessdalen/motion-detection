@@ -8,9 +8,10 @@ has to pass every frame of the recording ahead of the track and can take
 a minute. A gallery below draws a random sample of any one cluster from
 the stored paths alone, which is how a cluster is judged at a glance,
 and a second one draws the tracks nearest the selected one, from
-whatever cluster they are in. A panel of either gallery selects its
-track when it is clicked, and the steps over the selected track go back
-through the tracks selected before it.
+whatever cluster they are in. A panel of either gallery plays its track
+beside the selected one when it is clicked, and the arrow on a panel
+selects its track. The steps over the selected track go back through the
+tracks selected before it.
 
 The page never detects anything. A track whose video the sift did not
 keep has its video fetched from the archive before it is drawn.
@@ -148,6 +149,10 @@ SAVE_REASSIGN_KEY = "save_reassign"
 VALIDATED_KEY = "track_validated"
 SIMILAR_KEY = "similar_name"
 REPLACING_KEY = "replacing_name"
+PANEL_KEY = "clip_panel"
+FETCH_KEY = "fetch_video"
+VIDEO_PLAYER = "video"
+COMPARISON_PLAYER = "comparison"
 SEARCH_WORDS = ("track", "in")
 """Words a search may carry around what it names, from the heading over a
 selected track."""
@@ -235,18 +240,29 @@ PATH_HELP = (
     "The track drawn from its stored path through the blob's centre, which is what the descriptors "
     "were computed from. Colour runs from dark blue on its first frame to yellow on its last."
 )
-VIDEO_HELP = (
-    "The track named under this heading on its recording, from a second before it starts to a second "
-    "after it ends. It is the selected track until a panel of a gallery is clicked, and that panel's "
-    "track from then on, so a cluster can be gone through video by video. In the frame "
-    "shows the whole picture with the track's path and a box drawn on it. Close up shows a crop that "
-    "keeps the detection in the middle and nothing drawn over it, so the object itself can be seen. That "
-    "crop is placed on an average of the detections around each frame rather than on the detection "
-    "itself, because the pixel a track is matched on hops about inside its blob and would shake the "
-    "picture. An object holding its course is still followed with no lag. All of them "
-    "are built in the background, one track at a time, and choosing another track stops the build under "
-    "way."
+CLIP_HELP = (
+    "In the frame shows the whole picture with the track's path and a box drawn on it. Close up shows a "
+    "crop that keeps the detection in the middle and nothing drawn over it, so the object itself can be "
+    "seen. That crop is placed on an average of the detections around each frame rather than on the "
+    "detection itself, because the pixel a track is matched on hops about inside its blob and would "
+    "shake the picture. An object holding its course is still followed with no lag. All of them are "
+    "built in the background, one track at a time."
 )
+VIDEO_HELP = (
+    f"The selected track on its recording, from a second before it starts to a second after it ends. {CLIP_HELP}"
+)
+COMPARISON_HELP = (
+    "The track whose gallery panel was clicked, on its recording, to hold against the selected track "
+    f"above. Clicking another panel brings that track here. {CLIP_HELP} One at a time means this video "
+    "waits while the one above is being built."
+)
+VIDEO_TITLES = {
+    VIDEO_PLAYER: ("Video", VIDEO_HELP),
+    COMPARISON_PLAYER: ("Comparison", COMPARISON_HELP),
+}
+"""What stands over each of the two players, and what its tooltip says."""
+
+WAITING_TEXT = "Waiting for the video above to be built."
 PANEL_HELP = (
     "Recording shows the picture as the camera recorded it. Deviation shows how far each pixel stands "
     "from the background the detector measures it against, with the detection threshold at full white. "
@@ -458,8 +474,7 @@ def page() -> None:
             st.caption("No track selected.")
         else:
             _selected(picked, points=_points(paths, key=str(picked["key"])))
-        if playing is not None:
-            _video(playing, points=_points(paths, key=str(playing["key"])))
+        _videos(paths, picked=picked, playing=playing)
 
     similar = st.session_state.pop(SIMILAR_KEY, None)
     replacing = st.session_state.pop(REPLACING_KEY, None)
@@ -984,39 +999,82 @@ def _confirm(key: str, *, confirmed: bool) -> None:
     st.session_state[f"{VALIDATED_KEY}:{key}"] = confirmed
 
 
-def _video(track: pd.Series, *, points: pd.DataFrame) -> None:
-    """The video of the track that is playing, under a line naming it.
+def _videos(paths: pd.DataFrame, *, picked: pd.Series | None, playing: pd.Series | None) -> None:
+    """The video of the selected track, and under it the video of a track a
+    gallery panel was clicked on to hold against it.
 
-    The selected track's video plays until a gallery panel is clicked,
-    and that panel's track plays from then on, so a cluster can be gone
-    through video by video while the selected track stays where it is.
+    One clip is built at a time, so the second waits while the first is
+    being built. With no track selected the clicked one takes the first
+    player, because there is nothing to hold it against.
     """
-    st.subheader("Video", help=VIDEO_HELP)
+    first = picked if picked is not None else playing
+    if first is None:
+        return
+
+    building = _video(first, points=_points(paths, key=str(first["key"])), player=VIDEO_PLAYER, may_build=True)
+    compared = _compared(playing, picked=picked)
+    if compared is not None:
+        _video(
+            compared,
+            points=_points(paths, key=str(compared["key"])),
+            player=COMPARISON_PLAYER,
+            may_build=not building,
+        )
+
+
+def _compared(playing: pd.Series | None, *, picked: pd.Series | None) -> pd.Series | None:
+    """The track held against the selected one, which is the track a gallery
+    panel was clicked on while another track is selected."""
+    if playing is None or picked is None or str(playing["key"]) == str(picked["key"]):
+        return None
+    return playing
+
+
+def _video(track: pd.Series, *, points: pd.DataFrame, player: str, may_build: bool) -> bool:
+    """The video of one track under a line naming it, and whether a build was
+    asked for."""
+    title, note = VIDEO_TITLES[player]
+    st.subheader(title, help=note)
     st.caption(f"Track {int(track['track_id'])} in {track['clip']}")
-    _clip(str(track["key"]), recording=str(track["recording"]), stored=_stored_track(points))
+    return _clip(
+        str(track["key"]),
+        recording=str(track["recording"]),
+        stored=_stored_track(points),
+        player=player,
+        may_build=may_build,
+    )
 
 
-def _clip(key: str, *, recording: str, stored: StoredTrack) -> None:
+def _clip(key: str, *, recording: str, stored: StoredTrack, player: str, may_build: bool) -> bool:
     """The clips of the track when they are built, and their progress until
-    then."""
+    then, and whether a build was asked for.
+
+    A build is asked for only where it may be, because one clip is built
+    at a time and a second asked for would stop the first.
+    """
     source = _source(recording)
     if source is None:
         st.info(UNSOURCED_TEXT)
-        return
+        return False
 
     if source.path is not None:
         clips = _clips(source.path, track=stored)
         if clips.built:
-            _play(clips)
-            return
-    elif not _may_fetch(source):
-        return
+            _play(clips, player=player)
+            return False
+    elif not _may_fetch(source, player=player):
+        return False
+
+    if not may_build:
+        st.caption(WAITING_TEXT)
+        return False
 
     _queue().request(key, _clip_job(source, track=stored))
     _clip_progress(key, fetching=source.path is None)
+    return True
 
 
-def _play(clips: TrackClips) -> None:
+def _play(clips: TrackClips, *, player: str) -> None:
     """The whole frame and the crop that follows the detection, a tab each, of
     whichever panel is chosen.
 
@@ -1024,7 +1082,12 @@ def _play(clips: TrackClips) -> None:
     change.
     """
     panel = st.segmented_control(
-        "Panel", options=CLIP_PANELS, default=RECORDING, format_func=str.capitalize, help=PANEL_HELP
+        "Panel",
+        options=CLIP_PANELS,
+        default=RECORDING,
+        format_func=str.capitalize,
+        help=PANEL_HELP,
+        key=f"{PANEL_KEY}:{player}",
     )
     pair = clips.pair(str(panel or RECORDING))
 
@@ -1047,7 +1110,7 @@ def _source(recording: str) -> VideoSource | None:
     )
 
 
-def _may_fetch(source: VideoSource) -> bool:
+def _may_fetch(source: VideoSource, *, player: str) -> bool:
     """Whether the recording may be fetched now: there is room for it, and a
     large one has been asked for."""
     archived = source.archived
@@ -1067,6 +1130,7 @@ def _may_fetch(source: VideoSource) -> bool:
 
     return archived.size_bytes <= AUTO_FETCH_BYTES or st.button(
         "Fetch video",
+        key=f"{FETCH_KEY}:{player}",
         help=f"The sift did not keep this {megabytes:.0f} MB recording. Fetching it takes about "
         f"{fetch_seconds(archived) / 60.0:.0f} minutes, and no other clip is built meanwhile.",
     )

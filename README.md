@@ -185,10 +185,12 @@ name it is under, and saving a track label marks the track at the same
 time. The tracks marked are kept in
 `data/out/analysis/validated-tracks.json`. Drawing the track on its
 recording, from a second before it starts to a second after it ends,
-runs in the background, and four videos play once they are built. The
-line under Video names the track being played, which is the selected
-track until a gallery panel is clicked and that panel's track from then
-on. Panel chooses between the recording and the deviation the detector
+runs in the background, and four videos play once they are built. Video
+holds the selected track and Comparison, under it, holds the track a
+gallery panel was clicked on, so the two can be watched against each
+other. A line under each names the track it holds. One clip is built at
+a time, so the comparison waits while the video above it is being built.
+Panel chooses between the recording and the deviation the detector
 measures it against, and the tabs choose between the two views of the
 chosen panel.
 In the frame holds the whole picture with the track's path and a box
@@ -211,8 +213,9 @@ not say which frame is which has every frame ahead of the track passed
 instead, which takes a minute on a 20-minute recording. A gallery below the map
 draws 30 tracks at random from the selected track's cluster, or from any
 cluster chosen in the sidebar, from their stored paths alone. Clicking a
-panel plays that track's video, and the selected track stays where it
-is, so a cluster can be gone through video by video. The panel playing
+panel plays that track's video under Comparison, beside the selected
+track's own video, and the selected track stays where it is, so a
+cluster can be gone through video by video. The panel playing
 carries a play mark and is framed in the colour of that mark. Pressing
 the arrow on a panel jumps to its track, which selects it the way a
 click on its point on the map does. A panel carries a camera while its
