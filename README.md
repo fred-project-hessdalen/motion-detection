@@ -173,6 +173,13 @@ Track label gives this one track a name of its own, which starts as the
 name of its cluster and is kept against the track alone in
 `data/out/analysis/track-labels.json`, in the same form a cluster label
 is kept in. Clearing the box takes the track back to its cluster's name.
+Reassign puts this one track with another cluster, by the name that
+cluster is under, and a name no cluster is under yet opens one holding
+this track. It is the cluster label of this track alone, so the cluster
+it came from keeps the name the rest of its tracks hold, and naming that
+cluster again leaves the reassigned track where it was put. The
+clustering itself is left as it is, because the analysis step is run
+afresh over the whole corpus.
 Validated says that a person has watched the track and stands by the
 name it is under, and saving a track label marks the track at the same
 time. The tracks marked are kept in

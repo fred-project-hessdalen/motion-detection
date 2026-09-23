@@ -61,6 +61,17 @@ def test_a_cluster_is_under_the_name_its_tracks_carry(tmp_path) -> None:
     assert label_of(labels, keys=INSECTS) == ""
 
 
+def test_a_cluster_keeps_its_name_when_one_track_is_put_under_another(tmp_path) -> None:
+    """A track reassigned on its own leaves the cluster under the name the rest
+    of its tracks hold."""
+    path = tmp_path / "cluster-labels.json"
+    labels = write_labels(path, read_labels(path), name="bird", keys=[*BIRDS, *INSECTS])
+    labels = write_labels(path, labels, name="plane", keys=INSECTS[:1])
+
+    assert label_of(labels, keys=[*BIRDS, *INSECTS]) == "bird"
+    assert label_of(labels, keys=INSECTS[:1]) == "plane"
+
+
 def test_no_file_yet_means_no_name_given(tmp_path) -> None:
     assert read_labels(tmp_path / "cluster-labels.json") == {}
 

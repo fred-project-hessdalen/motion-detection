@@ -143,6 +143,8 @@ LABEL_KEY = "cluster_label"
 SAVE_KEY = "save_cluster_label"
 TRACK_LABEL_KEY = "track_label"
 SAVE_TRACK_LABEL_KEY = "save_track_label"
+REASSIGN_KEY = "reassign_track"
+SAVE_REASSIGN_KEY = "save_reassign"
 VALIDATED_KEY = "track_validated"
 SIMILAR_KEY = "similar_name"
 REPLACING_KEY = "replacing_name"
@@ -157,6 +159,7 @@ REPLACING_TITLE = "Change of name"
 NAME_PLACEHOLDER = "Choose or add a name"
 NAME_ROW = (2, 1, 5)
 TRACK_NAME_ROW = (3, 1, 1, 2)
+REASSIGN_ROW = (3, 1, 3)
 """How the row a name is given in is divided, the last of them left empty.
 
 A name is a word or two, so its box takes a small part of the width it
@@ -273,7 +276,8 @@ LABEL_HELP = (
     "set is built from. It is kept in small letters with single spaces between its words and every word "
     'in the singular, so that "Street Lights" and "streetLight" come to the one name. A name within a '
     "letter or two of one already in use is put to you before it is written. Naming the cluster again "
-    "moves its tracks to the new name, and clearing the box takes them out of the one they are under."
+    "moves its tracks to the new name, and clearing the box takes them out of the one they are under. A "
+    "track reassigned to another cluster on its own stays where it was put."
 )
 SAVE_LABEL_HELP = "Keep this name against every track of the cluster."
 SIMILAR_TEXT = (
@@ -291,6 +295,18 @@ TRACK_LABEL_HELP = (
 SAVE_TRACK_LABEL_HELP = (
     "Keep this name against this track alone. Naming a track is someone looking at it and saying what it "
     "is, so the track is marked validated at the same time."
+)
+REASSIGN_HELP = (
+    "The cluster this track is counted with, by the name that cluster is under. Giving it another name "
+    f"puts this one track under that name in {LABELS_PATH.name}, and a name no cluster is under yet "
+    "opens one holding this track. The cluster it came from keeps the name the rest of its tracks hold. "
+    "The clustering itself is left as it is, because it is run afresh over the whole corpus and would "
+    "undo a change made here. Track label names what the track holds, and this names the cluster it "
+    "belongs with."
+)
+SAVE_REASSIGN_HELP = (
+    "Put this track under the cluster named in the box. It is marked validated at the same time, the way "
+    "a track label is."
 )
 VALIDATED_HELP = (
     "Mark that you have watched this track and stand by the name it is under. Saving a track label marks "
@@ -792,21 +808,19 @@ def _track_labelling(track: pd.Series) -> None:
     whether someone has confirmed the track.
 
     The name starts as the cluster's, so a track that is what the rest
-    of its cluster is needs no name of its own.
+    of its cluster is needs no name of its own. The name it starts at is
+    part of the box's key, because a box holds whatever it was left at
+    and would otherwise go on offering a start the track has moved on
+    from.
     """
     key = str(track["key"])
     given = label_of(_track_labels(_track_labels_stamp()), keys=[key])
     cluster_name = str(track[NAME_COLUMN])
-    naming = Naming(path=TRACK_LABELS_PATH, keys=(key,), box=f"{TRACK_LABEL_KEY}:{key}", confirms=True)
+    start = given or ("" if cluster_name == UNNAMED else cluster_name)
+    naming = Naming(path=TRACK_LABELS_PATH, keys=(key,), box=f"{TRACK_LABEL_KEY}:{key}:{start}", confirms=True)
 
     chooser, save, tick, _rest = st.columns(TRACK_NAME_ROW, vertical_alignment="bottom")
-    _name_box(
-        chooser,
-        label="Track label",
-        given=given or ("" if cluster_name == UNNAMED else cluster_name),
-        naming=naming,
-        help=TRACK_LABEL_HELP,
-    )
+    _name_box(chooser, label="Track label", given=start, naming=naming, help=TRACK_LABEL_HELP)
     save.button(
         "Save",
         key=f"{SAVE_TRACK_LABEL_KEY}:{key}",
@@ -822,6 +836,32 @@ def _track_labelling(track: pd.Series) -> None:
         on_change=_validate,
         args=(key,),
         help=VALIDATED_HELP,
+    )
+    _reassigning(track)
+
+
+def _reassigning(track: pd.Series) -> None:
+    """The cluster this one track is counted with, and the box that puts it
+    with another.
+
+    The box holds a cluster label, and giving it another one puts this
+    track under that name on its own. The cluster the track came from
+    keeps the name the rest of its tracks hold, and a name no cluster is
+    under yet opens one holding this track.
+    """
+    key = str(track["key"])
+    given = label_of(_cluster_labels(_labels_stamp()), keys=[key])
+    naming = Naming(path=LABELS_PATH, keys=(key,), box=f"{REASSIGN_KEY}:{key}", confirms=True)
+
+    chooser, save, _rest = st.columns(REASSIGN_ROW, vertical_alignment="bottom")
+    _name_box(chooser, label="Reassign", given=given, naming=naming, help=REASSIGN_HELP)
+    save.button(
+        "Save",
+        key=f"{SAVE_REASSIGN_KEY}:{key}",
+        on_click=_save_name,
+        args=(naming,),
+        help=SAVE_REASSIGN_HELP,
+        width="stretch",
     )
 
 
@@ -1151,15 +1191,21 @@ def _labelling(tracks: pd.DataFrame, *, cluster: str) -> None:
 
     Every track of the cluster takes the name, including the tracks the
     sidebar's filters leave off the map, because the name is about what
-    the cluster holds.
+    the cluster holds. A track put under a name of its own is left
+    alone, so that naming the cluster again does not take a reassignment
+    back.
     """
     keys = tracks.loc[tracks["cluster"] == cluster, "key"].tolist()
-    given = label_of(_cluster_labels(_labels_stamp()), keys=keys)
-    naming = Naming(path=LABELS_PATH, keys=tuple(keys), box=f"{LABEL_KEY}:{cluster}", confirms=False)
+    labels = _cluster_labels(_labels_stamp())
+    given = label_of(labels, keys=keys)
+    held = _by_key(labels)
+    moving = tuple(key for key in keys if held.get(key, "") in ("", given))
+    under = sum(1 for key in keys if held.get(key) == given)
+    naming = Naming(path=LABELS_PATH, keys=moving, box=f"{LABEL_KEY}:{cluster}", confirms=False)
 
     chooser, save, _rest = st.columns(NAME_ROW, vertical_alignment="bottom")
     _name_box(chooser, label="Cluster label", given=given, naming=naming, help=LABEL_HELP)
-    st.caption(f"{len(keys)} tracks under {given}" if given else "This cluster has no name yet.")
+    st.caption(f"{under} of {len(keys)} tracks under {given}" if given else "This cluster has no name yet.")
     save.button(
         "Save",
         key=f"{SAVE_KEY}:{cluster}",

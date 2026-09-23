@@ -152,16 +152,22 @@ def _edits(name: str, other: str) -> int:
 
 
 def label_of(labels: dict[str, list[str]], *, keys: list[str]) -> str:
-    """The name these tracks are under, or nothing when they are under none.
+    """The name most of these tracks are under, and nothing while none of them
+    is under one.
 
     A name is given to every track of a cluster at once, so the name of
-    any one of them is the name of the cluster.
+    a cluster is the name its tracks hold. A track of it put under
+    another name on its own leaves the cluster under the name the rest
+    of them still hold. Two names holding as many of the tracks as each
+    other give the first of the two by their spelling.
     """
     wanted = set(keys)
-    for name, held in labels.items():
-        if wanted.intersection(held):
-            return name
-    return ""
+    counts = {name: len(wanted.intersection(under)) for name, under in labels.items()}
+    most = max(counts.values(), default=0)
+    if not most:
+        return ""
+
+    return min(name for name, count in counts.items() if count == most)
 
 
 def write_labels(path: Path, labels: dict[str, list[str]], *, name: str, keys: list[str]) -> dict[str, list[str]]:
