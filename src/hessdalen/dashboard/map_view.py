@@ -145,6 +145,7 @@ TRACK_LABEL_KEY = "track_label"
 SAVE_TRACK_LABEL_KEY = "save_track_label"
 VALIDATED_KEY = "track_validated"
 SIMILAR_KEY = "similar_name"
+REPLACING_KEY = "replacing_name"
 SEARCH_WORDS = ("track", "in")
 """Words a search may carry around what it names, from the heading over a
 selected track."""
@@ -152,7 +153,16 @@ SAMPLE_TITLE = "Cluster sample"
 NEAREST_TITLE = "Nearest tracks"
 SELECTED_TITLE = "Selected track"
 SIMILAR_TITLE = "Similar name"
+REPLACING_TITLE = "Change of name"
 NAME_PLACEHOLDER = "Choose or add a name"
+NAME_ROW = (2, 1, 5)
+TRACK_NAME_ROW = (3, 1, 1, 2)
+"""How the row a name is given in is divided, the last of them left empty.
+
+A name is a word or two, so its box takes a small part of the width it
+stands in and the rest is left alone. The whole width would put the
+button that keeps the name at the far edge of the page.
+"""
 NAMES_TITLE = "Cluster labels"
 WHOLE_TITLE = "In the frame"
 CLOSE_UP_TITLE = "Close up"
@@ -270,6 +280,7 @@ SIMILAR_TEXT = (
     "A name holds the tracks given it and nothing more, so two spellings of one thing keep their tracks "
     "apart. Both names are kept if that is what you meant."
 )
+REPLACING_TEXT = "Changing the name takes every one of those tracks out of the name they are under."
 TRACK_LABEL_HELP = (
     "What this one track holds, in a word of your own. It starts as the name the track's cluster is "
     "under, and is changed where the track is not what the rest of its cluster is. The name is kept "
@@ -338,6 +349,16 @@ class Similar:
     naming: Naming
     name: str
     near: str
+
+
+@dataclass(frozen=True, slots=True)
+class Replacing:
+    """A name that was given to tracks already standing under another, held
+    until the person says whether to move them."""
+
+    naming: Naming
+    name: str
+    held: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -425,8 +446,11 @@ def page() -> None:
             _video(playing, points=_points(paths, key=str(playing["key"])))
 
     similar = st.session_state.pop(SIMILAR_KEY, None)
+    replacing = st.session_state.pop(REPLACING_KEY, None)
     if similar is not None:
         _similar_name(similar)
+    elif replacing is not None:
+        _replacing_name(replacing)
 
 
 def _steps() -> None:
@@ -775,7 +799,7 @@ def _track_labelling(track: pd.Series) -> None:
     cluster_name = str(track[NAME_COLUMN])
     naming = Naming(path=TRACK_LABELS_PATH, keys=(key,), box=f"{TRACK_LABEL_KEY}:{key}", confirms=True)
 
-    chooser, save, tick = st.columns([3, 1, 1], vertical_alignment="bottom")
+    chooser, save, tick, _rest = st.columns(TRACK_NAME_ROW, vertical_alignment="bottom")
     _name_box(
         chooser,
         label="Track label",
@@ -830,7 +854,22 @@ def _save_name(naming: Naming) -> None:
         st.session_state[SIMILAR_KEY] = Similar(naming=naming, name=wanted, near=near)
         return
 
-    _keep_name(naming, name=wanted)
+    _settle(naming, name=wanted)
+
+
+def _settle(naming: Naming, *, name: str) -> None:
+    """Keep this name, unless the tracks stand under another one, which is put
+    to the person first.
+
+    Which of two close names was meant is settled before this, because
+    the answer to that is what would be moved.
+    """
+    held = label_of(read_labels(naming.path), keys=list(naming.keys))
+    if held and held != name:
+        st.session_state[REPLACING_KEY] = Replacing(naming=naming, name=name, held=held)
+        return
+
+    _keep_name(naming, name=name)
 
 
 def _keep_name(naming: Naming, *, name: str) -> None:
@@ -860,10 +899,27 @@ def _similar_name(similar: Similar) -> None:
 
     use, keep = st.columns(2)
     if use.button(f"Use {similar.near}", type="primary", width="stretch"):
-        _keep_name(similar.naming, name=similar.near)
+        _settle(similar.naming, name=similar.near)
         st.rerun()
     if keep.button(f"Keep {similar.name}", width="stretch"):
-        _keep_name(similar.naming, name=similar.name)
+        _settle(similar.naming, name=similar.name)
+        st.rerun()
+
+
+@st.dialog(REPLACING_TITLE)
+def _replacing_name(replacing: Replacing) -> None:
+    """What to do about tracks that stand under a name already."""
+    count = len(replacing.naming.keys)
+    st.write(f"{count} track{'' if count == 1 else 's'} under **{replacing.held}**.")
+    st.caption(REPLACING_TEXT)
+
+    change, keep = st.columns(2)
+    given = f"Change to {replacing.name}" if replacing.name else f"Take {replacing.held} off"
+    if change.button(given, type="primary", width="stretch"):
+        _keep_name(replacing.naming, name=replacing.name)
+        st.rerun()
+    if keep.button(f"Keep {replacing.held}", width="stretch"):
+        st.session_state[replacing.naming.box] = replacing.held
         st.rerun()
 
 
@@ -1101,7 +1157,7 @@ def _labelling(tracks: pd.DataFrame, *, cluster: str) -> None:
     given = label_of(_cluster_labels(_labels_stamp()), keys=keys)
     naming = Naming(path=LABELS_PATH, keys=tuple(keys), box=f"{LABEL_KEY}:{cluster}", confirms=False)
 
-    chooser, save = st.columns([4, 1], vertical_alignment="bottom")
+    chooser, save, _rest = st.columns(NAME_ROW, vertical_alignment="bottom")
     _name_box(chooser, label="Cluster label", given=given, naming=naming, help=LABEL_HELP)
     st.caption(f"{len(keys)} tracks under {given}" if given else "This cluster has no name yet.")
     save.button(
