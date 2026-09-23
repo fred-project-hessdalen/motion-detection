@@ -8,6 +8,7 @@ import pytest
 
 from hessdalen.dashboard.track_preview import (
     CACHED_MARK,
+    JUMP_MARK,
     PLAYING_COLOUR,
     PLAYING_MARK,
     VALIDATED_MARK,
@@ -82,6 +83,18 @@ def test_a_panel_carries_the_key_of_the_track_it_draws() -> None:
     drawn = gallery_html(_paths(), entries=[_entry("a", "1. birds")], frame="#e6007e")
 
     assert 'data-track="a"' in drawn
+
+
+def test_every_panel_carries_a_button_that_names_its_track() -> None:
+    """A press of the button selects the track, which the panel itself no
+    longer does."""
+    figures = gallery_html(
+        _paths(), entries=[_entry("a", "1. birds"), _entry("b", "2. planes")], frame="#e6007e"
+    ).split("<figure")[1:]
+
+    assert JUMP_MARK in figures[0]
+    assert 'data-jump="a"' in figures[0]
+    assert 'data-jump="b"' in figures[1]
 
 
 def test_a_panel_is_marked_by_what_is_known_of_its_track() -> None:

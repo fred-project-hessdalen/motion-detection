@@ -49,6 +49,9 @@ from the star over the selected track, because a track playing and a
 track selected are two different things.
 """
 
+JUMP_MARK = "↗"
+JUMP_TITLE = "Jump to this track"
+
 TIME = alt.Color("phase:Q", scale=alt.Scale(scheme="viridis"), legend=None)
 """Colour along a path, from its first frame in dark blue to its last in
 yellow, so direction and pace read off the spacing of the dots."""
@@ -162,9 +165,9 @@ def _panel_svg(points: pd.DataFrame, *, entry: GalleryEntry, frame: str) -> str:
 
 
 def _marks(entry: GalleryEntry) -> str:
-    """What a panel carries beside its caption: a camera while its recording is
-    on disk, a tick once someone has confirmed the track, and a play mark while
-    its video is the one playing."""
+    """What a panel carries beside its caption: a play mark while its video is
+    the one playing, a camera while its recording is on disk, a tick once
+    someone has confirmed the track, and the arrow that jumps to it."""
     marks = []
     if entry.playing:
         marks.append(f'<span title="{PLAYING_TITLE}" style="color:{PLAYING_COLOUR}">{PLAYING_MARK}</span>')
@@ -172,6 +175,10 @@ def _marks(entry: GalleryEntry) -> str:
         marks.append(f'<span title="{CACHED_TITLE}">{CACHED_MARK}</span>')
     if entry.validated:
         marks.append(f'<span title="{VALIDATED_TITLE}" style="color:{VALIDATED_COLOUR}">{VALIDATED_MARK}</span>')
+    marks.append(
+        f'<span data-jump="{html.escape(entry.key)}" title="{JUMP_TITLE}" '
+        f'style="border:1px solid currentColor;border-radius:3px;padding:0 2px">{JUMP_MARK}</span>'
+    )
     return "".join(marks)
 
 

@@ -131,14 +131,6 @@ HOVER_TEMPLATE = (
 )
 GALLERY_SIZE = 30
 NEIGHBOUR_RADIUS = 0.5
-GALLERY_SELECTS: bool = False
-"""Whether a click on a gallery panel selects its track.
-
-While this is off a click plays the track's video and marks its panel,
-and the selected track stays where it is, so that a cluster can be gone
-through video by video without losing the track it is judged against.
-Turning it on gives a panel the whole of what a click on the map brings.
-"""
 SHUFFLE_KEY = "gallery_shuffle"
 MAP_KEY = "track_map"
 HISTORY_KEY = "track_history"
@@ -246,10 +238,12 @@ PANEL_HELP = (
     "built together, so switching between them plays at once."
 )
 MARKS_HELP = (
-    "Click a panel to play its track's video, which leaves the selected track where it is. The panel "
-    "whose video is playing carries a play mark and is framed in the colour of that mark. A camera "
-    "stands over a track whose recording is on disk, which is a track that can be played without waiting "
-    "for a fetch, and a green tick over a track someone has confirmed."
+    "Click a panel to play its track's video, which leaves the selected track where it is, and press the "
+    "arrow on a panel to jump to its track, which selects it the way a click on its point does. The "
+    "panel whose video is "
+    "playing carries a play mark and is framed in the colour of that mark. A camera stands over a track "
+    "whose recording is on disk, which is a track that can be played without waiting for a fetch, and a "
+    "green tick over a track someone has confirmed."
 )
 GALLERY_HELP = (
     f"Up to {GALLERY_SIZE} tracks drawn at random from the cluster, each drawn from its stored path and "
@@ -414,7 +408,7 @@ def _map_clicked() -> None:
     rings the tracks the galleries show, which follow the selected
     track.
     """
-    clicked = _reported(MAP_KEY)
+    clicked = _reported(MAP_KEY, event="clicked")
     if clicked:
         _select(clicked)
 
@@ -427,23 +421,34 @@ def _nearest_clicked() -> None:
     _gallery_clicked(NEAREST_GALLERY_KEY)
 
 
+def _sample_jumped() -> None:
+    _gallery_jumped(SAMPLE_GALLERY_KEY)
+
+
+def _nearest_jumped() -> None:
+    _gallery_jumped(NEAREST_GALLERY_KEY)
+
+
 def _gallery_clicked(component: str) -> None:
     """Play the video of the clicked track, leaving the selected track where it
-    is, or select it while GALLERY_SELECTS is on."""
-    clicked = _reported(component)
-    if not clicked:
-        return
-
-    if GALLERY_SELECTS:
-        _select(clicked)
-    else:
+    is, so that a cluster can be gone through video by video."""
+    clicked = _reported(component, event="clicked")
+    if clicked:
         st.session_state[PLAYING_KEY] = clicked
 
 
-def _reported(component: str) -> str:
-    """The track a component reports a click on, and nothing while it reports
-    no click."""
-    return str(st.session_state[component].get("clicked") or "")
+def _gallery_jumped(component: str) -> None:
+    """Select the track whose Jump button was pressed, which is what a click on
+    its point on the map does."""
+    jumped = _reported(component, event="jumped")
+    if jumped:
+        _select(jumped)
+
+
+def _reported(component: str, *, event: str) -> str:
+    """The track a component reports this event on, and nothing while it
+    reports none."""
+    return str(st.session_state[component].get(event) or "")
 
 
 def _search() -> None:
@@ -984,6 +989,7 @@ def _gallery(tracks: pd.DataFrame, *, cluster: str | None, sample: pd.DataFrame,
         playing=playing,
         key=SAMPLE_GALLERY_KEY,
         on_click=_sample_clicked,
+        on_jump=_sample_jumped,
     )
 
 
@@ -1026,6 +1032,7 @@ def _neighbours(nearest: pd.DataFrame, *, radius: float, playing: pd.Series | No
         playing=playing,
         key=NEAREST_GALLERY_KEY,
         on_click=_nearest_clicked,
+        on_jump=_nearest_jumped,
     )
 
 
@@ -1041,10 +1048,11 @@ def _panels(
     playing: pd.Series | None,
     key: str,
     on_click: Callable[[], None],
+    on_jump: Callable[[], None],
 ) -> None:
     """The chosen tracks drawn from their stored paths, a panel each, in rows
     that wrap to the width of the column, each panel playing its track's video
-    when it is clicked."""
+    when it is clicked and selecting the track from its Jump button."""
     played = "" if playing is None else str(playing["key"])
     entries = tuple(
         GalleryEntry(
@@ -1058,7 +1066,12 @@ def _panels(
             chosen["key"], chosen[CACHED_COLUMN], chosen[VALIDATED_COLUMN], captions
         )
     )
-    track_gallery(_gallery_markup(PATHS_PATH.stat().st_mtime, entries, frame=frame), key=key, on_click=on_click)
+    track_gallery(
+        _gallery_markup(PATHS_PATH.stat().st_mtime, entries, frame=frame),
+        key=key,
+        on_click=on_click,
+        on_jump=on_jump,
+    )
 
 
 @st.cache_data(show_spinner=False, max_entries=PANEL_CACHE_ENTRIES)

@@ -206,9 +206,11 @@ draws 30 tracks at random from the selected track's cluster, or from any
 cluster chosen in the sidebar, from their stored paths alone. Clicking a
 panel plays that track's video, and the selected track stays where it
 is, so a cluster can be gone through video by video. The panel playing
-carries a play mark and is framed in the colour of that mark. A panel
-carries a camera while its recording is on disk and a green tick once
-someone has confirmed the track. Under that gallery, Cluster label
+carries a play mark and is framed in the colour of that mark. Pressing
+the arrow on a panel jumps to its track, which selects it the way a
+click on its point on the map does. A panel carries a camera while its
+recording is on disk and a green tick once someone has confirmed the
+track. Under that gallery, Cluster label
 gives the cluster a name of your own and Save
 keeps it against every one of the cluster's tracks in
 `data/out/analysis/cluster-labels.json`, which holds each name with the

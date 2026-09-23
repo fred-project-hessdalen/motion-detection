@@ -6,8 +6,9 @@ gallery holds dozens. That block takes no clicks of its own, so it is
 handed to a component of the page's own, which reports the track behind
 the panel the click landed in.
 
-Each panel carries its track under a data-track attribute, which is what
-the click is read from and what the markup is written with.
+Each panel carries its track under a data-track attribute, and the arrow
+that jumps to the track carries it under a data-jump attribute, which is
+what a click on either is read from and what the markup is written with.
 """
 
 from __future__ import annotations
@@ -23,12 +24,17 @@ export default function (component) {
   const { data, parentElement, setTriggerValue } = component;
   const gallery = parentElement.querySelector(".track-gallery");
   gallery.innerHTML = data.markup;
-  gallery.reportClick = setTriggerValue;
+  gallery.report = setTriggerValue;
   if (gallery.dataset.listening) return;
   gallery.dataset.listening = "yes";
   gallery.addEventListener("click", (event) => {
+    const jump = event.target.closest("[data-jump]");
+    if (jump) {
+      gallery.report("jumped", jump.getAttribute("data-jump"));
+      return;
+    }
     const panel = event.target.closest("[data-track]");
-    if (panel) gallery.reportClick("clicked", panel.getAttribute("data-track"));
+    if (panel) gallery.report("clicked", panel.getAttribute("data-track"));
   });
 }
 """
@@ -36,11 +42,12 @@ export default function (component) {
 _component = st.components.v2.component("track_gallery", html=HTML, js=JS, isolate_styles=False)
 
 
-def track_gallery(markup: str, *, key: str, on_click: Callable[[], None]) -> None:
-    """Draw this gallery markup, and call on_click when a panel is clicked,
-    with the track's key under "clicked" in the component's state.
+def track_gallery(markup: str, *, key: str, on_click: Callable[[], None], on_jump: Callable[[], None]) -> None:
+    """Draw this gallery markup, and call on_click when a panel is clicked and
+    on_jump when the arrow on one is pressed, with the track's key under
+    "clicked" or "jumped" in the component's state.
 
     The key names the one gallery the page keeps in that place, so it
     has to stay the same from one run of the page to the next.
     """
-    _component(key=key, data={"markup": markup}, on_clicked_change=on_click)
+    _component(key=key, data={"markup": markup}, on_clicked_change=on_click, on_jumped_change=on_jump)
