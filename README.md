@@ -235,10 +235,11 @@ with every track of an unnamed cluster under `unlabelled`, and Folders
 holds it to the tracks of recordings filed under the folders picked
 there. Validation holds it to the tracks someone has confirmed or to the
 tracks still to go through. Tracks whose movement from step to step is
-uneven, which most clutter is, can be left out of the page with the
-Rough tracks switch in the sidebar, and the Video cached switch there
-draws the tracks whose recording is not on disk faintly. Search in the
-sidebar selects a track by its number, by its recording or by both, in
+uneven, which most clutter is, are left off the page until the Rough
+tracks switch in the sidebar is turned on, and the Video cached switch
+there, which starts on, draws the tracks whose recording is not on disk
+faintly. Search in the sidebar selects a track by its number, by its
+recording or by both, in
 the form the heading over a selected track gives them, such as `Track
 7484 in Cam1_2025-06-03__12-40-00_noInsect`. The map marks
 the selected track with a star and rings the tracks of each gallery in

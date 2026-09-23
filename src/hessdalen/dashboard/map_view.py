@@ -368,8 +368,8 @@ def page() -> None:
         validation = st.segmented_control(
             "Validation", options=VALIDATION_CHOICES, default=ANY_VALIDATION, help=VALIDATION_HELP
         )
-        rough = st.toggle("Rough tracks", value=True, help=ROUGH_HELP)
-        cached = st.toggle("Video cached", value=False, help=CACHED_HELP)
+        rough = st.toggle("Rough tracks", value=False, help=ROUGH_HELP)
+        cached = st.toggle("Video cached", value=True, help=CACHED_HELP)
         chosen_cluster = st.selectbox(
             "Gallery",
             options=[SELECTED_CLUSTER, *_cluster_names(tracks)],
