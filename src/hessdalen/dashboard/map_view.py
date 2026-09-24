@@ -681,7 +681,6 @@ def page() -> None:
         return
 
     tracks = _tracks_frame()
-    paths = _path_frame(PATHS_PATH.stat().st_mtime)
     with st.sidebar:
         wanted = str(st.text_input("Search", key=SEARCH_KEY, on_change=_search, help=SEARCH_HELP))
         if wanted.strip():
@@ -774,8 +773,8 @@ def page() -> None:
         if picked is None:
             st.caption("No track selected.")
         else:
-            _selected(picked, points=_points(paths, key=str(picked["key"])))
-        _videos(paths, picked=picked, playing=playing)
+            _selected(picked, points=_track_points(PATHS_PATH.stat().st_mtime, key=str(picked["key"])))
+        _videos(picked=picked, playing=playing)
 
     similar = st.session_state.pop(SIMILAR_KEY, None)
     replacing = st.session_state.pop(REPLACING_KEY, None)
@@ -1693,7 +1692,7 @@ def _confirm(key: str, *, confirmed: bool) -> None:
     st.session_state[f"{VALIDATED_KEY}:{key}"] = confirmed
 
 
-def _videos(paths: pd.DataFrame, *, picked: pd.Series | None, playing: pd.Series | None) -> None:
+def _videos(*, picked: pd.Series | None, playing: pd.Series | None) -> None:
     """The video of the selected track, and under it the video of a track a
     gallery panel was clicked on to hold against it.
 
@@ -1705,15 +1704,10 @@ def _videos(paths: pd.DataFrame, *, picked: pd.Series | None, playing: pd.Series
     if first is None:
         return
 
-    building = _video(first, points=_points(paths, key=str(first["key"])), player=VIDEO_PLAYER, may_build=True)
+    building = _video(first, player=VIDEO_PLAYER, may_build=True)
     compared = _compared(playing, picked=picked)
     if compared is not None:
-        _video(
-            compared,
-            points=_points(paths, key=str(compared["key"])),
-            player=COMPARISON_PLAYER,
-            may_build=not building,
-        )
+        _video(compared, player=COMPARISON_PLAYER, may_build=not building)
 
 
 def _compared(playing: pd.Series | None, *, picked: pd.Series | None) -> pd.Series | None:
@@ -1724,16 +1718,17 @@ def _compared(playing: pd.Series | None, *, picked: pd.Series | None) -> pd.Seri
     return playing
 
 
-def _video(track: pd.Series, *, points: pd.DataFrame, player: str, may_build: bool) -> bool:
+def _video(track: pd.Series, *, player: str, may_build: bool) -> bool:
     """The video of one track under a line naming it, and whether a build was
     asked for."""
     title, note = VIDEO_TITLES[player]
     st.subheader(title, help=note)
     st.caption(f"Track {int(track['track_id'])} in {track['clip']}")
+    key = str(track["key"])
     return _clip(
-        str(track["key"]),
+        key,
         recording=str(track["recording"]),
-        stored=_stored_track(points),
+        stored=_stored_track(_track_points(PATHS_PATH.stat().st_mtime, key=key)),
         player=player,
         may_build=may_build,
     )
@@ -2232,13 +2227,36 @@ def _map_frame(stamp: float) -> pd.DataFrame:
     return frame
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_resource(show_spinner=False, max_entries=1)
 def _path_frame(stamp: float) -> pd.DataFrame:
     """Every mapped track frame by frame, keyed the way the map is, read again
-    whenever the file changes."""
+    whenever the file changes.
+
+    The frame is handed out as it stands and never copied, because it is
+    millions of rows and a copy of it on every run of the page costs more
+    than everything the page draws. Whatever takes it holds it read
+    only: take a slice, and write into the slice.
+
+    One is kept, so that a map written again while the page is open does
+    not leave the one it replaces in memory.
+    """
     frame = pq.read_table(PATHS_PATH).to_pandas()
     frame["key"] = _keys(frame)
     return frame
+
+
+@st.cache_data(show_spinner=False, max_entries=PANEL_CACHE_ENTRIES)
+def _track_points(stamp: float, *, key: str) -> pd.DataFrame:
+    """One track's path, frame by frame, out of the frames of every track.
+
+    Finding a track means reading every row of the corpus, so the tracks
+    looked at lately are kept.
+
+    The stamp is the paths file's modification time, and is what the
+    cache is keyed on, which is why it is passed although the body never
+    reads it.
+    """
+    return _points(_path_frame(stamp), key=key)
 
 
 @st.cache_data(show_spinner=False, max_entries=PANEL_CACHE_ENTRIES)
