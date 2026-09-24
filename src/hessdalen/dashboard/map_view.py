@@ -34,6 +34,7 @@ import streamlit as st
 from plotly.colors import hex_to_rgb, qualitative
 from streamlit.delta_generator import DeltaGenerator
 
+from hessdalen.analysis.spectra import SIGNALS
 from hessdalen.config import config
 from hessdalen.dashboard.clip_queue import ClipQueue, Job, Report
 from hessdalen.dashboard.cluster_labels import (
@@ -358,13 +359,14 @@ COLOUR_HELP = (
     "thing the folder is named for."
 )
 DRAWING_HELP = (
-    "What every gallery panel holds, and what is drawn under the light curve of the selected track. A "
-    "path is where the track went. Any other choice reads that signal on every frame the track spans "
-    "and draws how strongly it repeated, with the rate rising up the panel and the frames running "
-    "left to right, so a track that repeats at one rate carries a bright band across it. Brightness "
-    "and size are the blob's own; wobble is how far it strayed from its straight line; presence is "
-    "whether it was found at all, which repeats at the rate the detector loses a track and picks it "
-    "up again. Grey is where the track was too short to read that rate."
+    "Which signal the rhythm chart under the selected track's light curve draws, and what every "
+    "gallery panel holds. A rhythm drawing reads its signal on every frame the track spans and gives "
+    "how strongly it repeated, the rate rising upwards and the frames running left to right, so a "
+    "track that repeats at one rate carries a bright band across it. Brightness and size are the "
+    "blob's own. Wobble is how far it strayed from its straight line. Presence is whether it was "
+    "found at all, which repeats at the rate the detector loses a track and picks it up again. Path "
+    "returns the galleries to the tracks' paths and leaves the chart on brightness. Grey is where "
+    "the track was too short to read that rate, which near either end is every slow rate."
 )
 SEARCH_HELP = (
     "Select a track by its number, by its recording, or by both, as the heading over a selected track "
@@ -1313,9 +1315,7 @@ def _selected(track: pd.Series, *, points: pd.DataFrame) -> None:
     st.altair_chart(frame_view(points))
     st.altair_chart(close_up(points))
     st.altair_chart(light_curve(points))
-    drawing = _drawing()
-    if drawing != PATH_DRAWING:
-        st.altair_chart(rhythm_chart(points, signal=drawing.lower()))
+    st.altair_chart(rhythm_chart(points, signal=charted_signal(_drawing())))
 
 
 def _track_tagging(track: pd.Series) -> None:
@@ -2147,8 +2147,19 @@ def _gallery_markup(stamp: float, entries: tuple[GalleryEntry, ...], *, frame: s
 
 
 def _drawing() -> str:
-    """What the galleries and the selected track's second chart draw."""
+    """What the galleries and the selected track's rhythm chart draw."""
     return str(st.session_state.get(DRAWING_KEY) or PATH_DRAWING)
+
+
+def charted_signal(drawing: str) -> str:
+    """The signal the selected track's rhythm chart draws.
+
+    The chart stands under the light curve whatever the galleries are
+    drawing, so a track's rhythm can be read against what its blob was
+    doing at the time without giving up the gallery of paths. It follows
+    the chosen signal wherever one is chosen.
+    """
+    return SIGNALS[0] if drawing == PATH_DRAWING else drawing.lower()
 
 
 def _gallery_cluster(chosen: str, *, picked: pd.Series | None) -> str | None:

@@ -12,6 +12,7 @@ from hessdalen.dashboard.map_view import (
     CLUSTER_TRACKS,
     NAME_COLUMN,
     NEIGHBOUR_TRACKS,
+    PATH_DRAWING,
     PICKED_TRACKS,
     TABLE_COLUMNS,
     TAGS_COLUMN,
@@ -20,6 +21,7 @@ from hessdalen.dashboard.map_view import (
     VALIDATED,
     VALIDATED_COLUMN,
     by_validation,
+    charted_signal,
     cluster_names,
     in_order,
     labelled,
@@ -310,6 +312,17 @@ def test_a_track_that_had_ended_is_left_out() -> None:
     found = overlapping(_of_one_recording(), ranges=ranges, track=_of_one_recording().iloc[3])
 
     assert found["track_id"].tolist() == [3]
+
+
+def test_the_rhythm_chart_follows_the_chosen_signal() -> None:
+    assert charted_signal("Wobble") == "wobble"
+    assert charted_signal("Presence") == "presence"
+
+
+def test_the_rhythm_chart_is_drawn_while_the_galleries_draw_paths() -> None:
+    """The chart stands under the light curve whatever the galleries hold, so
+    a rhythm can be read against the blob without giving up the paths."""
+    assert charted_signal(PATH_DRAWING) == "brightness"
 
 
 def _of_one_recording() -> pd.DataFrame:

@@ -165,18 +165,24 @@ someone gave a cluster on this
 page, and the second is where the recording sits in the archive, which
 names the whole recording rather than the track.
 
-Drawing in the sidebar gives what every gallery panel holds, and what
-is drawn under the light curve of the selected track. Path is where the
-track went. The other choices name a signal read on every frame the
-track spans, and draw how strongly that signal repeated: the rate rises
-up the panel and the frames run left to right, so a track repeating at
-one rate carries a band across it. Brightness and size are the blob's
+A rhythm chart stands under the light curve of the selected track. It
+gives how strongly one of the track's signals repeated, with the rate
+rising up the chart and the frames running left to right on the light
+curve's own axis, so a track repeating at one rate carries a band
+across it. Drawing in the sidebar gives which signal, and gives the
+same drawing to every gallery panel. Brightness and size are the blob's
 own, wobble is how far it strayed from its straight line, and presence
 is whether the detector found it at all, which repeats at the rate a
-track is lost and picked up again. Grey is where the track was too
-short to read that rate, which on a track of average length is most of
-the slow rates. The rates are cycles a frame, 25 times the same number
-in hertz on these recordings.
+track is lost and picked up again. Path returns the galleries to the
+tracks' paths and leaves the chart on brightness.
+
+The rates are cycles a frame, 25 times the same number in hertz on
+these recordings. Grey is where the track was too short to read that
+rate: a slow rate is read over a long stretch of track, so it cannot be
+read near either end, and the slowest rates cannot be read at all
+unless the track runs for about 150 frames. On a track of average
+length, 45 frames, that leaves the faster two thirds of the rates and
+only the middle of the track.
 
 View over the map draws the tracks as points or lists them a row each.
 The table holds the tracks the map holds, and while Search in the
