@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -56,7 +56,7 @@ from hessdalen.dashboard.track_clip import (
     stretch_around,
     track_clip_paths,
 )
-from hessdalen.dashboard.track_gallery import track_gallery
+from hessdalen.dashboard.track_gallery import ADD, RANGE, track_gallery
 from hessdalen.dashboard.track_history import History, cleared, stepped, visited
 from hessdalen.dashboard.track_map_chart import MAP_HEIGHT, track_map_chart
 from hessdalen.dashboard.track_preview import GalleryEntry, close_up, frame_view, gallery_html, light_curve
@@ -127,8 +127,8 @@ COLOUR_COLUMNS = {
 }
 VALIDATION_CHOICES = ("All", "Validated", "Unvalidated")
 ANY_VALIDATION, VALIDATED, UNVALIDATED = VALIDATION_CHOICES
-NAMING_CHOICES = ("Cluster", "Neighbours")
-CLUSTER_TRACKS, NEIGHBOUR_TRACKS = NAMING_CHOICES
+NAMING_CHOICES = ("Cluster", "Neighbours", "Picked")
+CLUSTER_TRACKS, NEIGHBOUR_TRACKS, PICKED_TRACKS = NAMING_CHOICES
 GALLERY_ORDERS = ("Distance", "Video cached", "Cluster label")
 BY_DISTANCE, BY_CACHED, BY_CLUSTER_NAME = GALLERY_ORDERS
 SAMPLE_ORDERS = (BY_DISTANCE, BY_CACHED)
@@ -226,6 +226,7 @@ TABLE_KEY = "track_table"
 TABLE_ROWS_KEY = "track_table_rows"
 HISTORY_KEY = "track_history"
 PLAYING_KEY = "playing_track"
+PICKED_KEY = "picked_tracks"
 SAMPLE_GALLERY_KEY = "sample_gallery"
 NEAREST_GALLERY_KEY = "nearest_gallery"
 TOGETHER_GALLERY_KEY = "together_gallery"
@@ -422,7 +423,10 @@ PANEL_HELP = (
 )
 MARKS_HELP = (
     "Click a panel to play its track's video, which leaves the selected track where it is, and press the "
-    "arrow on a panel to jump to its track, which selects it the way a click on its point does. The "
+    "arrow on a panel to jump to its track, which selects it the way a click on its point does. Ctrl and "
+    "a click take a panel into the picked tracks or out of them again, and Shift and a click take in the "
+    "run from the first picked panel to the clicked one, which Apply to under the galleries then gives a "
+    "name to. A picked panel is boxed, and the video stays with the panel picked first. The "
     "panel whose video is "
     "playing carries a play mark and is framed in the colour of that mark. A camera stands over a track "
     "whose recording is on disk, which is a track that can be played without waiting for a fetch, and a "
@@ -463,10 +467,14 @@ NAMING_HELP = (
     "Which tracks the name is given to. Cluster gives it to every track of the cluster the gallery above "
     "draws, wherever those tracks lie on the map. Neighbours gives it to the selected track and the "
     "tracks nearest it, which the Nearest tracks gallery draws, whichever cluster each of them is in, and "
-    "is how a name is given to a neighbourhood the clustering cut in two. The selected track takes the "
-    "name either way. Naming a cluster leaves alone the other tracks put under a name of their own, and "
-    "naming the nearest tracks takes all of them."
+    "is how a name is given to a neighbourhood the clustering cut in two. Picked gives it to the tracks "
+    "picked out of the galleries with Ctrl and a click, and to nothing else, which is how a name is "
+    "given to the tracks of a cluster that hold one thing while the rest hold another. The selected "
+    "track takes the name of its cluster and of its neighbourhood, and is among the picked tracks only "
+    "where it was picked. Naming a cluster leaves alone the other tracks put under a name of their own, "
+    "and naming the nearest or the picked tracks takes all of them."
 )
+PICKING_TEXT = "Ctrl and a click on the panels of a gallery pick the tracks to name."
 SIMILAR_TEXT = (
     "A name holds the tracks given it and nothing more, so two spellings of one thing keep their tracks "
     "apart. Both names are kept if that is what you meant."
@@ -845,11 +853,63 @@ def _together_jumped() -> None:
 
 
 def _gallery_clicked(component: str) -> None:
-    """Play the video of the clicked track, leaving the selected track where it
-    is, so that a cluster can be gone through video by video."""
+    """Pick the clicked track out of the gallery and play its video, leaving
+    the selected track where it is, so that a cluster can be gone through video
+    by video.
+
+    A click on its own picks the one panel. Ctrl and Shift pick more of
+    them, and the video stays with the first of the picked tracks, which
+    is the one a plain click left.
+    """
     clicked = _reported(component, event="clicked")
-    if clicked:
-        st.session_state[PLAYING_KEY] = clicked
+    if not clicked:
+        return
+
+    reach, _moment, key = clicked.split(" ", 2)
+    picked = picked_tracks(
+        _picked_keys(), key=key, reach=reach, order=list(st.session_state.get(_order_key(component), []))
+    )
+    st.session_state[PICKED_KEY] = picked
+    if picked:
+        st.session_state[PLAYING_KEY] = picked[0]
+
+
+def picked_tracks(picked: Sequence[str], *, key: str, reach: str, order: Sequence[str]) -> tuple[str, ...]:
+    """The tracks picked out of the galleries once this panel is clicked.
+
+    A click on its own leaves the one panel picked. Ctrl takes the panel
+    in beside the tracks already picked, or out again where it is one of
+    them. Shift picks the run from the first picked track to the clicked
+    one, as the gallery holding them stands, which is how a stretch of a
+    gallery is picked at once.
+
+    The track picked first stays first, because its video is the one
+    playing. A run is picked out of one gallery, so a shift click while
+    the first picked track is in another gallery picks the clicked panel
+    alone.
+    """
+    if reach == ADD:
+        return tuple(held for held in picked if held != key) if key in picked else (*picked, key)
+
+    anchor = picked[0] if picked else ""
+    if reach != RANGE or anchor not in order or key not in order:
+        return (key,)
+
+    first, last = order.index(anchor), order.index(key)
+    run = order[min(first, last) : max(first, last) + 1]
+    return tuple(run if first <= last else reversed(run))
+
+
+def _picked_keys() -> tuple[str, ...]:
+    """The tracks picked out of the galleries, in the order they were
+    picked."""
+    return tuple(st.session_state.get(PICKED_KEY, ()))
+
+
+def _order_key(component: str) -> str:
+    """Where a gallery keeps the tracks it drew, in the order it drew them,
+    which is what a shift click reads the run it picks off."""
+    return f"{component}:order"
 
 
 def _gallery_jumped(component: str) -> None:
@@ -887,10 +947,13 @@ def _select(key: str) -> None:
     through.
 
     Its video is the one that plays from here, until a gallery panel is
-    clicked.
+    clicked. The tracks picked out of the galleries go with the track
+    they were picked around, because the galleries are drawn afresh for
+    the track stood on now.
     """
     st.session_state[HISTORY_KEY] = visited(_history(), key=key)
     st.session_state.pop(PLAYING_KEY, None)
+    st.session_state.pop(PICKED_KEY, None)
 
 
 def _step(offset: int) -> None:
@@ -1883,14 +1946,13 @@ def _labelling(tracks: pd.DataFrame, *, cluster: str, nearest: pd.DataFrame, sel
     )
 
     labels = _cluster_labels(_labels_stamp())
-    neighbours = given_to == NEIGHBOUR_TRACKS
-    members = nearest["key"].tolist() if neighbours else tracks.loc[tracks["cluster"] == cluster, "key"].tolist()
-    group = named_group(labels, members=members, selected=selected, neighbours=neighbours)
-    box = f"{given_to}:{selected}" if neighbours else f"{given_to}:{cluster}"
+    members = _naming_members(tracks, cluster=cluster, nearest=nearest, given_to=given_to)
+    group = named_group(labels, members=members, selected=selected, given_to=given_to)
+    box = f"{given_to}:{cluster}" if given_to == CLUSTER_TRACKS else f"{given_to}:{selected}"
     naming = Naming(path=LABELS_PATH, keys=group.moving, box=f"{LABEL_KEY}:{box}", confirms=False)
 
     _name_box(chooser, label="Cluster label", given=group.given, naming=naming, help=LABEL_HELP)
-    st.caption(_naming_caption(group))
+    st.caption(_naming_caption(group, given_to=given_to))
     save.button(
         "Save",
         key=f"{SAVE_KEY}:{cluster}",
@@ -1901,22 +1963,36 @@ def _labelling(tracks: pd.DataFrame, *, cluster: str, nearest: pd.DataFrame, sel
     )
 
 
-def named_group(labels: dict[str, list[str]], *, members: list[str], selected: str, neighbours: bool) -> Group:
+def _naming_members(tracks: pd.DataFrame, *, cluster: str, nearest: pd.DataFrame, given_to: str) -> list[str]:
+    """The tracks the chosen group is drawn from."""
+    if given_to == NEIGHBOUR_TRACKS:
+        return [str(key) for key in nearest["key"]]
+    if given_to == PICKED_TRACKS:
+        return list(_picked_keys())
+    return [str(key) for key in tracks.loc[tracks["cluster"] == cluster, "key"]]
+
+
+def named_group(labels: dict[str, list[str]], *, members: list[str], selected: str, given_to: str) -> Group:
     """The tracks a name is given to, out of the group it is being given to.
 
-    The selected track takes the name whichever group is named, because
-    it is the track the person is looking at while they name it. It
-    stands at the middle of its neighbourhood, which is drawn as the
-    tracks nearest it and holds none of itself.
+    The selected track takes the name of its cluster and of its
+    neighbourhood, because it is the track the person is looking at
+    while they name it. It stands at the middle of its neighbourhood,
+    which is drawn as the tracks nearest it and holds none of itself.
+    The tracks picked out of the galleries are named as they were
+    picked, and the selected track is among them only where it was
+    picked as well.
 
     Any other track of a cluster that stands under a name of its own is
     left alone, so that naming the cluster again does not take a
-    reassignment back.
+    reassignment back. The nearest tracks and the picked tracks all take
+    the name, because they were picked by hand.
     """
-    keys = [selected, *members] if neighbours and selected else list(members)
+    keys = [selected, *members] if given_to == NEIGHBOUR_TRACKS and selected else list(members)
     given = label_of(labels, keys=keys)
     held = _by_key(labels)
-    moving = keys if neighbours else [key for key in keys if key == selected or held.get(key, "") in ("", given)]
+    whole = given_to in (NEIGHBOUR_TRACKS, PICKED_TRACKS)
+    moving = keys if whole else [key for key in keys if key == selected or held.get(key, "") in ("", given)]
     return Group(
         keys=tuple(keys),
         moving=tuple(moving),
@@ -1925,11 +2001,11 @@ def named_group(labels: dict[str, list[str]], *, members: list[str], selected: s
     )
 
 
-def _naming_caption(group: Group) -> str:
+def _naming_caption(group: Group, *, given_to: str) -> str:
     """How many of the tracks the name would be given to are under it
     already."""
     if not group.keys:
-        return "Select a track to name the ones nearest it."
+        return PICKING_TEXT if given_to == PICKED_TRACKS else "Select a track to name the ones nearest it."
     if not group.given:
         return f"None of these {len(group.keys)} tracks has a name yet."
     return f"{group.under} of {len(group.keys)} tracks under {group.given}"
@@ -1999,8 +2075,15 @@ def _panels(
 ) -> None:
     """The chosen tracks drawn from their stored paths, a panel each, in rows
     that wrap to the width of the column, each panel playing its track's video
-    when it is clicked and selecting the track from its Jump button."""
+    when it is clicked and selecting the track from its Jump button.
+
+    The order the panels stand in is kept in the session, because a
+    shift click picks the run between two of them and the click is
+    answered before the page is drawn again.
+    """
     played = "" if playing is None else str(playing["key"])
+    picked = set(_picked_keys())
+    st.session_state[_order_key(key)] = [str(track) for track in chosen["key"]]
     entries = tuple(
         GalleryEntry(
             key=str(track),
@@ -2008,6 +2091,7 @@ def _panels(
             cached=bool(cached),
             validated=bool(validated),
             playing=str(track) == played,
+            picked=str(track) in picked,
         )
         for track, cached, validated, caption in zip(
             chosen["key"], chosen[CACHED_COLUMN], chosen[VALIDATED_COLUMN], captions

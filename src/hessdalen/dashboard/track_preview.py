@@ -49,6 +49,15 @@ from the star over the selected track, because a track playing and a
 track selected are two different things.
 """
 
+PICKED_OUTLINE_PIXELS = 2
+PICKED_OFFSET_PIXELS = 2
+"""How a picked panel is boxed, in pixels.
+
+The box is drawn in the page's own text colour, which stands apart from
+every colour a gallery frames its panels in and reads in either theme.
+An outline is drawn outside the panel and moves nothing beside it.
+"""
+
 JUMP_MARK = "↗"
 JUMP_TITLE = "Jump to this track"
 
@@ -61,13 +70,15 @@ yellow, so direction and pace read off the spacing of the dots."""
 class GalleryEntry:
     """One panel of a gallery: the track it draws, what stands over it,
     whether the track's recording is on disk, whether the track itself is
-    confirmed, and whether its video is the one playing."""
+    confirmed, whether its video is the one playing, and whether it is among
+    the tracks picked out of the galleries."""
 
     key: str
     caption: str
     cached: bool
     validated: bool
     playing: bool
+    picked: bool
 
 
 def frame_view(points: pd.DataFrame) -> alt.Chart:
@@ -132,7 +143,7 @@ def gallery_html(paths: pd.DataFrame, *, entries: Sequence[GalleryEntry], frame:
     drawn = fitted(paths[paths["key"].isin(keys)])
     by_key = {key: group.sort_values("frame_number") for key, group in drawn.groupby("key", sort=False)}
     figures = "".join(_panel_svg(by_key[entry.key], entry=entry, frame=frame) for entry in entries)
-    return f'<div style="display:flex;flex-wrap:wrap;gap:{PANEL_GAP_PIXELS}px">{figures}</div>'
+    return f'<div style="display:flex;flex-wrap:wrap;gap:{PANEL_GAP_PIXELS}px;user-select:none">{figures}</div>'
 
 
 def _panel_svg(points: pd.DataFrame, *, entry: GalleryEntry, frame: str) -> str:
@@ -153,9 +164,14 @@ def _panel_svg(points: pd.DataFrame, *, entry: GalleryEntry, frame: str) -> str:
     source = "data:image/svg+xml;base64," + base64.b64encode(svg.encode()).decode()
     caption = html.escape(entry.caption)
     thickness = PLAYING_FRAME_PIXELS if entry.playing else FRAME_PIXELS
+    boxed = (
+        f";outline:{PICKED_OUTLINE_PIXELS}px solid currentColor;outline-offset:{PICKED_OFFSET_PIXELS}px"
+        if entry.picked
+        else ""
+    )
     return (
         f'<figure data-track="{html.escape(entry.key)}" '
-        f'style="margin:0;width:{PANEL_PIXELS}px;cursor:pointer">'
+        f'style="margin:0;width:{PANEL_PIXELS}px;cursor:pointer{boxed}">'
         f'<figcaption style="display:flex;gap:4px;font-size:{CAPTION_FONT_PIXELS}px">'
         f'<span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{caption}</span>'
         f'<span style="margin-left:auto;white-space:nowrap">{_marks(entry)}</span></figcaption>'

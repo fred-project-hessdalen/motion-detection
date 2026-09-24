@@ -233,7 +233,12 @@ carries a play mark and is framed in the colour of that mark. Pressing
 the arrow on a panel jumps to its track, which selects it the way a
 click on its point on the map does. A panel carries a camera while its
 recording is on disk and a green tick once someone has confirmed the
-track. Sort by, beside either gallery's heading, puts its panels in the
+track. Ctrl and a click take a panel into the picked tracks or out of
+them again, and Shift and a click take in the run from the first picked
+panel to the clicked one, as the gallery holding them stands. A picked
+panel is boxed, the video under Comparison stays with the panel picked
+first, and the picked tracks are what Apply to names. Picking starts
+afresh whenever another track is selected. Sort by, beside either gallery's heading, puts its panels in the
 order picked there: nearest the selected track first, which is where
 both galleries start, the tracks whose recording is on disk first, or,
 for the nearest tracks, the tracks of each cluster label together. The
@@ -247,10 +252,15 @@ beside the box chooses the group. Cluster names every track of the
 cluster the gallery draws. Neighbours names the selected track and the
 tracks nearest it, the ones the Nearest tracks gallery draws, whichever
 cluster each of them is in, which is how a name is given to a
-neighbourhood the clustering cut in two. The selected track takes the
-name either way, because it is the track being looked at while the name
-is given. Naming a cluster leaves alone the other tracks put under a
-name of their own, and naming the nearest tracks takes all of them. Cluster label and Track label both offer the names
+neighbourhood the clustering cut in two. Picked names the tracks picked
+out of the galleries with Ctrl and a click, and nothing else, which is
+how a name is given to the tracks of a cluster that hold one thing
+while the rest of the cluster holds another. The selected track takes
+the name of its cluster and of its neighbourhood, because it is the
+track being looked at while the name is given, and it is among the
+picked tracks only where it was picked. Naming a cluster leaves alone
+the other tracks put under a name of their own, and naming the nearest
+or the picked tracks takes all of them. Cluster label and Track label both offer the names
 given so far, to a cluster or to a track, in a list that narrows to what
 is typed into it, and anything else typed there is a new name. A name is
 kept

@@ -9,7 +9,10 @@ from hessdalen.dashboard.map_view import (
     BY_CLUSTER_NAME,
     BY_DISTANCE,
     CACHED_COLUMN,
+    CLUSTER_TRACKS,
     NAME_COLUMN,
+    NEIGHBOUR_TRACKS,
+    PICKED_TRACKS,
     TABLE_COLUMNS,
     TAGS_COLUMN,
     UNNAMED,
@@ -22,10 +25,12 @@ from hessdalen.dashboard.map_view import (
     labelled,
     named_group,
     overlapping,
+    picked_tracks,
     searched,
     stretches,
     table_rows,
 )
+from hessdalen.dashboard.track_gallery import ADD, ONE, RANGE
 
 INSECT = "Cam1_2025-06-03__12-40-00_noInsect"
 ROD = "Cam2_2025-01-09__23-20-00_rod"
@@ -151,7 +156,7 @@ def _gathered() -> pd.DataFrame:
 
 
 def test_naming_a_cluster_names_every_track_of_it_that_has_no_name() -> None:
-    group = named_group({}, members=["a/1", "a/2"], selected="a/1", neighbours=False)
+    group = named_group({}, members=["a/1", "a/2"], selected="a/1", given_to=CLUSTER_TRACKS)
 
     assert group.moving == ("a/1", "a/2")
     assert group.given == ""
@@ -162,7 +167,7 @@ def test_naming_a_cluster_names_the_selected_track_whatever_it_stands_under() ->
     so the name is about it before it is about the rest of the cluster."""
     labels = {"bird": ["a/1", "a/2"], "plane": ["a/3"]}
 
-    group = named_group(labels, members=["a/1", "a/2", "a/3"], selected="a/3", neighbours=False)
+    group = named_group(labels, members=["a/1", "a/2", "a/3"], selected="a/3", given_to=CLUSTER_TRACKS)
 
     assert group.moving == ("a/1", "a/2", "a/3")
     assert group.given == "bird"
@@ -171,7 +176,7 @@ def test_naming_a_cluster_names_the_selected_track_whatever_it_stands_under() ->
 def test_naming_a_cluster_leaves_the_other_tracks_under_a_name_of_their_own() -> None:
     labels = {"bird": ["a/1", "a/2"], "plane": ["a/3"]}
 
-    group = named_group(labels, members=["a/1", "a/2", "a/3"], selected="a/1", neighbours=False)
+    group = named_group(labels, members=["a/1", "a/2", "a/3"], selected="a/1", given_to=CLUSTER_TRACKS)
 
     assert group.moving == ("a/1", "a/2")
     assert group.under == 2
@@ -180,15 +185,68 @@ def test_naming_a_cluster_leaves_the_other_tracks_under_a_name_of_their_own() ->
 def test_naming_the_nearest_tracks_names_the_track_they_were_drawn_around() -> None:
     """A neighbourhood is the tracks nearest the selected one, which holds none
     of the selected track itself."""
-    group = named_group({"bird": ["a/2"]}, members=["a/2", "a/3"], selected="a/1", neighbours=True)
+    group = named_group({"bird": ["a/2"]}, members=["a/2", "a/3"], selected="a/1", given_to=NEIGHBOUR_TRACKS)
 
     assert group.keys == ("a/1", "a/2", "a/3")
     assert group.moving == ("a/1", "a/2", "a/3")
     assert group.under == 1
 
 
+def test_naming_the_picked_tracks_names_those_tracks_and_no_others() -> None:
+    """The picked tracks were picked by hand, so every one of them takes the
+    name and the selected track is left out where it was not picked."""
+    labels = {"bird": ["a/2"], "plane": ["a/3"]}
+
+    group = named_group(labels, members=["a/2", "a/3"], selected="a/1", given_to=PICKED_TRACKS)
+
+    assert group.keys == ("a/2", "a/3")
+    assert group.moving == ("a/2", "a/3")
+
+
+def test_picking_no_panel_yet_leaves_no_group_to_name() -> None:
+    group = named_group({}, members=[], selected="a/1", given_to=PICKED_TRACKS)
+
+    assert group.moving == ()
+
+
+def test_a_click_on_a_panel_picks_that_one_track() -> None:
+    assert picked_tracks(("a/2", "a/3"), key="a/1", reach=ONE, order=GALLERY) == ("a/1",)
+
+
+def test_ctrl_and_a_click_take_a_panel_into_the_picked_tracks() -> None:
+    assert picked_tracks(("a/2",), key="a/4", reach=ADD, order=GALLERY) == ("a/2", "a/4")
+
+
+def test_ctrl_and_a_click_on_a_picked_panel_take_it_out_again() -> None:
+    assert picked_tracks(("a/2", "a/4"), key="a/2", reach=ADD, order=GALLERY) == ("a/4",)
+
+
+def test_shift_and_a_click_pick_the_run_up_to_the_panel() -> None:
+    assert picked_tracks(("a/2",), key="a/4", reach=RANGE, order=GALLERY) == ("a/2", "a/3", "a/4")
+
+
+def test_a_run_picked_backwards_keeps_the_track_picked_first_in_front() -> None:
+    """The first of the picked tracks is the one whose video plays, so a run
+    picked back towards the start of a gallery keeps it there."""
+    assert picked_tracks(("a/4",), key="a/2", reach=RANGE, order=GALLERY) == ("a/4", "a/3", "a/2")
+
+
+def test_shift_and_a_click_with_nothing_picked_pick_the_one_panel() -> None:
+    assert picked_tracks((), key="a/3", reach=RANGE, order=GALLERY) == ("a/3",)
+
+
+def test_a_run_reaches_no_further_than_the_gallery_it_is_picked_in() -> None:
+    """A run is picked out of one gallery, and the track picked first can be
+    one another gallery drew."""
+    assert picked_tracks(("b/9",), key="a/3", reach=RANGE, order=GALLERY) == ("a/3",)
+
+
+GALLERY = ["a/1", "a/2", "a/3", "a/4", "a/5"]
+"""Five panels as a gallery stands them."""
+
+
 def test_the_nearest_tracks_of_no_selected_track_are_no_group() -> None:
-    group = named_group({}, members=[], selected="", neighbours=True)
+    group = named_group({}, members=[], selected="", given_to=NEIGHBOUR_TRACKS)
 
     assert group.keys == ()
     assert group.moving == ()

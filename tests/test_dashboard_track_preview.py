@@ -133,10 +133,25 @@ def test_the_panel_whose_video_plays_stands_out_from_the_gallery() -> None:
     assert "#e6007e" in figures[1]
 
 
+def test_a_picked_panel_is_boxed_and_its_neighbour_is_not() -> None:
+    entries = [_entry("a", "1. picked", picked=True), _entry("b", "2. birds")]
+
+    figures = gallery_html(_paths(), entries=entries, frame="#e6007e").split("<figure")[1:]
+
+    assert "outline" in figures[0]
+    assert "outline" not in figures[1]
+
+
 def _entry(
-    key: str, caption: str, *, cached: bool = False, validated: bool = False, playing: bool = False
+    key: str,
+    caption: str,
+    *,
+    cached: bool = False,
+    validated: bool = False,
+    playing: bool = False,
+    picked: bool = False,
 ) -> GalleryEntry:
-    return GalleryEntry(key=key, caption=caption, cached=cached, validated=validated, playing=playing)
+    return GalleryEntry(key=key, caption=caption, cached=cached, validated=validated, playing=playing, picked=picked)
 
 
 def _paths() -> pd.DataFrame:
