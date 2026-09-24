@@ -122,18 +122,15 @@ DEVICE_HELP = (
 
 def run() -> None:
     st.set_page_config(page_title="Movement detection", layout="wide")
-    st.navigation(
-        [
-            st.Page(main, title="Recordings", default=True),
-            st.Page(map_view.page, title="Track map", url_path="track-map"),
-        ]
-    ).run()
+    recordings = st.Page(main, title="Recordings", default=True)
+    st.session_state[map_view.RECORDINGS_PAGE_KEY] = recordings
+    st.navigation([recordings, st.Page(map_view.page, title="Track map", url_path="track-map")]).run()
 
 
 def main() -> None:
     st.title("Movement detection")
 
-    videos = development_videos(_examples_dir())
+    videos = development_videos(_examples_dir()) + development_videos(map_view.TUNING_DIR)
     if not videos:
         st.error(f"No recordings under {_examples_dir()}. Fetch them with `dvc pull`.")
         return
@@ -485,6 +482,7 @@ def _recordings_table(videos: list[DevelopmentVideo], *, view: _RunView) -> Deve
     """Draw the list of recordings and return the one whose row is picked."""
     st.subheader("Recordings", help=RECORDINGS_HELP)
     rows = [_recording_row(video, view=view) for video in videos]
+    opening = _opening_row(videos)
 
     state = st.dataframe(
         pd.DataFrame(rows),
@@ -492,12 +490,24 @@ def _recordings_table(videos: list[DevelopmentVideo], *, view: _RunView) -> Deve
         width="stretch",
         on_select="rerun",
         selection_mode="single-row",
-        selection_default={"selection": {"rows": [0]}},
+        selection_default={"selection": {"rows": [opening]}},
         column_config={"Duration": st.column_config.TextColumn(help=DURATION_HELP)},
-        key="recordings",
+        key=f"recordings:{opening}",
     )
     picked = _picked_rows(state)
-    return videos[picked[0]] if picked else videos[0]
+    return videos[picked[0]] if picked else videos[opening]
+
+
+def _opening_row(videos: list[DevelopmentVideo]) -> int:
+    """The row the table opens on, which is the clip the track map last cut
+    for tuning and otherwise the first.
+
+    The row is part of the table's key, because a table holds whichever
+    row was picked in it and would otherwise stay on that one.
+    """
+    wanted = str(st.session_state.get(map_view.TUNING_PICK_KEY) or "")
+    names = [video.name for video in videos]
+    return names.index(wanted) if wanted in names else 0
 
 
 def _picked_rows(state: DeltaGenerator | DataframeState) -> list[int]:

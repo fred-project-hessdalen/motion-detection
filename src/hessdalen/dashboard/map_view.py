@@ -67,6 +67,7 @@ from hessdalen.dashboard.track_reference import (
     reference_line,
     references_csv,
 )
+from hessdalen.dashboard.tuning import MARGIN_SECONDS, cut_for_tuning, note_label
 from hessdalen.dashboard.track_validation import read_validated, write_validated
 from hessdalen.dashboard.video_cache import (
     MIN_FREE_BYTES,
@@ -88,6 +89,7 @@ TRACK_LABELS_PATH = MAP_PATH.with_name("track-labels.json")
 VALIDATED_PATH = MAP_PATH.with_name("validated-tracks.json")
 VIDEOS_DIR = REPO_ROOT / "data" / "corpus" / "videos"
 FETCHED_DIR = REPO_ROOT / "data" / "out" / "dashboard" / "videos"
+TUNING_DIR = REPO_ROOT / "data" / "out" / "dashboard" / "tuning"
 CLIPS_DIR = REPO_ROOT / "data" / "out" / "dashboard" / "tracks"
 LEDGERS = (
     REPO_ROOT / "data" / "out" / "sift" / "ledger.jsonl",
@@ -235,6 +237,12 @@ TAGS_KEY = "track_tags"
 SAVE_TAGS_KEY = "save_track_tags"
 TAGS_FILTER_KEY = "tags_filter"
 SIMILAR_TAGS_KEY = "similar_tags"
+TUNE_KEY = "tune_track"
+TUNING_PICK_KEY = "tuning_pick"
+"""Session key holding the clip the recordings page is to open on."""
+
+RECORDINGS_PAGE_KEY = "recordings_page"
+"""Session key holding the recordings page, which this page switches to."""
 REASSIGN_KEY = "reassign_track"
 SAVE_REASSIGN_KEY = "save_reassign"
 VALIDATED_KEY = "track_validated"
@@ -495,6 +503,13 @@ REFERENCE_HELP = (
     "seconds of it the track ran over. The seconds come from the recording's own frame rate where the "
     "video is on disk, and from a nominal rate otherwise, which the line says."
 )
+TUNING_HELP = (
+    "Cut this stretch of the recording out and open it on the recordings page, where the settings can be "
+    f"moved and the detector run again. The cut runs {MARGIN_SECONDS:.0f} seconds either side of the track, "
+    "so what the detector missed beside it is in the clip as well. The clips are kept out of the way of the "
+    "example set, and the same stretch is cut only once."
+)
+TUNING_UNSOURCED_TEXT = "The recording is not on disk, so there is nothing to cut. Fetch it below first."
 EXPORT_HELP = (
     "Every tagged track as a row: its recording, its tags, the seconds it ran over, and the link to the "
     "recording in the archive."
@@ -1261,6 +1276,7 @@ def _reference(track: pd.Series, *, points: pd.DataFrame) -> None:
         return
 
     st.text_input("Reference", value=reference_line(held), disabled=True, help=REFERENCE_HELP)
+    _tuning(track, held=held)
     if not held.measured_rate:
         st.caption(f"{track['recording']} is not on disk, so the seconds stand on {NOMINAL_RATE:.0f} frames a second.")
     st.download_button(
@@ -1272,6 +1288,47 @@ def _reference(track: pd.Series, *, points: pd.DataFrame) -> None:
         mime="text/csv",
         help=EXPORT_HELP,
     )
+
+
+def _tuning(track: pd.Series, *, held: Reference) -> None:
+    """The button that cuts this track's stretch out and opens it on the
+    recordings page, where the settings can be moved.
+
+    What is worth tuning is usually what the detector missed beside the
+    track, which is why the stretch goes over rather than the track.
+    """
+    recording = _source(str(track["recording"]))
+    if recording is None or recording.path is None:
+        st.caption(TUNING_UNSOURCED_TEXT)
+        return
+
+    st.button(
+        "Tune on this stretch",
+        key=f"{TUNE_KEY}:{track['key']}",
+        on_click=_tune,
+        args=(recording.path, held),
+        help=TUNING_HELP,
+    )
+
+
+def _tune(video: Path, held: Reference) -> None:
+    """Cut the stretch, name it after what the track stands under, and take
+    the person to it."""
+    begin = max(held.begin_s - MARGIN_SECONDS, 0.0)
+    end = held.end_s + MARGIN_SECONDS
+    cut = cut_for_tuning(video, begin_s=begin, end_s=end, root=TUNING_DIR)
+    note_label(
+        TUNING_DIR,
+        name=cut.name,
+        label=", ".join(held.tags) or f"track {held.track_id}",
+        begin_s=held.begin_s - begin,
+        end_s=held.end_s - begin,
+    )
+
+    st.session_state[TUNING_PICK_KEY] = cut.name
+    page = st.session_state.get(RECORDINGS_PAGE_KEY)
+    if page is not None:
+        st.switch_page(page)
 
 
 def _track_reference(track: pd.Series, *, points: pd.DataFrame) -> Reference | None:
