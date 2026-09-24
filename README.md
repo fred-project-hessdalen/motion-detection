@@ -165,6 +165,14 @@ someone gave a cluster on this
 page, and the second is where the recording sits in the archive, which
 names the whole recording rather than the track.
 
+View over the map draws the tracks as points or lists them a row each.
+The table holds the tracks the map holds, and while Search in the
+sidebar names something it lists every track that search names out of
+the whole corpus, so a recording's name there lists that recording's
+tracks whichever of them the sidebar leaves off the map. A column
+heading sorts by that column, and ticking the box at the start of a row
+selects its track, the way a click on a point does.
+
 Pointing at a point fills the lines under the map with that track: the
 names it stands under, its cluster, its recording and the numbers the
 clustering read from it. The point they are read from carries an arrow

@@ -135,9 +135,43 @@ SAMPLE_ORDERS = (BY_DISTANCE, BY_CACHED)
 The tracks of one cluster stand under one name, so the sample of a
 cluster is not offered that order.
 """
+VIEW_CHOICES = ("Map", "Table")
+MAP_VIEW, TABLE_VIEW = VIEW_CHOICES
 SELECTED_CLUSTER = "Selected track's cluster"
 ROUGH_SIDE = "rough"
 OTHER_COLORS = qualitative.Dark24
+
+TABLE_COLUMNS = {
+    "track_id": "Track",
+    "clip": "Recording",
+    TAGS_COLUMN: "Tags",
+    CACHED_COLUMN: "Video cached",
+    VALIDATED_COLUMN: "Validated",
+    NAME_COLUMN: "Cluster label",
+    "cluster": "Cluster",
+    "label": "Folder",
+    "side": "Side",
+    "frames": "Frames",
+    "straightness": "Straightness",
+    "peak_deviation_max": "Peak deviation",
+}
+"""The columns of the table, in the order they stand in it, and the name over
+each.
+
+They are the lines the panel under the map holds. What names a track
+comes first, then how far through it someone is, then what it was
+grouped with and what it was measured as, because the table is wider
+than the page and the last of the columns are reached by scrolling.
+"""
+
+RECORDING_WIDTH = 250
+TAGS_WIDTH = 150
+"""How wide the two columns of the table are that hold names of their own, in
+pixels.
+
+A recording's name is 34 letters at its longest and the rest of the
+columns hold a word or a number, which the table sizes for itself.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,6 +219,9 @@ SHUFFLE_KEY = "gallery_shuffle"
 SAMPLE_ORDER_KEY = "sample_order"
 NEAREST_ORDER_KEY = "nearest_order"
 MAP_KEY = "track_map"
+VIEW_KEY = "track_view"
+TABLE_KEY = "track_table"
+TABLE_ROWS_KEY = "track_table_rows"
 HISTORY_KEY = "track_history"
 PLAYING_KEY = "playing_track"
 SAMPLE_GALLERY_KEY = "sample_gallery"
@@ -216,6 +253,10 @@ SIMILAR_TITLE = "Similar name"
 REPLACING_TITLE = "Change of name"
 NAME_PLACEHOLDER = "Choose or add a name"
 TAGS_PLACEHOLDER = "Choose or add tags"
+TRACKS_ROW = (3, 2)
+"""How the row over the map is divided: its heading, and whether the tracks
+are drawn as points or listed."""
+
 GALLERY_ROW = (2, 3, 1)
 NEIGHBOUR_ROW = (2, 3)
 """How the row over each gallery is divided: its heading, the order its panels
@@ -318,6 +359,21 @@ MAP_HELP = (
     "given stands over the middle of its points, and the "
     f"{NAMES_TITLE} entry in the legend takes every name off the map."
 )
+VIEW_HELP = (
+    "Whether the tracks are drawn as points or listed a row each. The table holds the tracks the map "
+    "holds, and a search in the sidebar lists every track it names out of the whole corpus, so a "
+    "recording's name there lists that recording's tracks whichever of them the sidebar leaves off the "
+    "map. Ticking a row selects its track, the way a click on a point does."
+)
+TABLE_HELP = (
+    "Every track the map holds, a row each, and every track a search names while there is one in the "
+    "sidebar, so a recording's name there lists the tracks of that recording. Click a column heading to "
+    "sort by it, and tick the box at the start of a row to select its track."
+)
+STRAIGHTNESS_HELP = "How straight the track's path is, from 0 for a path that doubles back to 1 for a line."
+PEAK_DEVIATION_HELP = "How far the track's brightest pixel stood from the background, in standard deviations."
+CACHED_TABLE_HELP = "Whether the track's recording is on disk, which is a track that plays without a fetch."
+VALIDATED_TABLE_HELP = "Whether someone has watched the track and stands by the name it is under."
 PATH_HELP = (
     "The track drawn from its stored path through the blob's centre, which is what the descriptors "
     "were computed from. Colour runs from dark blue on its first frame to yellow on its last."
@@ -611,17 +667,27 @@ def page() -> None:
 
     map_column, track_column = st.columns([3, 2])
     with map_column:
-        st.subheader("Tracks", help=MAP_HELP)
-        st.caption(f"{len(shown)} of {len(tracks)} tracks")
-        dimmed = _uncached(shown) if cached else frozenset()
-        figure = _scatter(
-            shown,
-            colour=str(colour or "Cluster"),
-            rings=rings,
-            dimmed=dimmed,
-            names=cluster_names(shown, labels=_cluster_labels(_labels_stamp())),
+        heading, view = st.columns(TRACKS_ROW, vertical_alignment="bottom")
+        drawn_as = str(
+            view.segmented_control("View", options=VIEW_CHOICES, default=MAP_VIEW, key=VIEW_KEY, help=VIEW_HELP)
+            or MAP_VIEW
         )
-        track_map_chart(figure, key=MAP_KEY, details=DETAIL_LINES, on_click=_map_clicked, on_clear=_map_cleared)
+        listed = drawn_as == TABLE_VIEW
+        heading.subheader("Tracks", help=TABLE_HELP if listed else MAP_HELP)
+        rows = searched(tracks, wanted=wanted) if listed and wanted.strip() else shown
+        st.caption(f"{len(rows)} of {len(tracks)} tracks")
+        if listed:
+            _table(rows)
+        else:
+            dimmed = _uncached(shown) if cached else frozenset()
+            figure = _scatter(
+                shown,
+                colour=str(colour or "Cluster"),
+                rings=rings,
+                dimmed=dimmed,
+                names=cluster_names(shown, labels=_cluster_labels(_labels_stamp())),
+            )
+            track_map_chart(figure, key=MAP_KEY, details=DETAIL_LINES, on_click=_map_clicked, on_clear=_map_cleared)
         _gallery(shown, cluster=cluster, sample=sample, playing=playing)
         if cluster is not None:
             _labelling(
@@ -658,6 +724,48 @@ def _steps() -> None:
     back, forward, _ = st.columns([1, 1, 3])
     back.button("Back", on_click=_step, args=(-1,), disabled=not history.behind, help=BACK_HELP, width="stretch")
     forward.button("Forward", on_click=_step, args=(1,), disabled=not history.ahead, help=FORWARD_HELP, width="stretch")
+
+
+def _table(tracks: pd.DataFrame) -> None:
+    """The tracks as a row each, in place of the map, one of them selected by a
+    click on its row.
+
+    The keys are kept beside the table, because a click reports the row
+    it landed on and the table itself holds no key.
+    """
+    st.session_state[TABLE_ROWS_KEY] = tracks["key"].tolist()
+    st.dataframe(
+        table_rows(tracks),
+        hide_index=True,
+        width="stretch",
+        height=MAP_HEIGHT,
+        on_select=_table_clicked,
+        selection_mode="single-row",
+        column_config={
+            "Recording": st.column_config.TextColumn(width=RECORDING_WIDTH),
+            "Tags": st.column_config.TextColumn(width=TAGS_WIDTH),
+            "Straightness": st.column_config.NumberColumn(format="%.2f", help=STRAIGHTNESS_HELP),
+            "Peak deviation": st.column_config.NumberColumn(format="%.1f", help=PEAK_DEVIATION_HELP),
+            "Video cached": st.column_config.CheckboxColumn(help=CACHED_TABLE_HELP),
+            "Validated": st.column_config.CheckboxColumn(help=VALIDATED_TABLE_HELP),
+        },
+        key=TABLE_KEY,
+    )
+
+
+def table_rows(tracks: pd.DataFrame) -> pd.DataFrame:
+    """The tracks as the table lists them, a row each under the names the rest
+    of the page gives them."""
+    return tracks[list(TABLE_COLUMNS)].rename(columns=TABLE_COLUMNS)
+
+
+def _table_clicked() -> None:
+    """Select the track whose row was clicked, which is what a click on its
+    point on the map does."""
+    picked = list(st.session_state[TABLE_KEY]["selection"]["rows"])
+    keys = list(st.session_state.get(TABLE_ROWS_KEY, []))
+    if picked and picked[0] < len(keys):
+        _select(str(keys[picked[0]]))
 
 
 def _map_clicked() -> None:

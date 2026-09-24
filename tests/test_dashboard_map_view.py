@@ -10,6 +10,7 @@ from hessdalen.dashboard.map_view import (
     BY_DISTANCE,
     CACHED_COLUMN,
     NAME_COLUMN,
+    TABLE_COLUMNS,
     TAGS_COLUMN,
     UNNAMED,
     UNVALIDATED,
@@ -21,6 +22,7 @@ from hessdalen.dashboard.map_view import (
     labelled,
     named_group,
     searched,
+    table_rows,
 )
 
 INSECT = "Cam1_2025-06-03__12-40-00_noInsect"
@@ -192,6 +194,35 @@ def test_the_nearest_tracks_of_no_selected_track_are_no_group() -> None:
 
 def _gone_through() -> pd.DataFrame:
     return pd.DataFrame({"key": ["a/1", "a/2", "a/3"], VALIDATED_COLUMN: [False, True, False]})
+
+
+def test_a_row_of_the_table_holds_the_track_under_the_names_the_page_gives_it() -> None:
+    listed = table_rows(_listed())
+
+    assert listed.columns.tolist() == list(TABLE_COLUMNS.values())
+    assert listed["Recording"].tolist() == [INSECT]
+    assert listed["Tags"].tolist() == ["bird"]
+    assert listed["Video cached"].tolist() == [True]
+
+
+def _listed() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "key": [f"2025-06-03/{INSECT}/7484"],
+            "track_id": [7484],
+            "clip": [INSECT],
+            TAGS_COLUMN: ["bird"],
+            NAME_COLUMN: ["bird"],
+            "cluster": ["4"],
+            "label": ["noInsect"],
+            "side": ["smooth"],
+            "frames": [117],
+            "straightness": [0.95],
+            "peak_deviation_max": [45.1],
+            CACHED_COLUMN: [True],
+            VALIDATED_COLUMN: [False],
+        }
+    )
 
 
 def _mapped() -> pd.DataFrame:
