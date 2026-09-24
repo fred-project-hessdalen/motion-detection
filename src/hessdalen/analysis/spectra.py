@@ -102,9 +102,16 @@ class TrackSignals:
     whether or not the detector reported it on each of them, because a
     rhythm is read against even time. Half the frames a track spans are
     typically filled this way.
+
+    Where the blob was on each of those frames is carried alongside the
+    signals, because a reading that takes the track's shape needs the
+    path on the same grid and would otherwise fill the gaps a second
+    time and differently.
     """
 
     frame_number: np.ndarray
+    centre_x: np.ndarray
+    centre_y: np.ndarray
     values: dict[str, np.ndarray]
 
 
@@ -140,16 +147,17 @@ def track_signals(
     spans that whole range.
     """
     grid, level, taken = _on_even_frames(frame_number)
-    across = _across_the_line(
-        np.interp(grid, level, centre_x[taken]),
-        np.interp(grid, level, centre_y[taken]),
-    )
+    along_x = np.interp(grid, level, centre_x[taken])
+    along_y = np.interp(grid, level, centre_y[taken])
+    across = _across_the_line(along_x, along_y)
 
     found = np.zeros(grid.size)
     found[level.astype(np.int64)] = 1.0
 
     return TrackSignals(
         frame_number=grid.astype(np.int64) + int(frame_number[0]),
+        centre_x=along_x,
+        centre_y=along_y,
         values={
             BRIGHTNESS: np.interp(grid, level, np.log1p(brightness[taken].astype(np.float64))),
             SIZE: np.interp(grid, level, np.log1p(pixel_count[taken].astype(np.float64))),
