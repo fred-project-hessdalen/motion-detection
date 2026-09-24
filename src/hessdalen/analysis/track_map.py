@@ -27,6 +27,7 @@ from dataclasses import dataclass
 import numpy as np
 import pyarrow as pa
 from sklearn.cluster import HDBSCAN  # type: ignore[import-not-found]
+from sklearn.neighbors import NearestNeighbors  # type: ignore[import-not-found]
 from sklearn.preprocessing import QuantileTransformer  # type: ignore[import-not-found]
 from tqdm import tqdm
 from umap import UMAP  # type: ignore[import-not-found]
@@ -114,6 +115,9 @@ MIN_SAMPLES = 5
 UNASSIGNED = -1
 """The cluster of a track the clustering left out of every cluster."""
 
+SPREAD_NEIGHBOURS = 5
+"""Clustered tracks a track the clustering skipped takes its cluster from."""
+
 PER_CLIP = 50
 """The sample size the roughness split was measured against.
 
@@ -127,15 +131,20 @@ brought the trough back.
 
 
 def sample_per_clip(tracks: pa.Table, *, per_clip: int | None) -> pa.Table:
-    """At most per_clip tracks from each clip, spread evenly over its tracks
-    in the order the tracker opened them, which runs with time.
+    """At most per_clip tracks from each clip, and every track when per_clip is
+    None."""
+    return tracks.filter(pa.array(per_clip_mask(tracks, per_clip=per_clip)))
 
-    Every track stands when per_clip is None, which is what a question
-    about one recording needs: a clip at the cap holds tracks the map
-    never reaches.
+
+def per_clip_mask(tracks: pa.Table, *, per_clip: int | None) -> np.ndarray:
+    """Which tracks stand when each clip is held to per_clip of them, spread
+    evenly over its tracks in the order the tracker opened them, which runs
+    with time.
+
+    Every track stands when per_clip is None.
     """
     if per_clip is None:
-        return tracks
+        return np.ones(tracks.num_rows, dtype=bool)
 
     clips = np.array(tracks.column("clip").to_pylist())
     events = np.array(tracks.column("event").to_pylist())
@@ -146,22 +155,33 @@ def sample_per_clip(tracks: pa.Table, *, per_clip: int | None) -> pa.Table:
         ordered = held[np.argsort(track_ids[held])]
         chosen = np.unique(np.linspace(0, ordered.size - 1, min(per_clip, ordered.size)).astype(int))
         kept[ordered[chosen]] = True
-    return tracks.filter(pa.array(kept))
+    return kept
 
 
-def map_corpus(tracks: pa.Table, *, seeds: tuple[int, ...]) -> pa.Table:
+def map_corpus(tracks: pa.Table, *, seeds: tuple[int, ...], per_clip: int | None) -> pa.Table:
     """The corpus with a side, a cluster and a place on the map added to
     every track.
 
     Each side is clustered under every seed and the runs are agreed.
     Clusters are numbered across both sides, the smooth side's first,
     and the map is laid out under the first seed.
+
+    The clustering is decided on at most per_clip tracks of each clip,
+    for the reason PER_CLIP gives, and the tracks it was not decided on
+    take the cluster their neighbours hold. Every track is laid out and
+    handed back either way.
     """
+    fitted = per_clip_mask(tracks, per_clip=per_clip)
     smooth = np.asarray(tracks.column("roughness").to_numpy()) < SMOOTH_BELOW
     clusters = np.full(tracks.num_rows, UNASSIGNED, dtype=np.int32)
     taken = 0
     for side, held in ((SMOOTH, smooth), (ROUGH, ~smooth)):
-        found = _agreed_clusters(tracks.filter(pa.array(held)), side=side, seeds=seeds)
+        if not held.any():
+            continue
+
+        scores = standing_within_camera(tracks.filter(pa.array(held)), names=FEATURES)
+        on_side = fitted[held]
+        found = _spread(scores, fitted=on_side, clusters=_agreed_clusters(scores[on_side], side=side, seeds=seeds))
         clusters[held] = np.where(found >= 0, found + taken, UNASSIGNED)
         taken += int(found.max()) + 1 if (found >= 0).any() else 0
 
@@ -175,9 +195,32 @@ def map_corpus(tracks: pa.Table, *, seeds: tuple[int, ...]) -> pa.Table:
     )
 
 
-def _agreed_clusters(tracks: pa.Table, *, side: Side, seeds: tuple[int, ...]) -> np.ndarray:
-    """The clusters of one side's tracks that its runs under every seed agree
-    on.
+def _spread(scores: np.ndarray, *, fitted: np.ndarray, clusters: np.ndarray) -> np.ndarray:
+    """The cluster of every track of one side, from the clusters the tracks
+    nearest it were given.
+
+    A track the clustering was not decided on takes what most of its
+    SPREAD_NEIGHBOURS nearest clustered tracks hold, in the same
+    descriptor space the clustering read. A tie goes to the lower
+    cluster, and a side with nothing clustered leaves every track out.
+    """
+    found = np.full(scores.shape[0], UNASSIGNED, dtype=np.int32)
+    found[fitted] = clusters
+
+    known = np.flatnonzero(found >= 0)
+    waiting = np.flatnonzero(~fitted)
+    if known.size == 0 or waiting.size == 0:
+        return found
+
+    nearest = NearestNeighbors(n_neighbors=min(SPREAD_NEIGHBOURS, known.size)).fit(scores[known])
+    votes = found[known][nearest.kneighbors(scores[waiting], return_distance=False)]
+    found[waiting] = [np.bincount(row).argmax() for row in votes]
+    return found
+
+
+def _agreed_clusters(scores: np.ndarray, *, side: Side, seeds: tuple[int, ...]) -> np.ndarray:
+    """The clusters of the tracks one side was fitted on that its runs under
+    every seed agree on.
 
     Two tracks are as far apart as the share of runs that did not put them
     in one cluster, and those distances are clustered once more. A track
@@ -185,10 +228,9 @@ def _agreed_clusters(tracks: pa.Table, *, side: Side, seeds: tuple[int, ...]) ->
     the same distance from every other track, and a set of tracks all the
     same distance apart reads to the clustering as a cluster of its own.
     """
-    if tracks.num_rows <= max(NEIGHBOURS, side.min_cluster_size):
-        return np.full(tracks.num_rows, UNASSIGNED, dtype=np.int32)
+    if scores.shape[0] <= max(NEIGHBOURS, side.min_cluster_size):
+        return np.full(scores.shape[0], UNASSIGNED, dtype=np.int32)
 
-    scores = standing_within_camera(tracks, names=FEATURES)
     runs = np.array(
         [
             _one_run(scores, side=side, seed=seed)
@@ -196,7 +238,7 @@ def _agreed_clusters(tracks: pa.Table, *, side: Side, seeds: tuple[int, ...]) ->
         ]
     )
     held = np.mean(runs >= 0, axis=0) >= TOGETHER
-    agreed = np.full(tracks.num_rows, UNASSIGNED, dtype=np.int32)
+    agreed = np.full(scores.shape[0], UNASSIGNED, dtype=np.int32)
     if held.sum() <= side.min_cluster_size:
         return agreed
 

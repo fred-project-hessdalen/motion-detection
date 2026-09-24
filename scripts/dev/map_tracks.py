@@ -18,7 +18,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from hessdalen.analysis.corpus import ClipPath, path_tables, read_corpus
-from hessdalen.analysis.track_map import CONSENSUS_SEEDS, PER_CLIP, UNASSIGNED, map_corpus, sample_per_clip
+from hessdalen.analysis.track_map import CONSENSUS_SEEDS, PER_CLIP, UNASSIGNED, map_corpus
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TRACKS = REPO_ROOT / "data" / "corpus" / "tracks"
@@ -33,19 +33,15 @@ def main(args: argparse.Namespace) -> None:
     if corpus.tracks.num_rows == 0:
         raise SystemExit(f"No tracks under {args.tracks}.")
 
-    sampled = sample_per_clip(corpus.tracks, per_clip=args.per_clip)
-    mapped = map_corpus(sampled, seeds=CONSENSUS_SEEDS)
+    mapped = map_corpus(corpus.tracks, seeds=CONSENSUS_SEEDS, per_clip=args.per_clip or None)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     _write_paths(args.output.with_name(PATHS_NAME), clips=corpus.clips, mapped=mapped)
     pq.write_table(mapped, args.output)
 
     clusters = mapped.column("cluster").to_pylist()
     labels = mapped.column("label").to_pylist()
-    held = f", at most {args.per_clip} from any clip" if args.per_clip else ""
-    print(
-        f"{mapped.num_rows} of {corpus.tracks.num_rows} tracks{held}, "
-        f"from {len(corpus.clips)} clips written to {args.output}"
-    )
+    decided = f", clustered on at most {args.per_clip} of each clip" if args.per_clip else ""
+    print(f"{mapped.num_rows} tracks from {len(corpus.clips)} clips{decided}, written to {args.output}")
     for cluster in sorted(set(clusters), key=lambda held: (held == UNASSIGNED, held)):
         members = [label for label, place in zip(labels, clusters) if place == cluster]
         common = ", ".join(f"{label} {count}" for label, count in collections.Counter(members).most_common(4))
@@ -93,8 +89,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--per-clip",
         type=int,
-        help=f"Most tracks to take from one clip, spread over it. Every track is mapped without it, and the "
-        f"roughness split was measured at {PER_CLIP}.",
+        default=PER_CLIP,
+        help="Most tracks of one clip the clustering is decided on, spread over the clip. Every track is "
+        "mapped either way, and a track the clustering skipped takes the cluster its neighbours hold. "
+        "Passing 0 decides the clustering on every track, which costs a matrix of every pair.",
     )
     return parser.parse_args()
 

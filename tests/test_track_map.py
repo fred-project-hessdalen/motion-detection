@@ -34,7 +34,9 @@ these tests quick."""
 def test_a_clean_path_and_clutter_never_share_a_cluster() -> None:
     """The two sides of the roughness split are clustered apart, so no
     cluster can hold both."""
-    mapped = map_corpus(_table([_streak(index) for index in range(GROUP_SIZE)] + _wanderers()), seeds=ONE_SEED)
+    mapped = map_corpus(
+        _table([_streak(index) for index in range(GROUP_SIZE)] + _wanderers()), seeds=ONE_SEED, per_clip=None
+    )
 
     clusters = np.array(mapped.column("cluster").to_pylist())
     sides = np.array(mapped.column("side").to_pylist())
@@ -48,7 +50,7 @@ def test_two_kinds_of_clean_path_fall_into_two_clusters() -> None:
     slow = [_streak(index) for index in range(GROUP_SIZE)]
     fast = [_hook(index) for index in range(GROUP_SIZE)]
 
-    clusters = np.array(map_corpus(_table(slow + fast), seeds=ONE_SEED).column("cluster").to_pylist())
+    clusters = np.array(map_corpus(_table(slow + fast), seeds=ONE_SEED, per_clip=None).column("cluster").to_pylist())
 
     slow_found, fast_found = clusters[:GROUP_SIZE], clusters[GROUP_SIZE:]
     assert set(slow_found[slow_found != UNASSIGNED]).isdisjoint(set(fast_found[fast_found != UNASSIGNED]))
@@ -61,8 +63,8 @@ def test_runs_that_agree_leave_the_clusters_as_one_run_finds_them() -> None:
     runs under one seed repeated give back that seed's clusters."""
     tracks = _table([_streak(index) for index in range(GROUP_SIZE)] + [_hook(index) for index in range(GROUP_SIZE)])
 
-    once = np.array(map_corpus(tracks, seeds=ONE_SEED).column("cluster").to_pylist())
-    twice = np.array(map_corpus(tracks, seeds=(0, 0)).column("cluster").to_pylist())
+    once = np.array(map_corpus(tracks, seeds=ONE_SEED, per_clip=None).column("cluster").to_pylist())
+    twice = np.array(map_corpus(tracks, seeds=(0, 0), per_clip=None).column("cluster").to_pylist())
 
     assert adjusted_rand_score(once, twice) == pytest.approx(1.0)
 
@@ -70,7 +72,7 @@ def test_runs_that_agree_leave_the_clusters_as_one_run_finds_them() -> None:
 def test_every_track_is_placed_on_the_map() -> None:
     tracks = _table([_streak(index) for index in range(GROUP_SIZE)] + _wanderers())
 
-    mapped = map_corpus(tracks, seeds=ONE_SEED)
+    mapped = map_corpus(tracks, seeds=ONE_SEED, per_clip=None)
 
     assert mapped.num_rows == tracks.num_rows
     assert np.isfinite(np.array(mapped.column("x").to_pylist())).all()
@@ -113,6 +115,20 @@ def test_without_a_sample_size_every_track_of_a_busy_clip_stands() -> None:
     sampled = sample_per_clip(_table(busy), per_clip=None)
 
     assert sampled.num_rows == PER_CLIP * 3
+
+
+def test_a_track_the_clustering_skipped_is_mapped_and_takes_a_cluster() -> None:
+    """The clustering is decided on a sample of each clip, and the rest of the
+    clip has to reach the map with the cluster its neighbours hold."""
+    busy = [_streak(index, clip="Cam1_2025-01-01__00-00-00_000") for index in range(GROUP_SIZE * 2)]
+    hooks = [_hook(index) for index in range(GROUP_SIZE)]
+
+    mapped = map_corpus(_table(busy + hooks), seeds=ONE_SEED, per_clip=GROUP_SIZE)
+
+    clusters = np.array(mapped.column("cluster").to_pylist())
+    assert mapped.num_rows == len(busy) + len(hooks)
+    assert np.mean(clusters[: len(busy)] != UNASSIGNED) > 0.5
+    assert set(clusters[: len(busy)]).isdisjoint(set(clusters[len(busy) :]) - {UNASSIGNED})
 
 
 def test_the_camera_is_read_off_the_front_of_the_clip() -> None:
