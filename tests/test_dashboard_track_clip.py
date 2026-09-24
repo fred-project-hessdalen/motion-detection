@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from hessdalen.config import config
-from hessdalen.dashboard.panels import DEVIATION, RECORDING
+from hessdalen.dashboard.panels import DEVIATION, RECORDING, TRAIL_LAG
 from hessdalen.dashboard.track_clip import (
     CLOSE_UP_RADII,
     INDEXED_FROM,
@@ -79,11 +79,23 @@ def test_between_matches_the_path_is_drawn_and_no_box() -> None:
     frames there is no position to box."""
     canvas = _canvas()
 
-    draw_stored_track(canvas, track=_track(frames=[5, 6, 9]), frame_number=7, color=COLOR, size=SIZE)
+    draw_stored_track(canvas, track=_track(frames=[1, 2, 3, 4, 5, 6, 9]), frame_number=7, color=COLOR, size=SIZE)
 
     x, y = _position(6)
-    assert canvas[y, x - SIZE - 1].any()
+    assert canvas[y, _position(2)[0]].any()
     assert not canvas[y - SIZE, x - SIZE].any()
+
+
+def test_the_path_is_held_a_few_frames_behind_the_detection() -> None:
+    """Drawn all the way, the path covers the thing the box is there to
+    show."""
+    canvas = _canvas()
+
+    draw_stored_track(canvas, track=_track(frames=list(range(1, 11))), frame_number=10, color=COLOR, size=SIZE)
+
+    x, y = _position(10)
+    assert not canvas[y, x].any()
+    assert canvas[y, _position(10 - TRAIL_LAG)[0]].any()
 
 
 def test_a_build_counts_every_frame_up_to_the_end_of_its_stretch() -> None:

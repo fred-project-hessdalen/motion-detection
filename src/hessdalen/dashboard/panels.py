@@ -21,13 +21,12 @@ from hessdalen.io.video import masked_stream
 BOX_RATIO = 0.025
 MIN_BOX_SIZE = 8
 
-STILL = 1e-9
-"""Movement along one axis put in place of none.
+TRAIL_LAG = 4
+"""Frames the drawn path's head is held behind the box.
 
-A step that stands still along an axis crosses neither of that axis's
-edges. Dividing by a movement of almost nothing sends both of those
-crossings off towards infinity, with the signs that say whether the step
-runs between the edges or outside them.
+The path runs into the box, which is what shows where the thing came
+from, and stops short of the detection itself, which is what the box is
+there to show.
 """
 
 RECORDING = "recording"
@@ -64,43 +63,18 @@ def recording_frames(
     return masked_stream(video, target_height=target_height, first_frame=first_frame).stream_frames()
 
 
-def draw_trail(canvas: np.ndarray, *, polyline: np.ndarray, color: tuple[int, int, int], clear: int) -> None:
-    """The path a track has taken, drawn everywhere but inside the square of
-    this half-width around its last point.
+def draw_trail(canvas: np.ndarray, *, polyline: np.ndarray, color: tuple[int, int, int]) -> None:
+    """The path a track has taken, up to TRAIL_LAG points behind where it is
+    now.
 
-    That square is where the box goes, and a path drawn into it covers
-    the thing the box is there to show.
+    The path runs into the box around the detection and stops short of
+    the detection itself, so it says where the thing came from without
+    covering the thing. A track that has not moved would draw a dot on
+    the detection and says nothing, so it draws none.
     """
-    cv2.polylines(canvas, _outside_head(polyline, half=clear), isClosed=False, color=color, thickness=2)
-
-
-def _outside_head(polyline: np.ndarray, *, half: int) -> list[np.ndarray]:
-    """Every part of the path that lies outside the square around its last
-    point, each as the two points it runs between.
-
-    A straight step crosses a square over one run of its length, so what
-    lies outside it is the part before the step enters and the part after
-    it leaves.
-    """
-    if len(polyline) < 2:
-        return []
-
-    starts = polyline[:-1].astype(np.float64)
-    ends = polyline[1:].astype(np.float64)
-    delta = ends - starts
-    step = np.where(delta == 0.0, STILL, delta)
-
-    near = (polyline[-1] - half - starts) / step
-    far = (polyline[-1] + half - starts) / step
-    enters = np.clip(np.minimum(near, far).max(axis=1), 0.0, 1.0)
-    leaves = np.clip(np.maximum(near, far).min(axis=1), 0.0, 1.0)
-    missed = enters >= leaves
-
-    enter = np.where(missed, 1.0, enters)[:, None]
-    leave = np.where(missed, 1.0, leaves)[:, None]
-    before = np.stack([starts, starts + enter * delta], axis=1)[enter[:, 0] > 0.0]
-    after = np.stack([starts + leave * delta, ends], axis=1)[leave[:, 0] < 1.0]
-    return list(np.concatenate([before, after]).round().astype(np.int32))
+    drawn = polyline[: max(len(polyline) - TRAIL_LAG, 0)]
+    if len(drawn) >= 2 and np.ptp(drawn, axis=0).any():
+        cv2.polylines(canvas, [drawn], isClosed=False, color=color, thickness=2)
 
 
 def draw_box(

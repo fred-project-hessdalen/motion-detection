@@ -225,7 +225,7 @@ def extend_trails(trails: dict[int, Trail], events: Iterable[MovementEvent]) -> 
 def _draw_trails(canvas: np.ndarray, *, trails: dict[int, Trail], frame_number: int, size: int) -> None:
     for track_id, trail in trails.items():
         color = track_color(track_id)
-        draw_trail(canvas, polyline=np.array(trail.points, dtype=np.int32), color=color, clear=size)
+        draw_trail(canvas, polyline=np.array(trail.points, dtype=np.int32), color=color)
         if trail.last_frame == frame_number:
             draw_box(canvas, point=np.array(trail.points[-1]), color=color, size=size, label=str(track_id))
 

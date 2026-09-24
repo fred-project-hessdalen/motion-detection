@@ -551,6 +551,6 @@ def draw_stored_track(
         return
 
     points = np.column_stack([track.x[reached], track.y[reached]]).astype(np.int32)
-    draw_trail(canvas, polyline=points, color=color, clear=size)
+    draw_trail(canvas, polyline=points, color=color)
     if int(track.frame_numbers[reached][-1]) == frame_number:
         draw_box(canvas, point=points[-1], color=color, size=size, label=str(track.track_id))
