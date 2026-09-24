@@ -1275,7 +1275,8 @@ def _reference(track: pd.Series, *, points: pd.DataFrame) -> None:
         st.caption(f"No ledger names {track['recording']}, so there is no link to it.")
         return
 
-    st.text_input("Reference", value=reference_line(held), disabled=True, help=REFERENCE_HELP)
+    st.caption("Reference", help=REFERENCE_HELP)
+    st.code(reference_line(held), language=None, wrap_lines=True, width="content")
     _tuning(track, held=held)
     if not held.measured_rate:
         st.caption(f"{track['recording']} is not on disk, so the seconds stand on {NOMINAL_RATE:.0f} frames a second.")
