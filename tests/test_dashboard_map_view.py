@@ -21,7 +21,9 @@ from hessdalen.dashboard.map_view import (
     in_order,
     labelled,
     named_group,
+    overlapping,
     searched,
+    stretches,
     table_rows,
 )
 
@@ -223,6 +225,57 @@ def _listed() -> pd.DataFrame:
             VALIDATED_COLUMN: [False],
         }
     )
+
+
+def test_the_tracks_running_while_this_one_ran_come_back_longest_first() -> None:
+    ranges = stretches(_frames(), clip=INSECT)
+
+    found = overlapping(_of_one_recording(), ranges=ranges, track=_of_one_recording().iloc[0])
+
+    assert found["track_id"].tolist() == [2, 3]
+    assert found["overlap"].tolist() == [51, 11]
+
+
+def test_a_track_of_another_recording_is_not_running_alongside() -> None:
+    """Frame numbers count from the start of each recording, so two of them
+    holding the same frames share nothing."""
+    ranges = stretches(_frames(), clip=INSECT)
+
+    found = overlapping(_of_one_recording(), ranges=ranges, track=_of_one_recording().iloc[0])
+
+    assert ROD not in found["clip"].tolist()
+
+
+def test_a_track_that_had_ended_is_left_out() -> None:
+    ranges = stretches(_frames(), clip=INSECT)
+
+    found = overlapping(_of_one_recording(), ranges=ranges, track=_of_one_recording().iloc[3])
+
+    assert found["track_id"].tolist() == [3]
+
+
+def _of_one_recording() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "key": [f"a/{INSECT}/1", f"a/{INSECT}/2", f"a/{INSECT}/3", f"a/{INSECT}/4"],
+            "clip": [INSECT, INSECT, INSECT, INSECT],
+            "track_id": [1, 2, 3, 4],
+        }
+    )
+
+
+def _frames() -> pd.DataFrame:
+    """Four tracks of one recording and one of another: two running together
+    from the start, a third overlapping the end of both, a fourth after the
+    first."""
+    stretched = {1: range(100, 151), 2: range(100, 151), 3: range(140, 191), 4: range(180, 231)}
+    rows = [
+        {"key": f"a/{INSECT}/{track}", "clip": INSECT, "frame_number": frame}
+        for track, frames in stretched.items()
+        for frame in frames
+    ]
+    rows += [{"key": f"b/{ROD}/1", "clip": ROD, "frame_number": frame} for frame in range(100, 151)]
+    return pd.DataFrame(rows)
 
 
 def _mapped() -> pd.DataFrame:

@@ -226,6 +226,7 @@ HISTORY_KEY = "track_history"
 PLAYING_KEY = "playing_track"
 SAMPLE_GALLERY_KEY = "sample_gallery"
 NEAREST_GALLERY_KEY = "nearest_gallery"
+TOGETHER_GALLERY_KEY = "together_gallery"
 SEARCH_KEY = "track_search"
 LABEL_KEY = "cluster_label"
 SAVE_KEY = "save_cluster_label"
@@ -248,6 +249,7 @@ SEARCH_WORDS = ("track", "in")
 selected track."""
 SAMPLE_TITLE = "Cluster sample"
 NEAREST_TITLE = "Nearest tracks"
+TOGETHER_TITLE = "At the same time"
 SELECTED_TITLE = "Selected track"
 SIMILAR_TITLE = "Similar name"
 REPLACING_TITLE = "Change of name"
@@ -278,8 +280,10 @@ CLIP_PANELS = (RECORDING, DEVIATION)
 """The panels a track's videos are built for, in the order they are offered."""
 SAMPLE_COLOR = "#e6007e"
 NEAREST_COLOR = "#0091d5"
+TOGETHER_COLOR = "#00a878"
 SAMPLE_MARKER = {"color": SAMPLE_COLOR, "symbol": "circle-open", "size": 12, "line": {"width": 2}}
 NEAREST_MARKER = {"color": NEAREST_COLOR, "symbol": "diamond-open", "size": 12, "line": {"width": 2}}
+TOGETHER_MARKER = {"color": TOGETHER_COLOR, "symbol": "square-open", "size": 12, "line": {"width": 2}}
 SELECTED_MARKER = {"color": "#ffd400", "symbol": "star", "size": 18, "line": {"width": 1, "color": "#333333"}}
 POINT_REACH = 6
 """How near a point the pointer has to come, in pixels, for the point to be the
@@ -481,6 +485,11 @@ SIMILAR_TAGS_TEXT = (
     "A tag a letter or two from one already in use is most often that tag mistyped, which would hold the "
     "same tracks apart under two spellings."
 )
+TOGETHER_HELP = (
+    "The tracks of this same recording that were running while the selected one was, the longest overlap "
+    "first. Two objects in the sky at once are two tracks that nothing else on the page puts together, "
+    "since they are alike in neither shape nor place. A square rings them on the map."
+)
 REFERENCE_HELP = (
     "Where this track is, for someone without this repository: the recording in the archive, and the "
     "seconds of it the track ran over. The seconds come from the recording's own frame rate where the "
@@ -658,10 +667,16 @@ def page() -> None:
     cluster = _gallery_cluster(str(chosen_cluster), picked=picked)
     sample = shown.iloc[0:0] if cluster is None else _sample(shown, cluster=cluster, selected=picked)
     nearest = shown.iloc[0:0] if picked is None else _nearest(shown, track=picked, radius=float(radius))
+    together = (
+        shown.iloc[0:0]
+        if picked is None
+        else overlapping(shown, ranges=_stretches(PATHS_PATH.stat().st_mtime, clip=str(picked["clip"])), track=picked)
+    )
     chosen = shown.iloc[0:0] if picked is None else shown[shown["key"] == picked["key"]]
     rings = [
         Ring(name=SAMPLE_TITLE, marker=SAMPLE_MARKER, tracks=sample),
         Ring(name=NEAREST_TITLE, marker=NEAREST_MARKER, tracks=nearest),
+        Ring(name=TOGETHER_TITLE, marker=TOGETHER_MARKER, tracks=together),
         Ring(name=SELECTED_TITLE, marker=SELECTED_MARKER, tracks=chosen),
     ]
 
@@ -698,6 +713,7 @@ def page() -> None:
             )
         if picked is not None:
             _neighbours(nearest, radius=float(radius), playing=playing)
+            _together(together, track=picked, playing=playing)
 
     with track_column:
         _steps()
@@ -803,6 +819,14 @@ def _sample_jumped() -> None:
 
 def _nearest_jumped() -> None:
     _gallery_jumped(NEAREST_GALLERY_KEY)
+
+
+def _together_clicked() -> None:
+    _gallery_clicked(TOGETHER_GALLERY_KEY)
+
+
+def _together_jumped() -> None:
+    _gallery_jumped(TOGETHER_GALLERY_KEY)
 
 
 def _gallery_clicked(component: str) -> None:
@@ -943,6 +967,36 @@ def _nearest(tracks: pd.DataFrame, *, track: pd.Series, radius: float) -> pd.Dat
     others = tracks[tracks["key"] != track["key"]]
     distance = np.hypot(others["x"] - track["x"], others["y"] - track["y"])
     return others.loc[distance[distance <= radius].nsmallest(GALLERY_SIZE).index]
+
+
+def stretches(paths: pd.DataFrame, *, clip: str) -> pd.DataFrame:
+    """The first and last frame of every track of one recording, by key."""
+    held = paths[paths["clip"] == clip]
+    return held.groupby("key")["frame_number"].agg(first="min", last="max")
+
+
+def overlapping(tracks: pd.DataFrame, *, ranges: pd.DataFrame, track: pd.Series) -> pd.DataFrame:
+    """The tracks of the same recording that were running while this one was,
+    the longest overlap first.
+
+    Two objects crossing the sky at once are two tracks of one
+    recording, and nothing on the map puts them together: they are alike
+    in neither shape nor place. What they share is the stretch of frames
+    they ran over.
+    """
+    key = str(track["key"])
+    if key not in ranges.index:
+        return tracks.iloc[0:0].assign(overlap=[])
+
+    first, last = int(ranges.loc[key, "first"]), int(ranges.loc[key, "last"])
+    others = tracks[(tracks["clip"] == track["clip"]) & (tracks["key"] != key)]
+    held = others[others["key"].isin(ranges.index)]
+
+    starts = held["key"].map(ranges["first"])
+    ends = held["key"].map(ranges["last"])
+    overlap = np.minimum(ends, last) - np.maximum(starts, first) + 1
+    shared = held.assign(overlap=overlap)
+    return shared[shared["overlap"] > 0].nlargest(GALLERY_SIZE, "overlap")
 
 
 def _by_distance(tracks: pd.DataFrame, *, from_track: pd.Series) -> pd.DataFrame:
@@ -1851,6 +1905,26 @@ def _neighbours(nearest: pd.DataFrame, *, radius: float, playing: pd.Series | No
     )
 
 
+def _together(together: pd.DataFrame, *, track: pd.Series, playing: pd.Series | None) -> None:
+    """The tracks of this recording that were running while the selected one
+    was, each captioned with how much of its life ran alongside."""
+    st.subheader(TOGETHER_TITLE, help=TOGETHER_HELP)
+    st.caption(f"{len(together)} tracks in {track['clip']} overlap track {int(track['track_id'])} in time")
+    captions = [
+        f"{place}. track {int(number)} · {int(frames)} frames together"
+        for place, (number, frames) in enumerate(zip(together["track_id"], together["overlap"]), start=1)
+    ]
+    _panels(
+        together,
+        captions=captions,
+        frame=TOGETHER_COLOR,
+        playing=playing,
+        key=TOGETHER_GALLERY_KEY,
+        on_click=_together_clicked,
+        on_jump=_together_jumped,
+    )
+
+
 def _cluster_caption(cluster: str) -> str:
     return "no cluster" if cluster == UNASSIGNED_NAME else f"cluster {cluster}"
 
@@ -1973,6 +2047,21 @@ def _path_frame(stamp: float) -> pd.DataFrame:
     frame = pq.read_table(PATHS_PATH).to_pandas()
     frame["key"] = _keys(frame)
     return frame
+
+
+@st.cache_data(show_spinner=False, max_entries=PANEL_CACHE_ENTRIES)
+def _stretches(stamp: float, *, clip: str) -> pd.DataFrame:
+    """The frames every track of one recording ran over, read again whenever
+    the paths file changes.
+
+    One recording at a time, because the whole corpus is millions of
+    frames and a selected track only ever asks about its own.
+
+    The stamp is the file's modification time, and is what the cache is
+    keyed on, which is why it is passed although the body never reads
+    it.
+    """
+    return stretches(_path_frame(stamp), clip=clip)
 
 
 def _keys(frame: pd.DataFrame) -> pd.Series:
