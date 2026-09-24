@@ -46,7 +46,13 @@ full size measures that as much as anything else.
 """
 
 SPLIT_FRAMES = 96
-"""Frames a track needs before it is cut in two, so each half keeps 48."""
+"""Frames a track needs before it is cut in two."""
+
+CUT_LOW, CUT_HIGH = 0.33, 0.67
+"""Where along a track the cut may fall."""
+
+MIN_PIECE = 24
+"""Frames the shorter piece of a cut track keeps."""
 
 NEARBY = 10
 """Neighbours a track's name is read from, and the rank a partner counts
@@ -298,11 +304,18 @@ REFERENCES: dict[str, Drawing] = {"hand made numbers": hand_made_numbers, "lengt
 
 
 def _signals(track: Track, columns: Columns, *, half: int | None) -> TrackSignals:
-    """One track's signals, or those of one half of it."""
+    """One track's signals, or those of one piece of it.
+
+    The cut falls at a different place on every track, so that the two
+    pieces of one track are of different lengths. Cutting every track
+    down the middle would leave both its pieces exactly as long as each
+    other, and a piece could then find its partner by length alone,
+    which says nothing about what either piece holds.
+    """
     at = slice(track.first, track.first + track.count)
     rows = {name: values[at] for name, values in columns.items()}
     if half is not None:
-        cut = track.count // 2
+        cut = _cut(track)
         piece = slice(0, cut) if half == 0 else slice(cut, track.count)
         rows = {name: values[piece] for name, values in rows.items()}
     return track_signals(
@@ -313,6 +326,17 @@ def _signals(track: Track, columns: Columns, *, half: int | None) -> TrackSignal
         pixel_count=rows["pixel_count"],
         reach=float(max(rows["frame_width"][0], rows["frame_height"][0])),
     )
+
+
+def _cut(track: Track) -> int:
+    """Where a track is cut in two, between a third and two thirds along.
+
+    Settled by the track's own name, so that the two pieces of one track
+    are always cut at the same place however often this is run, and two
+    different tracks are cut at different places.
+    """
+    share = CUT_LOW + (CUT_HIGH - CUT_LOW) * (abs(hash(track.key)) % 1000) / 1000.0
+    return max(MIN_PIECE, min(int(track.count * share), track.count - MIN_PIECE))
 
 
 def _write_sheet(path: Path, *, draw: Drawing, tracks: list[Track], columns: Columns) -> None:
