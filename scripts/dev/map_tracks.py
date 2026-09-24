@@ -2,8 +2,8 @@
 
 The dashboard's track map reads the file this writes. The corpus can
 still be growing while this runs, and the map holds whatever track
-files existed at that moment. A busy recording is held to a sample of
-its tracks, spread over the recording.
+files existed at that moment. Every track is mapped unless --per-clip
+holds a busy recording to a sample of its tracks.
 
 Run with the analysis group: uv run --group analysis python scripts/dev/map_tracks.py
 """
@@ -14,6 +14,7 @@ from pathlib import Path
 
 import numba
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from hessdalen.analysis.corpus import ClipPath, gather_paths, read_corpus
@@ -32,7 +33,7 @@ def main(args: argparse.Namespace) -> None:
     if corpus.tracks.num_rows == 0:
         raise SystemExit(f"No tracks under {args.tracks}.")
 
-    sampled = sample_per_clip(corpus.tracks)
+    sampled = sample_per_clip(corpus.tracks, per_clip=args.per_clip)
     mapped = map_corpus(sampled, seeds=CONSENSUS_SEEDS)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(_mapped_paths(corpus.clips, mapped), args.output.with_name(PATHS_NAME))
@@ -40,8 +41,9 @@ def main(args: argparse.Namespace) -> None:
 
     clusters = mapped.column("cluster").to_pylist()
     labels = mapped.column("label").to_pylist()
+    held = f", at most {args.per_clip} from any clip" if args.per_clip else ""
     print(
-        f"{mapped.num_rows} of {corpus.tracks.num_rows} tracks, at most {PER_CLIP} from any clip, "
+        f"{mapped.num_rows} of {corpus.tracks.num_rows} tracks{held}, "
         f"from {len(corpus.clips)} clips written to {args.output}"
     )
     for cluster in sorted(set(clusters), key=lambda held: (held == UNASSIGNED, held)):
@@ -52,27 +54,36 @@ def main(args: argparse.Namespace) -> None:
 
 
 def _mapped_paths(clips: list[ClipPath], mapped: pa.Table) -> pa.Table:
-    """The frames of the tracks on the map, and of no other."""
+    """The frames of the tracks on the map, and of no other.
+
+    Both sides are matched on one string a row at a time rather than on
+    three columns, because the whole corpus runs to millions of frames
+    and holding those as Python values costs gigabytes.
+    """
     paths = gather_paths(clips)
-    keys = {
-        (event, clip, track_id)
-        for event, clip, track_id in zip(
-            mapped.column("event").to_pylist(), mapped.column("clip").to_pylist(), mapped.column("track_id").to_pylist()
-        )
-    }
-    held = [
-        (event, clip, track_id) in keys
-        for event, clip, track_id in zip(
-            paths.column("event").to_pylist(), paths.column("clip").to_pylist(), paths.column("track_id").to_pylist()
-        )
-    ]
-    return paths.filter(pa.array(held))
+    return paths.filter(pc.is_in(_row_keys(paths), value_set=_row_keys(mapped)))
+
+
+def _row_keys(table: pa.Table) -> pa.Array:
+    """One string per row naming the track it belongs to."""
+    return pc.binary_join_element_wise(
+        table.column("event").cast(pa.string()),
+        table.column("clip").cast(pa.string()),
+        pc.cast(table.column("track_id"), pa.string()),
+        "/",
+    ).combine_chunks()
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Map and cluster every corpus track")
     parser.add_argument("--tracks", type=Path, default=TRACKS, help="Corpus root holding label and event folders")
     parser.add_argument("--output", type=Path, default=MAP, help="File to write the map to")
+    parser.add_argument(
+        "--per-clip",
+        type=int,
+        help=f"Most tracks to take from one clip, spread over it. Every track is mapped without it, and the "
+        f"roughness split was measured at {PER_CLIP}.",
+    )
     return parser.parse_args()
 
 

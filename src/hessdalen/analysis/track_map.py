@@ -115,7 +115,7 @@ UNASSIGNED = -1
 """The cluster of a track the clustering left out of every cluster."""
 
 PER_CLIP = 50
-"""Most tracks one recording contributes to the map.
+"""The sample size the roughness split was measured against.
 
 A busy recording can hold thousands of tracks of one kind, and at that
 weight it sets the density every other track is clustered against. On
@@ -126,9 +126,17 @@ brought the trough back.
 """
 
 
-def sample_per_clip(tracks: pa.Table) -> pa.Table:
-    """At most PER_CLIP tracks from each clip, spread evenly over its tracks
-    in the order the tracker opened them, which runs with time."""
+def sample_per_clip(tracks: pa.Table, *, per_clip: int | None) -> pa.Table:
+    """At most per_clip tracks from each clip, spread evenly over its tracks
+    in the order the tracker opened them, which runs with time.
+
+    Every track stands when per_clip is None, which is what a question
+    about one recording needs: a clip at the cap holds tracks the map
+    never reaches.
+    """
+    if per_clip is None:
+        return tracks
+
     clips = np.array(tracks.column("clip").to_pylist())
     events = np.array(tracks.column("event").to_pylist())
     track_ids = np.asarray(tracks.column("track_id").to_numpy())
@@ -136,7 +144,7 @@ def sample_per_clip(tracks: pa.Table) -> pa.Table:
     for place in set(zip(events.tolist(), clips.tolist())):
         held = np.flatnonzero((events == place[0]) & (clips == place[1]))
         ordered = held[np.argsort(track_ids[held])]
-        chosen = np.unique(np.linspace(0, ordered.size - 1, min(PER_CLIP, ordered.size)).astype(int))
+        chosen = np.unique(np.linspace(0, ordered.size - 1, min(per_clip, ordered.size)).astype(int))
         kept[ordered[chosen]] = True
     return tracks.filter(pa.array(kept))
 

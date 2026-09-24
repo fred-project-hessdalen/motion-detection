@@ -98,13 +98,21 @@ def test_a_busy_clip_is_held_to_a_sample_spread_over_it() -> None:
     busy = [_streak(index, clip="Cam1_2025-01-01__00-00-00_000") for index in range(PER_CLIP * 3)]
     quiet = [_streak(index, clip="Cam1_2025-01-01__00-00-00_001") for index in range(5)]
 
-    sampled = sample_per_clip(_table(busy + quiet))
+    sampled = sample_per_clip(_table(busy + quiet), per_clip=PER_CLIP)
 
     clips = sampled.column("clip").to_pylist()
     kept = sorted(track for track, clip in zip(sampled.column("track_id").to_pylist(), clips) if clip.endswith("_000"))
     assert len(kept) == PER_CLIP
     assert clips.count("Cam1_2025-01-01__00-00-00_001") == 5
     assert kept[0] == 1 and kept[-1] == PER_CLIP * 3
+
+
+def test_without_a_sample_size_every_track_of_a_busy_clip_stands() -> None:
+    busy = [_streak(index, clip="Cam1_2025-01-01__00-00-00_000") for index in range(PER_CLIP * 3)]
+
+    sampled = sample_per_clip(_table(busy), per_clip=None)
+
+    assert sampled.num_rows == PER_CLIP * 3
 
 
 def test_the_camera_is_read_off_the_front_of_the_clip() -> None:
