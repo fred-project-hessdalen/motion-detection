@@ -26,6 +26,7 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeVar
 
 import cv2
 import numpy as np
@@ -61,6 +62,9 @@ as found within."""
 SHEET_TRACKS = 8
 """Tracks drawn per name on a contact sheet."""
 
+QUERIES = 14
+"""Tracks whose neighbours are drawn out for a person to judge."""
+
 MIN_LABELLED = 50
 """Tracks a name needs before its recall is worth printing."""
 
@@ -69,6 +73,7 @@ BLOCK = 512
 
 Columns = dict[str, np.ndarray]
 Drawing = Callable[[TrackSignals], np.ndarray]
+Held = TypeVar("Held")
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,8 +104,16 @@ def main(args: argparse.Namespace) -> None:
         print(f"\n== {candidate}", flush=True)
         _report_halves(draw=draw, tracks=halves, columns=columns, each_on_its_own=args.each_on_its_own)
         _report_names(draw=draw, tracks=named, columns=columns, each_on_its_own=args.each_on_its_own)
+        stem = candidate.replace(" ", "-")
         if candidate in CANDIDATES:
-            _write_sheet(args.sheets / f"{candidate.replace(' ', '-')}.png", draw=draw, tracks=named, columns=columns)
+            _write_sheet(args.sheets / f"{stem}.png", draw=draw, tracks=named, columns=columns)
+        _write_neighbours(
+            args.sheets / f"neighbours-{stem}.png",
+            draw=draw,
+            tracks=named,
+            columns=columns,
+            each_on_its_own=args.each_on_its_own,
+        )
 
 
 def _report_halves(*, draw: Drawing, tracks: list[Track], columns: Columns, each_on_its_own: bool) -> None:
@@ -232,19 +245,43 @@ def _reading(ranks: np.ndarray) -> str:
 
 
 def _report_names(*, draw: Drawing, tracks: list[Track], columns: Columns, each_on_its_own: bool) -> None:
-    """What share of each name's tracks its nearest neighbours agree on."""
+    """What share of each name's tracks its nearest neighbours agree on.
+
+    This asks what kind of thing a track is, where the retrieval asks
+    which track it is. The two come apart: a recording holding forty
+    tracks of one kind gives every one of them thirty-nine matches as
+    good as its own other half, so a reading that has caught the kind
+    perfectly still answers the other question at chance.
+
+    Printed beside the same reading over the names dealt out at random,
+    which is what no knowledge of a track looks like.
+    """
     drawn = _ready([draw(_signals(t, columns, half=None)) for t in tracks], each_on_its_own=each_on_its_own)[0]
     given = np.array([t.name for t in tracks])
+    neighbours = _neighbours(drawn)
 
-    guessed = np.empty(len(tracks), dtype=object)
+    print(f"   names      {_recalls(given, guessed=_voted(given, neighbours=neighbours))}")
+    shuffled = given[_shuffled(len(given))]
+    print(f"      chance  {_recalls(shuffled, guessed=_voted(shuffled, neighbours=neighbours))}")
+
+
+def _neighbours(drawn: np.ndarray) -> np.ndarray:
+    """The nearest few tracks to each track, itself left out."""
+    found = np.empty((len(drawn), NEARBY), dtype=np.int64)
     for start in range(0, len(drawn), BLOCK):
         stop = min(start + BLOCK, len(drawn))
         nearness = _nearness(drawn[start:stop], drawn)
         nearness[np.arange(stop - start), np.arange(start, stop)] = -np.inf
         for row in range(stop - start):
-            nearest = np.argpartition(-nearness[row], NEARBY)[:NEARBY]
-            guessed[start + row] = collections.Counter(given[nearest]).most_common(1)[0][0]
+            found[start + row] = np.argpartition(-nearness[row], NEARBY)[:NEARBY]
+    return found
 
+
+def _voted(given: np.ndarray, *, neighbours: np.ndarray) -> np.ndarray:
+    return np.array([collections.Counter(given[row]).most_common(1)[0][0] for row in neighbours])
+
+
+def _recalls(given: np.ndarray, *, guessed: np.ndarray) -> str:
     recalls = []
     parts = []
     for name, count in collections.Counter(given).most_common():
@@ -254,7 +291,7 @@ def _report_names(*, draw: Drawing, tracks: list[Track], columns: Columns, each_
         recall = float((guessed[held] == name).mean())
         recalls.append(recall)
         parts.append(f"{name} {100 * recall:.0f}%")
-    print(f"   names: mean recall {100 * float(np.mean(recalls)):5.1f}%   " + "  ".join(parts))
+    return f"mean recall {100 * float(np.mean(recalls)):5.1f}%   " + "  ".join(parts)
 
 
 def hand_made_numbers(signals: TrackSignals) -> np.ndarray:
@@ -328,6 +365,51 @@ def _signals(track: Track, columns: Columns, *, half: int | None) -> TrackSignal
     )
 
 
+def _write_neighbours(
+    path: Path, *, draw: Drawing, tracks: list[Track], columns: Columns, each_on_its_own: bool
+) -> None:
+    """A few tracks and the tracks nearest them, every one drawn as its own
+    path.
+
+    The numbers rest on names nobody checked. This rests on nothing: a
+    row holds a track and what this way of drawing thinks it resembles,
+    both shown as the thing a person recognises, so the question of
+    whether the resemblance is real can be put to a person.
+    """
+    drawn = _ready([draw(_signals(t, columns, half=None)) for t in tracks], each_on_its_own=each_on_its_own)[0]
+    neighbours = _neighbours(drawn)
+    asked = _sample(list(range(len(tracks))), QUERIES)
+
+    rows = []
+    for query in asked:
+        held = [query, *neighbours[query][: NEARBY - 2]]
+        strip = np.hstack([np.pad(_path_picture(tracks[at], columns), ((1, 1), (1, 1), (0, 0))) for at in held])
+        strip[:, : SIDE + 2, 2] = np.maximum(strip[:, : SIDE + 2, 2], 90)
+        label = np.zeros((16, strip.shape[1], 3), np.uint8)
+        for column, at in enumerate(held):
+            corner = (column * (SIDE + 2) + 3, 12)
+            cv2.putText(label, tracks[at].name[:11], corner, cv2.FONT_HERSHEY_SIMPLEX, 0.34, (255, 255, 255), 1)
+        rows += [label, strip]
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(path), np.vstack(rows))
+
+
+def _path_picture(track: Track, columns: Columns) -> np.ndarray:
+    """One track's path as it went, fitted to a square and not turned."""
+    signals = _signals(track, columns, half=None)
+    points = np.column_stack((signals.centre_x, signals.centre_y))
+    points = points - (points.min(axis=0) + points.max(axis=0)) / 2.0
+    points = points / max(float(np.abs(points).max()), 1e-9) * (SIDE / 2 - 3)
+
+    canvas = np.zeros((SIDE, SIDE, 3), np.uint8)
+    drawn = np.rint(points + SIDE / 2).astype(np.int32)
+    for at in range(len(drawn) - 1):
+        shade = int(60 + 195 * at / max(len(drawn) - 2, 1))
+        cv2.line(canvas, tuple(drawn[at]), tuple(drawn[at + 1]), (shade, shade, 60), 1, cv2.LINE_AA)
+    return canvas
+
+
 def _cut(track: Track) -> int:
     """Where a track is cut in two, between a third and two thirds along.
 
@@ -398,13 +480,14 @@ def _read(path: Path, *, names: dict[str, str]) -> tuple[list[Track], Columns]:
     return tracks, columns
 
 
-def _sample(tracks: list[Track], limit: int) -> list[Track]:
-    """A spread of tracks, since neighbouring ones share a recording and a
-    quick look at one recording says nothing about the corpus."""
-    if len(tracks) <= limit:
-        return tracks
-    at = np.random.default_rng(0).choice(len(tracks), size=limit, replace=False)
-    return [tracks[int(one)] for one in sorted(at)]
+def _sample(held: list[Held], limit: int) -> list[Held]:
+    """A spread of what it is given, since neighbouring tracks share a
+    recording and a quick look at one recording says nothing about the
+    corpus."""
+    if len(held) <= limit:
+        return held
+    at = np.random.default_rng(0).choice(len(held), size=limit, replace=False)
+    return [held[int(one)] for one in sorted(at)]
 
 
 def _names(path: Path) -> dict[str, str]:
@@ -419,7 +502,7 @@ def _parse() -> argparse.Namespace:
     parser.add_argument("--paths", type=Path, default=ANALYSIS / "track-paths.parquet")
     parser.add_argument("--labels", type=Path, default=ANALYSIS / "cluster-labels.json")
     parser.add_argument("--sheets", type=Path, default=ANALYSIS / "signatures")
-    parser.add_argument("--candidates", nargs="*", choices=sorted(CANDIDATES))
+    parser.add_argument("--candidates", nargs="*", choices=[*sorted(CANDIDATES), *sorted(REFERENCES)])
     parser.add_argument("--limit", type=int, default=0, help="read at most this many tracks, for a quick look")
     parser.add_argument(
         "--each-on-its-own",
