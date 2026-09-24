@@ -165,6 +165,19 @@ someone gave a cluster on this
 page, and the second is where the recording sits in the archive, which
 names the whole recording rather than the track.
 
+Drawing in the sidebar gives what every gallery panel holds, and what
+is drawn under the light curve of the selected track. Path is where the
+track went. The other choices name a signal read on every frame the
+track spans, and draw how strongly that signal repeated: the rate rises
+up the panel and the frames run left to right, so a track repeating at
+one rate carries a band across it. Brightness and size are the blob's
+own, wobble is how far it strayed from its straight line, and presence
+is whether the detector found it at all, which repeats at the rate a
+track is lost and picked up again. Grey is where the track was too
+short to read that rate, which on a track of average length is most of
+the slow rates. The rates are cycles a frame, 25 times the same number
+in hertz on these recordings.
+
 View over the map draws the tracks as points or lists them a row each.
 The table holds the tracks the map holds, and while Search in the
 sidebar names something it lists every track that search names out of

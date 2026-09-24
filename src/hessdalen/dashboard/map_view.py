@@ -59,7 +59,15 @@ from hessdalen.dashboard.track_clip import (
 from hessdalen.dashboard.track_gallery import ADD, RANGE, track_gallery
 from hessdalen.dashboard.track_history import History, cleared, stepped, visited
 from hessdalen.dashboard.track_map_chart import MAP_HEIGHT, track_map_chart
-from hessdalen.dashboard.track_preview import GalleryEntry, close_up, frame_view, gallery_html, light_curve
+from hessdalen.dashboard.track_preview import (
+    GalleryEntry,
+    close_up,
+    frame_view,
+    gallery_html,
+    light_curve,
+    rhythm_chart,
+    spectra_html,
+)
 from hessdalen.dashboard.track_reference import (
     NOMINAL_RATE,
     Reference,
@@ -125,6 +133,14 @@ COLOUR_COLUMNS = {
     "Folder": "label",
     "Camera": "camera",
 }
+PATH_DRAWING = "Path"
+DRAWING_CHOICES = (PATH_DRAWING, "Brightness", "Size", "Wobble", "Presence")
+"""What a track is drawn as, in the galleries and beside its light curve.
+
+Every choice but the path names one of the signals a track's rhythm can
+be read from, and the signals are named here as they are shown.
+"""
+
 VALIDATION_CHOICES = ("All", "Validated", "Unvalidated")
 ANY_VALIDATION, VALIDATED, UNVALIDATED = VALIDATION_CHOICES
 NAMING_CHOICES = ("Cluster", "Neighbours", "Picked")
@@ -236,6 +252,7 @@ SAVE_KEY = "save_cluster_label"
 NAMING_KEY = "naming_choice"
 TAGS_KEY = "track_tags"
 SAVE_TAGS_KEY = "save_track_tags"
+DRAWING_KEY = "track_drawing"
 TAGS_FILTER_KEY = "tags_filter"
 SIMILAR_TAGS_KEY = "similar_tags"
 TUNE_KEY = "tune_track"
@@ -339,6 +356,15 @@ COLOUR_HELP = (
     "clustered on its own. A folder is where the recording was filed in the archive, which names the "
     "whole recording, so most tracks under a folder are that scene's background activity and not the "
     "thing the folder is named for."
+)
+DRAWING_HELP = (
+    "What every gallery panel holds, and what is drawn under the light curve of the selected track. A "
+    "path is where the track went. Any other choice reads that signal on every frame the track spans "
+    "and draws how strongly it repeated, with the rate rising up the panel and the frames running "
+    "left to right, so a track that repeats at one rate carries a bright band across it. Brightness "
+    "and size are the blob's own; wobble is how far it strayed from its straight line; presence is "
+    "whether it was found at all, which repeats at the rate the detector loses a track and picks it "
+    "up again. Grey is where the track was too short to read that rate."
 )
 SEARCH_HELP = (
     "Select a track by its number, by its recording, or by both, as the heading over a selected track "
@@ -659,6 +685,9 @@ def page() -> None:
         if wanted.strip():
             st.caption(f"{len(searched(tracks, wanted=wanted))} of {len(tracks)} tracks matched")
         colour = st.segmented_control("Colour", options=COLOUR_CHOICES, default="Cluster", help=COLOUR_HELP)
+        st.segmented_control(
+            "Drawing", options=DRAWING_CHOICES, default=PATH_DRAWING, key=DRAWING_KEY, help=DRAWING_HELP
+        )
         chosen_names = st.multiselect("Cluster labels", options=sorted(tracks[NAME_COLUMN].unique()), help=NAMES_HELP)
         chosen_tags = st.multiselect(
             "Tags", options=sorted(_track_labels(_track_labels_stamp())), key=TAGS_FILTER_KEY, help=TAGS_FILTER_HELP
@@ -1284,6 +1313,9 @@ def _selected(track: pd.Series, *, points: pd.DataFrame) -> None:
     st.altair_chart(frame_view(points))
     st.altair_chart(close_up(points))
     st.altair_chart(light_curve(points))
+    drawing = _drawing()
+    if drawing != PATH_DRAWING:
+        st.altair_chart(rhythm_chart(points, signal=drawing.lower()))
 
 
 def _track_tagging(track: pd.Series) -> None:
@@ -2098,7 +2130,7 @@ def _panels(
         )
     )
     track_gallery(
-        _gallery_markup(PATHS_PATH.stat().st_mtime, entries, frame=frame),
+        _gallery_markup(PATHS_PATH.stat().st_mtime, entries, frame=frame, drawing=_drawing()),
         key=key,
         on_click=on_click,
         on_jump=on_jump,
@@ -2106,10 +2138,17 @@ def _panels(
 
 
 @st.cache_data(show_spinner=False, max_entries=PANEL_CACHE_ENTRIES)
-def _gallery_markup(stamp: float, entries: tuple[GalleryEntry, ...], *, frame: str) -> str:
+def _gallery_markup(stamp: float, entries: tuple[GalleryEntry, ...], *, frame: str, drawing: str) -> str:
     """The panels of these tracks under these captions, kept so that a gallery
     that comes out the same on the next click is not drawn again."""
-    return gallery_html(_path_frame(stamp), entries=entries, frame=frame)
+    if drawing == PATH_DRAWING:
+        return gallery_html(_path_frame(stamp), entries=entries, frame=frame)
+    return spectra_html(_path_frame(stamp), entries=entries, frame=frame, signal=drawing.lower())
+
+
+def _drawing() -> str:
+    """What the galleries and the selected track's second chart draw."""
+    return str(st.session_state.get(DRAWING_KEY) or PATH_DRAWING)
 
 
 def _gallery_cluster(chosen: str, *, picked: pd.Series | None) -> str | None:
