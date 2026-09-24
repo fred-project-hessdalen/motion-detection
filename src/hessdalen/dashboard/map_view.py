@@ -36,7 +36,16 @@ from streamlit.delta_generator import DeltaGenerator
 
 from hessdalen.config import config
 from hessdalen.dashboard.clip_queue import ClipQueue, Job, Report
-from hessdalen.dashboard.cluster_labels import canonical_label, label_of, near_label, read_labels, write_labels
+from hessdalen.dashboard.cluster_labels import (
+    canonical_label,
+    label_of,
+    near_label,
+    read_labels,
+    tagged,
+    tags_of,
+    write_labels,
+    write_tags,
+)
 from hessdalen.dashboard.panels import DEVIATION, RECORDING
 from hessdalen.dashboard.runs import probe
 from hessdalen.dashboard.track_clip import (
@@ -51,6 +60,13 @@ from hessdalen.dashboard.track_gallery import track_gallery
 from hessdalen.dashboard.track_history import History, cleared, stepped, visited
 from hessdalen.dashboard.track_map_chart import MAP_HEIGHT, track_map_chart
 from hessdalen.dashboard.track_preview import GalleryEntry, close_up, frame_view, gallery_html, light_curve
+from hessdalen.dashboard.track_reference import (
+    NOMINAL_RATE,
+    Reference,
+    reference,
+    reference_line,
+    references_csv,
+)
 from hessdalen.dashboard.track_validation import read_validated, write_validated
 from hessdalen.dashboard.video_cache import (
     MIN_FREE_BYTES,
@@ -85,9 +101,9 @@ CLUSTER_COLORS = ("#4c78a8", "#f58518", "#54a24b", "#e45756", "#72b7b2", "#eeca3
 NAME_COLUMN = "cluster_label"
 """Column holding the name given to the cluster each track is in."""
 
-TRACK_NAME_COLUMN = "track_label"
-"""Column holding the name a track itself stands under, which is the name of
-its cluster until the track is given one of its own."""
+TAGS_COLUMN = "tags"
+"""Column holding the tags a track itself stands under, one after another,
+which is the name of its cluster until the track is given tags of its own."""
 
 CACHED_COLUMN = "cached"
 """Column saying whether the track's recording is on disk."""
@@ -98,11 +114,11 @@ VALIDATED_COLUMN = "validated"
 UNNAMED = "unlabelled"
 """What a track whose cluster has no name yet is shown under."""
 
-COLOUR_CHOICES = ("Cluster", "Cluster label", "Track label", "Side", "Folder", "Camera")
+COLOUR_CHOICES = ("Cluster", "Cluster label", "Tags", "Side", "Folder", "Camera")
 COLOUR_COLUMNS = {
     "Cluster": "cluster",
     "Cluster label": NAME_COLUMN,
-    "Track label": TRACK_NAME_COLUMN,
+    "Tags": TAGS_COLUMN,
     "Side": "side",
     "Folder": "label",
     "Camera": "camera",
@@ -138,7 +154,7 @@ class Detail:
 
 
 DETAILS = (
-    Detail(column=TRACK_NAME_COLUMN, label="Track label", digits=None, wide=False),
+    Detail(column=TAGS_COLUMN, label="Tags", digits=None, wide=True),
     Detail(column=NAME_COLUMN, label="Cluster label", digits=None, wide=False),
     Detail(column="cluster", label="Cluster", digits=None, wide=False),
     Detail(column="side", label="Side", digits=None, wide=False),
@@ -177,8 +193,10 @@ SEARCH_KEY = "track_search"
 LABEL_KEY = "cluster_label"
 SAVE_KEY = "save_cluster_label"
 NAMING_KEY = "naming_choice"
-TRACK_LABEL_KEY = "track_label"
-SAVE_TRACK_LABEL_KEY = "save_track_label"
+TAGS_KEY = "track_tags"
+SAVE_TAGS_KEY = "save_track_tags"
+TAGS_FILTER_KEY = "tags_filter"
+SIMILAR_TAGS_KEY = "similar_tags"
 REASSIGN_KEY = "reassign_track"
 SAVE_REASSIGN_KEY = "save_reassign"
 VALIDATED_KEY = "track_validated"
@@ -197,6 +215,7 @@ SELECTED_TITLE = "Selected track"
 SIMILAR_TITLE = "Similar name"
 REPLACING_TITLE = "Change of name"
 NAME_PLACEHOLDER = "Choose or add a name"
+TAGS_PLACEHOLDER = "Choose or add tags"
 GALLERY_ROW = (2, 3, 1)
 NEIGHBOUR_ROW = (2, 3)
 """How the row over each gallery is divided: its heading, the order its panels
@@ -385,17 +404,37 @@ SIMILAR_TEXT = (
     "apart. Both names are kept if that is what you meant."
 )
 REPLACING_TEXT = "Changing the name takes every one of those tracks out of the name they are under."
-TRACK_LABEL_HELP = (
-    "What this one track holds, in a word of your own. It starts as the name the track's cluster is "
-    "under, and is changed where the track is not what the rest of its cluster is. The name is kept "
-    f"against the track alone in {TRACK_LABELS_PATH.name}, in the same form as a cluster label, and it is "
-    "what a training set reads for this track. The names given so far are offered in the list, and "
-    "clearing the box takes the track back to its cluster's name."
+TAGS_HELP = (
+    "What this one track holds, in words of your own, as many as are true of it at once. They start as "
+    "the name the track's cluster is under, and are changed where the track is not what the rest of its "
+    f"cluster is. They are kept against the track alone in {TRACK_LABELS_PATH.name}, in the same form as "
+    "a cluster label, and are what a training set reads for this track. The tags given so far are offered "
+    "in the list, a tag of your own is typed into it, and emptying the box takes the track back to its "
+    "cluster's name."
 )
-SAVE_TRACK_LABEL_HELP = (
-    "Keep this name against this track alone. Naming a track is someone looking at it and saying what it "
-    "is, so the track is marked validated at the same time."
+SAVE_TAGS_HELP = (
+    "Keep these tags against this track alone. Tagging a track is someone looking at it and saying what "
+    "it is, so the track is marked validated at the same time."
 )
+TAGS_FILTER_HELP = (
+    "Leave on the map only the tracks holding every tag chosen here, so two tags give the tracks that are "
+    "both things rather than either."
+)
+SIMILAR_TAGS_TITLE = "Similar tags"
+SIMILAR_TAGS_TEXT = (
+    "A tag a letter or two from one already in use is most often that tag mistyped, which would hold the "
+    "same tracks apart under two spellings."
+)
+REFERENCE_HELP = (
+    "Where this track is, for someone without this repository: the recording in the archive, and the "
+    "seconds of it the track ran over. The seconds come from the recording's own frame rate where the "
+    "video is on disk, and from a nominal rate otherwise, which the line says."
+)
+EXPORT_HELP = (
+    "Every tagged track as a row: its recording, its tags, the seconds it ran over, and the link to the "
+    "recording in the archive."
+)
+REFERENCES_NAME = "track-references.csv"
 REASSIGN_HELP = (
     "The cluster this track is counted with, by the name that cluster is under. Giving it another name "
     f"puts this one track under that name in {LABELS_PATH.name}, and a name no cluster is under yet "
@@ -470,6 +509,26 @@ class Naming:
 
 
 @dataclass(frozen=True, slots=True)
+class Tagging:
+    """What a press of Save on the tags is to write: the track they are given
+    to, and the box they were given in."""
+
+    key: str
+    box: str
+
+
+@dataclass(frozen=True, slots=True)
+class SimilarTags:
+    """Tags that were given and lie within a letter or two of names already in
+    use, held until the person says which of the two they meant."""
+
+    tagging: Tagging
+    names: tuple[str, ...]
+    swaps: tuple[tuple[str, str], ...]
+    """Each tag as it was typed, beside the name in use it is close to."""
+
+
+@dataclass(frozen=True, slots=True)
 class Similar:
     """A name that was given and lies within a letter or two of one already in
     use, held until the person says which of the two they meant."""
@@ -513,6 +572,9 @@ def page() -> None:
             st.caption(f"{len(searched(tracks, wanted=wanted))} of {len(tracks)} tracks matched")
         colour = st.segmented_control("Colour", options=COLOUR_CHOICES, default="Cluster", help=COLOUR_HELP)
         chosen_names = st.multiselect("Cluster labels", options=sorted(tracks[NAME_COLUMN].unique()), help=NAMES_HELP)
+        chosen_tags = st.multiselect(
+            "Tags", options=sorted(_track_labels(_track_labels_stamp())), key=TAGS_FILTER_KEY, help=TAGS_FILTER_HELP
+        )
         folders = st.multiselect("Folders", options=sorted(tracks["label"].unique()), help=FOLDERS_HELP)
         validation = st.segmented_control(
             "Validation", options=VALIDATION_CHOICES, default=ANY_VALIDATION, help=VALIDATION_HELP
@@ -531,6 +593,8 @@ def page() -> None:
 
     shown = tracks if rough else tracks[tracks["side"] != ROUGH_SIDE]
     shown = shown[shown[NAME_COLUMN].isin(chosen_names)] if chosen_names else shown
+    if chosen_tags:
+        shown = shown[shown["key"].isin(tagged(_track_labels(_track_labels_stamp()), names=chosen_tags))]
     shown = shown[shown["label"].isin(folders)] if folders else shown
     shown = by_validation(shown, choice=str(validation or ANY_VALIDATION))
     picked = _picked(shown, tracks=tracks, key=_history().standing)
@@ -579,10 +643,13 @@ def page() -> None:
 
     similar = st.session_state.pop(SIMILAR_KEY, None)
     replacing = st.session_state.pop(REPLACING_KEY, None)
+    similar_tags = st.session_state.pop(SIMILAR_TAGS_KEY, None)
     if similar is not None:
         _similar_name(similar)
     elif replacing is not None:
         _replacing_name(replacing)
+    elif similar_tags is not None:
+        _similar_tags(similar_tags)
 
 
 def _steps() -> None:
@@ -800,22 +867,32 @@ def _uncached(tracks: pd.DataFrame) -> frozenset[str]:
 
 def labelled(tracks: pd.DataFrame, *, clusters: dict[str, list[str]], own: dict[str, list[str]]) -> pd.DataFrame:
     """The tracks with the name of the cluster each one is in beside it, and
-    the name the track itself stands under.
+    the tags the track itself stands under.
 
     A track whose cluster has no name yet, and a track the clustering
     left out of every cluster, stand under one name of their own, so
     that the map can be coloured and filtered by the name without those
     tracks falling off it. A track stands under its cluster's name until
-    it is given a name of its own, which is then the name it stands
-    under wherever the page gives one.
+    it is tagged, and under its own tags from then on, which is what the
+    page shows wherever it names the track.
     """
     cluster_name = tracks["key"].map(_by_key(clusters)).fillna(UNNAMED)
     return tracks.assign(
         **{
             NAME_COLUMN: cluster_name,
-            TRACK_NAME_COLUMN: tracks["key"].map(_by_key(own)).fillna(cluster_name),
+            TAGS_COLUMN: tracks["key"].map(_tag_text(own)).fillna(cluster_name),
         }
     )
+
+
+def _tag_text(labels: dict[str, list[str]]) -> dict[str, str]:
+    """The tags of each tagged track, one after another as the page shows
+    them."""
+    held: dict[str, list[str]] = {}
+    for name, keys in labels.items():
+        for key in keys:
+            held.setdefault(key, []).append(name)
+    return {key: ", ".join(sorted(names)) for key, names in held.items()}
 
 
 def _by_key(labels: dict[str, list[str]]) -> dict[str, str]:
@@ -962,42 +1039,143 @@ def _selected(track: pd.Series, *, points: pd.DataFrame) -> None:
     """The picked track drawn at once from its stored path."""
     st.subheader(f"Track {int(track['track_id'])} in {track['clip']}", help=PATH_HELP)
     st.caption(_facts(track))
-    _track_labelling(track)
+    _track_tagging(track)
+    _reference(track, points=points)
     st.altair_chart(frame_view(points))
     st.altair_chart(close_up(points))
     st.altair_chart(light_curve(points))
 
 
-def _track_labelling(track: pd.Series) -> None:
-    """The name this one track stands under, the box that changes it, and
+def _track_tagging(track: pd.Series) -> None:
+    """The tags this one track stands under, the box that changes them, and
     whether someone has confirmed the track.
 
-    The name starts as the cluster's, so a track that is what the rest
-    of its cluster is needs no name of its own. The name it starts at is
-    part of the box's key, because a box holds whatever it was left at
-    and would otherwise go on offering a start the track has moved on
+    The tags start as the cluster's name, so a track that is what the
+    rest of its cluster is needs no tag of its own. What they start at
+    is part of the box's key, because a box holds whatever it was left
+    at and would otherwise go on offering a start the track has moved on
     from.
     """
     key = str(track["key"])
-    given = label_of(_track_labels(_track_labels_stamp()), keys=[key])
+    given = tags_of(_track_labels(_track_labels_stamp()), key=key)
     cluster_name = str(track[NAME_COLUMN])
-    start = given or ("" if cluster_name == UNNAMED else cluster_name)
-    naming = Naming(path=TRACK_LABELS_PATH, keys=(key,), box=f"{TRACK_LABEL_KEY}:{key}:{start}", confirms=True)
+    start = given or ([] if cluster_name == UNNAMED else [cluster_name])
+    box = f"{TAGS_KEY}:{key}:{','.join(start)}"
 
     chooser, save, tick, _rest = st.columns(TRACK_NAME_ROW, vertical_alignment="bottom")
-    _name_box(chooser, label="Track label", given=start, naming=naming, help=TRACK_LABEL_HELP)
+    chooser.multiselect(
+        "Tags",
+        options=_known_names(),
+        default=start,
+        key=box,
+        accept_new_options=True,
+        placeholder=TAGS_PLACEHOLDER,
+        help=TAGS_HELP,
+    )
     save.button(
         "Save",
-        key=f"{SAVE_TRACK_LABEL_KEY}:{key}",
-        on_click=_save_name,
-        args=(naming,),
-        help=SAVE_TRACK_LABEL_HELP,
+        key=f"{SAVE_TAGS_KEY}:{key}",
+        on_click=_save_tags,
+        args=(Tagging(key=key, box=box),),
+        help=SAVE_TAGS_HELP,
         width="stretch",
     )
     box = f"{VALIDATED_KEY}:{key}"
     _seeded(box, value=bool(track[VALIDATED_COLUMN]))
     tick.checkbox("Validated", key=box, on_change=_validate, args=(key,), help=VALIDATED_HELP)
     _reassigning(track)
+
+
+def _reference(track: pd.Series, *, points: pd.DataFrame) -> None:
+    """Where this track is for someone without the corpus, and the same for
+    every tagged track at once.
+
+    A recording no ledger names has no link, which is the case for the
+    five recordings the example set was built from by hand.
+    """
+    held = _track_reference(track, points=points)
+    if held is None:
+        st.caption(f"No ledger names {track['recording']}, so there is no link to it.")
+        return
+
+    st.text_input("Reference", value=reference_line(held), disabled=True, help=REFERENCE_HELP)
+    if not held.measured_rate:
+        st.caption(f"{track['recording']} is not on disk, so the seconds stand on {NOMINAL_RATE:.0f} frames a second.")
+    st.download_button(
+        "Tagged tracks",
+        data=_tagged_references(
+            _track_labels_stamp(), MAP_PATH.stat().st_mtime, PATHS_PATH.stat().st_mtime, _ledger_stamp()
+        ),
+        file_name=REFERENCES_NAME,
+        mime="text/csv",
+        help=EXPORT_HELP,
+    )
+
+
+def _track_reference(track: pd.Series, *, points: pd.DataFrame) -> Reference | None:
+    """The reference to one track, and nothing where no ledger names its
+    recording."""
+    recording = str(track["recording"])
+    entry = _ledger_entries(_ledger_stamp()).get(recording)
+    if entry is None:
+        return None
+
+    frames = points["frame_number"]
+    return reference(
+        recording=recording,
+        track_id=int(track["track_id"]),
+        url=str(entry.get("url", "")),
+        first_frame=int(frames.min()),
+        last_frame=int(frames.max()),
+        frames_per_second=_frame_rate(recording),
+        tags=tags_of(_track_labels(_track_labels_stamp()), key=str(track["key"])),
+    )
+
+
+def _frame_rate(recording: str) -> float:
+    """The rate the recording runs at, and 0 while the video is not on disk to
+    be read."""
+    for folder in (VIDEOS_DIR, FETCHED_DIR):
+        video = folder / recording
+        if video.is_file():
+            return probe(video).frames_per_second
+    return 0.0
+
+
+@st.cache_data(show_spinner=False)
+def _tagged_references(tags_stamp: float, map_stamp: float, paths_stamp: float, ledger_stamp: tuple[float, ...]) -> str:
+    """Every tagged track as a row of a CSV, built again whenever the tags, the
+    map or the ledgers change.
+
+    A tagged track the map no longer holds is left out, which is what a
+    track dropped by a later analysis run looks like.
+
+    The stamps are those files' modification times, and are what the
+    cache is keyed on, which is why they are passed although the body
+    never reads them.
+    """
+    labels = _track_labels(tags_stamp)
+    entries = _ledger_entries(ledger_stamp)
+    recordings = _map_frame(map_stamp).set_index("key")["recording"]
+    stretches = _path_frame(paths_stamp).groupby("key")["frame_number"].agg(["min", "max"])
+
+    references = []
+    for key in sorted({key for keys in labels.values() for key in keys}):
+        if key not in stretches.index or key not in recordings.index:
+            continue
+        recording = str(recordings[key])
+        references.append(
+            reference(
+                recording=recording,
+                track_id=int(key.rsplit("/", 1)[-1]),
+                url=str(entries.get(recording, {}).get("url", "")),
+                first_frame=int(stretches.loc[key, "min"]),
+                last_frame=int(stretches.loc[key, "max"]),
+                frames_per_second=_frame_rate(recording),
+                tags=tags_of(labels, key=key),
+            )
+        )
+    return references_csv(references)
 
 
 def _reassigning(track: pd.Series) -> None:
@@ -1101,6 +1279,50 @@ def _keep_name(naming: Naming, *, name: str) -> None:
     st.session_state[naming.box] = name or None
     if naming.confirms and name:
         _confirm(naming.keys[0], confirmed=True)
+
+
+def _save_tags(tagging: Tagging) -> None:
+    """Keep the tags given in the box, unless one of them is close enough to a
+    name already in use to be that name mistyped, which is put to the person
+    first."""
+    wanted = [canonical_label(str(name)) for name in st.session_state[tagging.box] or []]
+    names = tuple(dict.fromkeys(name for name in wanted if name))
+    known = _known_names()
+    swaps = tuple((name, near_label(name, known=known)) for name in names if near_label(name, known=known))
+    if swaps:
+        st.session_state[SIMILAR_TAGS_KEY] = SimilarTags(tagging=tagging, names=names, swaps=swaps)
+        return
+
+    _keep_tags(tagging, names=names)
+
+
+def _keep_tags(tagging: Tagging, *, names: tuple[str, ...]) -> None:
+    """Put this track under these tags and no others, and confirm it.
+
+    Tagging a track is someone looking at it and saying what it is,
+    which is what confirming it says. Taking every tag off says nothing,
+    and leaves the track as it was.
+    """
+    write_tags(TRACK_LABELS_PATH, read_labels(TRACK_LABELS_PATH), key=tagging.key, names=names)
+    if names:
+        _confirm(tagging.key, confirmed=True)
+
+
+@st.dialog(SIMILAR_TAGS_TITLE)
+def _similar_tags(similar: SimilarTags) -> None:
+    """What to do about tags that are close to names already in use."""
+    for name, near in similar.swaps:
+        st.write(f"**{name}** is close to **{near}**, which is already in use.")
+    st.caption(SIMILAR_TAGS_TEXT)
+
+    use, keep = st.columns(2)
+    swapped = dict(similar.swaps)
+    if use.button("Use the names in use", type="primary", width="stretch"):
+        _keep_tags(similar.tagging, names=tuple(dict.fromkeys(swapped.get(name, name) for name in similar.names)))
+        st.rerun()
+    if keep.button("Keep them as typed", width="stretch"):
+        _keep_tags(similar.tagging, names=similar.names)
+        st.rerun()
 
 
 @st.dialog(SIMILAR_TITLE)
@@ -1584,7 +1806,7 @@ def _cluster_title(cluster: str) -> str:
 
 def _facts(track: pd.Series) -> str:
     parts = [
-        str(track[TRACK_NAME_COLUMN]),
+        str(track[TAGS_COLUMN]),
         _cluster_caption(str(track["cluster"])),
         f"folder {track['label']}",
         f"{track['side']} side",

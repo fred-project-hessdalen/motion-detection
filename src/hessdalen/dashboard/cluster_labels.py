@@ -6,6 +6,10 @@ the tracks they were given to rather than as the clusters, because a
 later run of the analysis step numbers its clusters afresh while a track
 keeps its name.
 
+The same file shape holds the tags of single tracks, where a track
+stands under every name that is true of it at once rather than under
+one.
+
 A name is kept in one form, in small letters with single spaces between
 its words and every word in the singular, so that one thing does not
 stand under two spellings of itself. A name that the form leaves a
@@ -170,6 +174,41 @@ def label_of(labels: dict[str, list[str]], *, keys: list[str]) -> str:
     return min(name for name, count in counts.items() if count == most)
 
 
+def tags_of(labels: dict[str, list[str]], *, key: str) -> list[str]:
+    """Every name this one track stands under, by their spelling."""
+    return sorted(name for name, under in labels.items() if key in under)
+
+
+def tagged(labels: dict[str, list[str]], *, names: Sequence[str]) -> set[str]:
+    """The tracks standing under every one of these names.
+
+    Each name narrows what the ones before it left, so two names hand
+    back the tracks that are both things rather than either.
+    """
+    wanted = [canonical_label(name) for name in names]
+    if not wanted:
+        return set()
+    return set.intersection(*(set(labels.get(name, [])) for name in wanted))
+
+
+def write_tags(path: Path, labels: dict[str, list[str]], *, key: str, names: Sequence[str]) -> dict[str, list[str]]:
+    """Put this track under exactly these names and write every name out
+    again.
+
+    The names are brought to the form names are kept in first. A name
+    the track stood under and is no longer given lets it go, so the
+    names handed in are what the track holds afterwards. Every other
+    track stays where it is, which is how a tag differs from a cluster's
+    name.
+    """
+    given = {canonical_label(name) for name in names} - {""}
+    written = {held: [under for under in keys if under != key] for held, keys in labels.items()}
+    for name in given:
+        written[name] = sorted(set(written.get(name, [])) | {key})
+
+    return _kept(path, written)
+
+
 def write_labels(path: Path, labels: dict[str, list[str]], *, name: str, keys: list[str]) -> dict[str, list[str]]:
     """Put these tracks under this name and write every name out again.
 
@@ -184,6 +223,12 @@ def write_labels(path: Path, labels: dict[str, list[str]], *, name: str, keys: l
     if given:
         written[given] = sorted(set(written.get(given, [])) | wanted)
 
+    return _kept(path, written)
+
+
+def _kept(path: Path, written: dict[str, list[str]]) -> dict[str, list[str]]:
+    """Write out every name that still holds a track, and hand back what the
+    file now says."""
     written = {held: under for held, under in written.items() if under}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n")

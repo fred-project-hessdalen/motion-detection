@@ -5,7 +5,16 @@ import json
 
 import pytest
 
-from hessdalen.dashboard.cluster_labels import canonical_label, label_of, near_label, read_labels, write_labels
+from hessdalen.dashboard.cluster_labels import (
+    canonical_label,
+    label_of,
+    near_label,
+    read_labels,
+    tagged,
+    tags_of,
+    write_labels,
+    write_tags,
+)
 
 KNOWN = ["bird", "insect", "meteor", "street light", "car"]
 
@@ -150,3 +159,40 @@ def test_a_short_name_is_held_to_one_letter() -> None:
 
 def test_the_nearest_of_the_names_in_use_is_the_one_put_forward() -> None:
     assert near_label("birt", known=["insect", "bind", "bird"]) == "bird"
+
+
+def test_a_track_stands_under_every_tag_given_to_it(tmp_path) -> None:
+    path = tmp_path / "track-labels.json"
+
+    written = write_tags(path, read_labels(path), key=BIRDS[0], names=["bird", "Far Away"])
+
+    assert written == {"bird": [BIRDS[0]], "far away": [BIRDS[0]]}
+    assert tags_of(read_labels(path), key=BIRDS[0]) == ["bird", "far away"]
+
+
+def test_tagging_a_track_again_leaves_the_tags_it_was_not_given(tmp_path) -> None:
+    """The tags handed in are what the track holds afterwards, so one dropped
+    from the box is dropped from the track."""
+    path = tmp_path / "track-labels.json"
+    write_tags(path, read_labels(path), key=BIRDS[0], names=["bird", "far away"])
+
+    written = write_tags(path, read_labels(path), key=BIRDS[0], names=["bird"])
+
+    assert written == {"bird": [BIRDS[0]]}
+
+
+def test_tagging_one_track_leaves_the_others_where_they_are(tmp_path) -> None:
+    path = tmp_path / "track-labels.json"
+    write_tags(path, read_labels(path), key=BIRDS[0], names=["bird"])
+
+    written = write_tags(path, read_labels(path), key=BIRDS[1], names=["insect"])
+
+    assert written == {"bird": [BIRDS[0]], "insect": [BIRDS[1]]}
+
+
+def test_two_tags_give_the_tracks_that_are_both_things() -> None:
+    labels = {"bird": BIRDS, "far away": [BIRDS[1], INSECTS[0]]}
+
+    assert tagged(labels, names=["bird", "far away"]) == {BIRDS[1]}
+    assert tagged(labels, names=["bird"]) == set(BIRDS)
+    assert tagged(labels, names=[]) == set()

@@ -10,7 +10,7 @@ from hessdalen.dashboard.map_view import (
     BY_DISTANCE,
     CACHED_COLUMN,
     NAME_COLUMN,
-    TRACK_NAME_COLUMN,
+    TAGS_COLUMN,
     UNNAMED,
     UNVALIDATED,
     VALIDATED,
@@ -90,19 +90,25 @@ def test_every_track_carries_the_name_of_the_cluster_it_is_in() -> None:
     assert carried[NAME_COLUMN].tolist() == ["bird", UNNAMED, "bird", UNNAMED]
 
 
-def test_a_track_stands_under_its_cluster_name_until_it_is_given_one() -> None:
+def test_a_track_stands_under_its_cluster_name_until_it_is_tagged() -> None:
     carried = labelled(_mapped(), clusters={"bird": ["a/1", "a/2"]}, own={})
 
-    assert carried[TRACK_NAME_COLUMN].tolist() == ["bird", "bird", UNNAMED, UNNAMED]
+    assert carried[TAGS_COLUMN].tolist() == ["bird", "bird", UNNAMED, UNNAMED]
 
 
-def test_a_name_given_to_one_track_stands_over_its_cluster_name() -> None:
+def test_a_tag_given_to_one_track_stands_over_its_cluster_name() -> None:
     """A cluster holds what its descriptors group, and one track of it can be
     something else."""
     carried = labelled(_mapped(), clusters={"bird": ["a/1", "a/2"]}, own={"plane": ["a/2"]})
 
-    assert carried[TRACK_NAME_COLUMN].tolist() == ["bird", "plane", UNNAMED, UNNAMED]
+    assert carried[TAGS_COLUMN].tolist() == ["bird", "plane", UNNAMED, UNNAMED]
     assert carried[NAME_COLUMN].tolist() == ["bird", "bird", UNNAMED, UNNAMED]
+
+
+def test_a_track_under_several_tags_carries_them_all() -> None:
+    carried = labelled(_mapped(), clusters={}, own={"plane": ["a/2"], "bird": ["a/2"], "far": ["a/2"]})
+
+    assert carried[TAGS_COLUMN].tolist() == [UNNAMED, "bird, far, plane", UNNAMED, UNNAMED]
 
 
 def test_every_track_is_on_the_map_whichever_of_them_was_confirmed() -> None:
