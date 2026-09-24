@@ -1,6 +1,6 @@
 outs:
-- md5: 0042e6fd1eb1462f72a89683f667ea50.dir
-  size: 6244058
-  nfiles: 732
+- md5: a8c00b70da034e8931bc7a64b5087b9b.dir
+  size: 151802319
+  nfiles: 2005
   hash: md5
   path: corpus
