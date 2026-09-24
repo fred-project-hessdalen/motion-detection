@@ -488,10 +488,7 @@ SIMILAR_TAGS_TEXT = (
 TOGETHER_HELP = (
     "The tracks of this same recording that were running while the selected one was, the longest overlap "
     "first. Two objects in the sky at once are two tracks that nothing else on the page puts together, "
-    "since they are alike in neither shape nor place. A square rings them on the map. They are taken from "
-    "the whole corpus rather than from what the sidebar leaves on the map, because what else moved at that "
-    "moment is a question about the recording: the other object is usually on the other side of the "
-    "roughness split, which the map holds back by default."
+    "since they are alike in neither shape nor place. A square rings them on the map."
 )
 REFERENCE_HELP = (
     "Where this track is, for someone without this repository: the recording in the archive, and the "
@@ -671,9 +668,9 @@ def page() -> None:
     sample = shown.iloc[0:0] if cluster is None else _sample(shown, cluster=cluster, selected=picked)
     nearest = shown.iloc[0:0] if picked is None else _nearest(shown, track=picked, radius=float(radius))
     together = (
-        tracks.iloc[0:0]
+        shown.iloc[0:0]
         if picked is None
-        else overlapping(tracks, ranges=_stretches(PATHS_PATH.stat().st_mtime, clip=str(picked["clip"])), track=picked)
+        else overlapping(shown, ranges=_stretches(PATHS_PATH.stat().st_mtime, clip=str(picked["clip"])), track=picked)
     )
     chosen = shown.iloc[0:0] if picked is None else shown[shown["key"] == picked["key"]]
     rings = [
