@@ -48,7 +48,7 @@ from hessdalen.dashboard.cluster_labels import (
     write_tags,
 )
 from hessdalen.dashboard.panels import DEVIATION, RECORDING
-from hessdalen.dashboard.runs import probe
+from hessdalen.dashboard.runs import VideoProbe, probe
 from hessdalen.dashboard.track_clip import (
     ClipProgress,
     StoredTrack,
@@ -1566,7 +1566,7 @@ def _frame_rate(recording: str) -> float:
     for folder in (VIDEOS_DIR, FETCHED_DIR):
         video = folder / recording
         if video.is_file():
-            return probe(video).frames_per_second
+            return _probe_video(video).frames_per_second
     return 0.0
 
 
@@ -1861,7 +1861,7 @@ def _clip(key: str, *, recording: str, stored: StoredTrack, player: str, may_bui
         return False
 
     if source.path is not None:
-        clips = _clips(source.path, track=stored)
+        clips = _clips(source.path, track=stored, details=_probe_video(source.path))
         if clips.built:
             _play(clips, player=player)
             return False
@@ -1986,9 +1986,9 @@ def _clip_job(source: VideoSource, *, track: StoredTrack) -> Job:
 
     def job(report: Report) -> Path:
         video = source.path or fetch_video(FETCHED_DIR, video=_archived(source), on_progress=report)
-        clips = _clips(video, track=track)
+        details = probe(video)
+        clips = _clips(video, track=track, details=details)
         if not clips.built:
-            details = probe(video)
             stretch = stretch_around(
                 track, frames_per_second=details.frames_per_second, frame_count=details.frame_count
             )
@@ -2020,10 +2020,28 @@ def _archived(source: VideoSource) -> ArchiveVideo:
     return source.archived
 
 
-def _clips(video: Path, *, track: StoredTrack) -> TrackClips:
-    details = probe(video)
+def _clips(video: Path, *, track: StoredTrack, details: VideoProbe) -> TrackClips:
     stretch = stretch_around(track, frames_per_second=details.frames_per_second, frame_count=details.frame_count)
     return track_clip_paths(video, track=track, stretch=stretch, settings=config().settings, output_dir=CLIPS_DIR)
+
+
+def _probe_video(video: Path) -> VideoProbe:
+    """What the recording's container says of itself, kept while the file
+    stays as it is.
+
+    Opening a recording to ask costs a tenth of a second, and the page
+    asks again on every run for as long as one track stays selected. A
+    fetch from the archive writes a recording where a part file stood,
+    so the answer is kept against the file's size and the time it was
+    written rather than against its name alone.
+    """
+    held = video.stat()
+    return _probed(str(video), stamp=(held.st_size, held.st_mtime))
+
+
+@st.cache_data(show_spinner=False, max_entries=PANEL_CACHE_ENTRIES)
+def _probed(video: str, *, stamp: tuple[int, float]) -> VideoProbe:
+    return probe(Path(video))
 
 
 def _gallery(tracks: pd.DataFrame, *, cluster: str | None, sample: pd.DataFrame, playing: pd.Series | None) -> None:
