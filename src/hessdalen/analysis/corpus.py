@@ -9,6 +9,7 @@ the aggregation is left to whoever asks.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
@@ -80,8 +81,20 @@ def gather_paths(clips: list[ClipPath]) -> pa.Table:
     its positions are pixels of, so a track can be drawn from this table
     alone.
     """
-    tables = [_path_rows(clip) for clip in tqdm(clips, desc="Gathering paths", unit="clip")]
-    return pa.concat_tables([table for table in tables if table.num_rows > 0])
+    return pa.concat_tables(list(path_tables(clips)))
+
+
+def path_tables(clips: list[ClipPath]) -> Iterator[pa.Table]:
+    """Each clip's frames as a table of its own, in corpus order.
+
+    The whole corpus runs to millions of frames, which is tens of
+    gigabytes held as one table, so a caller that writes as it reads
+    takes them a clip at a time.
+    """
+    for clip in tqdm(clips, desc="Gathering paths", unit="clip"):
+        table = _path_rows(clip)
+        if table.num_rows > 0:
+            yield table
 
 
 def write_corpus(path: Path, corpus: Corpus) -> int:

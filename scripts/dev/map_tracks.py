@@ -17,7 +17,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
-from hessdalen.analysis.corpus import ClipPath, gather_paths, read_corpus
+from hessdalen.analysis.corpus import ClipPath, path_tables, read_corpus
 from hessdalen.analysis.track_map import CONSENSUS_SEEDS, PER_CLIP, UNASSIGNED, map_corpus, sample_per_clip
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -36,7 +36,7 @@ def main(args: argparse.Namespace) -> None:
     sampled = sample_per_clip(corpus.tracks, per_clip=args.per_clip)
     mapped = map_corpus(sampled, seeds=CONSENSUS_SEEDS)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    pq.write_table(_mapped_paths(corpus.clips, mapped), args.output.with_name(PATHS_NAME))
+    _write_paths(args.output.with_name(PATHS_NAME), clips=corpus.clips, mapped=mapped)
     pq.write_table(mapped, args.output)
 
     clusters = mapped.column("cluster").to_pylist()
@@ -53,15 +53,27 @@ def main(args: argparse.Namespace) -> None:
         print(f"  cluster {name:>4s}  {len(members):5d} tracks  {common}")
 
 
-def _mapped_paths(clips: list[ClipPath], mapped: pa.Table) -> pa.Table:
-    """The frames of the tracks on the map, and of no other.
+def _write_paths(path: Path, *, clips: list[ClipPath], mapped: pa.Table) -> None:
+    """Write the frames of the tracks on the map, and of no other.
 
-    Both sides are matched on one string a row at a time rather than on
-    three columns, because the whole corpus runs to millions of frames
-    and holding those as Python values costs gigabytes.
+    Each clip is filtered and written as it is read, because the whole
+    corpus is tens of gigabytes of frames and a run that held them all
+    at once was killed for it. Both sides are matched on one string a
+    row at a time rather than on three columns, for the same reason.
     """
-    paths = gather_paths(clips)
-    return paths.filter(pc.is_in(_row_keys(paths), value_set=_row_keys(mapped)))
+    wanted = _row_keys(mapped)
+    writer = None
+    try:
+        for table in path_tables(clips):
+            held = table.filter(pc.is_in(_row_keys(table), value_set=wanted))
+            if held.num_rows == 0:
+                continue
+            if writer is None:
+                writer = pq.ParquetWriter(path, held.schema)
+            writer.write_table(held)
+    finally:
+        if writer is not None:
+            writer.close()
 
 
 def _row_keys(table: pa.Table) -> pa.Array:
