@@ -195,6 +195,16 @@ def test_a_rhythm_chart_is_built_over_the_frames_the_track_ran() -> None:
     assert drawn["encoding"]["x"]["scale"]["domain"] == [0, 120]
 
 
+def test_a_rhythm_chart_is_padded_out_to_its_height_and_not_fitted_into_it() -> None:
+    """Fitted, the axes and the title come out of the height before the
+    drawing does, and under the fonts the page uses nothing is left: the chart
+    reaches the page as an empty strip between its axes. The host sets this
+    for any chart that leaves it open, so the chart has to state it."""
+    drawn = rhythm_chart(_beating()[lambda held: held["key"] == "a"], signal=WOBBLE).to_dict()
+
+    assert drawn["autosize"] == {"type": "pad", "contains": "padding"}
+
+
 def _beating() -> pd.DataFrame:
     """Two tracks whose brightness and path both repeat every five frames."""
     steps = np.arange(120)

@@ -76,6 +76,15 @@ UNMEASURED_COLOUR = "#8a8a8a"
 rate, which is most of the slow rates on most tracks."""
 
 RHYTHM_HEIGHT_PIXELS = 130
+"""How tall the drawn part of a rhythm chart stands.
+
+The chart asks to be padded out to this rather than fitted into it.
+Fitted, the axes and the title are taken out of the height first, and
+under the fonts the page is drawn with there is nothing left over: the
+chart comes out as a pair of axes around an empty strip, and only
+opening it full screen gives it the room to appear.
+"""
+
 RHYTHM_COLUMNS = 200
 """Frames a rhythm chart draws at most, one cell each.
 
@@ -188,7 +197,12 @@ def rhythm_chart(points: pd.DataFrame, *, signal: str) -> alt.Chart:
                 legend=None,
             ),
         )
-        .properties(width=FRAME_WIDTH_PIXELS, height=RHYTHM_HEIGHT_PIXELS, title=f"{signal.capitalize()} rhythm")
+        .properties(
+            width=FRAME_WIDTH_PIXELS,
+            height=RHYTHM_HEIGHT_PIXELS,
+            title=f"{signal.capitalize()} rhythm",
+            autosize=alt.AutoSizeParams(type="pad", contains="padding"),
+        )
         .configure_view(stroke="#cfcfcf", fill=UNMEASURED_COLOUR)
     )
 
