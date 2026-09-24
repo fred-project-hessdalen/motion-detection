@@ -1,7 +1,11 @@
 """How a search names one track of the corpus, and where a cluster's name
 goes on the map."""
 
+import json
+
+import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 
 from hessdalen.dashboard.map_view import (
     ANY_VALIDATION,
@@ -11,15 +15,19 @@ from hessdalen.dashboard.map_view import (
     CACHED_COLUMN,
     CLUSTER_TRACKS,
     NAME_COLUMN,
+    NAMES_TITLE,
     NEIGHBOUR_TRACKS,
     PATH_DRAWING,
     PICKED_TRACKS,
+    POINT_COLUMNS,
     TABLE_COLUMNS,
     TAGS_COLUMN,
     UNNAMED,
     UNVALIDATED,
     VALIDATED,
     VALIDATED_COLUMN,
+    Ring,
+    _scatter,
     by_validation,
     charted_signal,
     cluster_names,
@@ -28,6 +36,8 @@ from hessdalen.dashboard.map_view import (
     named_group,
     overlapping,
     picked_tracks,
+    point_traces,
+    ring_traces,
     searched,
     stretches,
     table_rows,
@@ -65,6 +75,78 @@ def test_a_search_of_nothing_names_no_track() -> None:
 
 def test_a_search_no_track_answers_names_none() -> None:
     assert searched(_tracks(), wanted=f"Track 12 in {ROD}").empty
+
+
+def test_a_trace_of_points_is_written_the_way_plotly_writes_one() -> None:
+    """The plot is handed traces the page writes out itself, so they have to
+    hold what a figure of plotly's own would have held."""
+    tracks = _drawn()
+
+    written = point_traces(tracks, colour="Cluster", dimmed=frozenset())[0]
+
+    expected = json.loads(
+        go.Scattergl(
+            x=written["x"],
+            y=written["y"],
+            mode="markers",
+            name=written["name"],
+            uid=written["uid"],
+            marker=written["marker"],
+            customdata=written["customdata"],
+            hoverinfo="none",
+        ).to_json()
+    )
+    assert written == expected
+
+
+def test_a_point_carries_its_numbers_to_the_digits_the_panel_shows() -> None:
+    written = point_traces(_drawn(), colour="Cluster", dimmed=frozenset())[0]
+
+    straightness = POINT_COLUMNS.index("straightness")
+    peak = POINT_COLUMNS.index("peak_deviation_max")
+    assert [row[straightness] for row in written["customdata"]] == [0.95, 0.5]
+    assert [row[peak] for row in written["customdata"]] == [45.1, 8.2]
+    assert written["x"] == [1.2346, 2.0]
+
+
+def test_the_marks_over_the_tracks_stand_at_the_top_of_the_legend() -> None:
+    tracks = _drawn()
+    rings = [Ring(name="Cluster sample", marker={"symbol": "circle-open"}, tracks=tracks.iloc[:1])]
+
+    traces = ring_traces(rings, names=pd.DataFrame({"x": [1.0], "y": [2.0], "name": ["bird"]}))
+
+    assert [trace["uid"] for trace in traces] == ["Cluster sample", NAMES_TITLE]
+    assert [trace["legendrank"] for trace in traces] == [0, 1]
+    assert traces[0]["hoverinfo"] == "skip"
+
+
+def test_a_map_of_no_marks_holds_the_points_alone() -> None:
+    figure = _scatter(_drawn(), colour="Cluster", rings=[], dimmed=frozenset(), names=pd.DataFrame())
+
+    assert [trace["type"] for trace in figure["data"]] == ["scattergl"]
+    assert figure["layout"]["legend"]["title"]["text"] == "Cluster"
+    assert json.dumps(figure)
+
+
+def _drawn() -> pd.DataFrame:
+    """Two tracks of one cluster, as the map draws them."""
+    return pd.DataFrame(
+        {
+            "key": ["a/1", "a/2"],
+            "x": np.array([1.23456789, 2.0], dtype="float32"),
+            "y": np.array([3.0, 4.0], dtype="float32"),
+            "cluster": ["4", "4"],
+            TAGS_COLUMN: ["bird", "bird"],
+            NAME_COLUMN: ["bird", "bird"],
+            "side": ["smooth", "smooth"],
+            "clip": ["Cam1_2025-06-03__12-40-00", "Cam1_2025-06-03__12-40-00"],
+            "track_id": np.array([7484, 12], dtype="int32"),
+            "frames": np.array([117, 40], dtype="int32"),
+            "straightness": np.array([0.9512, 0.4999], dtype="float32"),
+            "peak_deviation_max": np.array([45.14, 8.24], dtype="float32"),
+            "label": ["noInsect", "noInsect"],
+        }
+    )
 
 
 def test_a_name_stands_over_the_middle_of_its_cluster() -> None:

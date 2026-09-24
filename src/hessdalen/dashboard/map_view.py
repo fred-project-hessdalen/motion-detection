@@ -333,6 +333,22 @@ DIM_ALPHA = 0.2
 PANEL_CACHE_ENTRIES = 64
 POLL_SECONDS = 2.0
 
+PLACE_DIGITS = 4
+"""Digits a point's place on the map is written to.
+
+The map is a few hundred pixels across and every digit of every point
+crosses to the browser, so four hold a point well inside the pixel it
+is drawn in at any zoom the page allows.
+"""
+
+FIGURE_CACHE_ENTRIES = 8
+"""Sets of points the map keeps.
+
+One is kept for each set of tracks lately drawn, under each colour, so
+that going back and forth between two filters or two colours draws
+from what is already built.
+"""
+
 GIGABYTE = 1024**3
 """What a gigabyte is taken to be wherever the page writes one.
 
@@ -1196,73 +1212,171 @@ def _commonest(names: pd.Series) -> str:
 
 def _scatter(
     tracks: pd.DataFrame, *, colour: str, rings: list[Ring], dimmed: frozenset[str], names: pd.DataFrame
-) -> go.Figure:
-    """The tracks drawn by the graphics card, one trace per colour, so the
-    legend names each colour and a click on it hides or shows those tracks.
+) -> dict[str, Any]:
+    """The figure the plot is handed: the tracks as points, the marks over
+    them, and the layout they are drawn in.
+
+    The points are the same on every run of the page until the tracks
+    shown, what colours them or which of them are faint changes, so they
+    are kept under a mark of those things and built again only when the
+    mark moves. The marks over them follow the selected track and are
+    built every run, which costs nothing beside the points.
+    """
+    held = _point_traces(_map_mark(tracks, colour=colour, dimmed=dimmed), _tracks=tracks, _dimmed=dimmed, colour=colour)
+    return {"data": [*held, *ring_traces(rings, names=names)], "layout": map_layout(colour)}
+
+
+def _map_mark(tracks: pd.DataFrame, *, colour: str, dimmed: frozenset[str]) -> tuple[Any, ...]:
+    """What the points of the map are built from, as one value to keep them
+    under.
+
+    The tracks are marked by how many they are and by a hash of their
+    keys, so that any filter of the sidebar, and any filter added later,
+    moves the mark by dropping rows. The files every point carries a
+    value from are marked by when they were written, because a name
+    saved on this page changes what a point holds while the tracks
+    themselves stay as they are. A value taken from a file that is not
+    marked here would go stale.
+    """
+    return (
+        colour,
+        bool(dimmed),
+        MAP_PATH.stat().st_mtime,
+        _labels_stamp(),
+        _track_labels_stamp(),
+        _videos_stamp(),
+        len(tracks),
+        int(pd.util.hash_pandas_object(tracks["key"], index=False).sum()),
+    )
+
+
+@st.cache_data(show_spinner=False, max_entries=FIGURE_CACHE_ENTRIES)
+def _point_traces(
+    mark: tuple[Any, ...], *, _tracks: pd.DataFrame, _dimmed: frozenset[str], colour: str
+) -> list[dict[str, Any]]:
+    """The traces of points kept under the mark of what they were built from.
+
+    The tracks and the faint ones are passed under a leading underscore,
+    which is how a cache is told to leave an argument out of the key,
+    because hashing a frame of tens of thousands of rows costs more than
+    the mark that stands for it.
+    """
+    return point_traces(_tracks, colour=colour, dimmed=_dimmed)
+
+
+def point_traces(tracks: pd.DataFrame, *, colour: str, dimmed: frozenset[str]) -> list[dict[str, Any]]:
+    """The tracks as points drawn by the graphics card, one trace per colour,
+    so the legend names each colour and a click on it hides or shows those
+    tracks.
 
     Drawing on the card keeps zooming and panning smooth over thousands
-    of points. The fixed UI revision keeps the zoom when the plot is
-    handed the next figure, and each trace's uid keeps it hidden or
-    shown as the legend left it. The rings over the selected track and
-    the tracks the galleries show take no hover or click, so a click on
-    a ringed track selects the track under the ring. They stand at the
-    top of the legend, which is what says what each mark on the map
-    means, and the colours the map is drawn in run to as many entries as
-    there are clusters.
+    of points. Each trace's uid keeps it hidden or shown as the legend
+    left it.
 
-    A point is taken as pointed at within a few pixels of it, so the
-    panel under the map and the arrow over the point both follow the
-    point the pointer is on rather than one lying near it.
-
-    The names of the clusters are drawn by the browser, which puts them
-    over the points the card draws.
+    A trace is written as the plot reads it. Building it as a figure
+    first and writing that out costs a second of its own on a map this
+    size, and the values a figure writes are the ones written here.
     """
     column = COLOUR_COLUMNS[colour]
-    traces = []
-    for name, shade in _colours(tracks, column=column).items():
-        members = tracks[tracks[column] == name]
-        traces.append(
-            go.Scattergl(
-                x=members["x"],
-                y=members["y"],
-                mode="markers",
-                name=str(name),
-                uid=f"{column}:{name}",
-                marker={"color": _point_colours(members, colour=shade, dimmed=dimmed), "size": 6, "opacity": 0.7},
-                customdata=members[POINT_COLUMNS].to_numpy(dtype=object),
-                hoverinfo="none",
-            )
-        )
-    for place, ring in enumerate(rings):
-        if ring.tracks.empty:
-            continue
-        traces.append(
-            go.Scattergl(
-                x=ring.tracks["x"],
-                y=ring.tracks["y"],
-                mode="markers",
-                name=ring.name,
-                uid=ring.name,
-                legendrank=place,
-                marker=ring.marker,
-                hoverinfo="skip",
-            )
-        )
+    return [
+        {
+            "type": "scattergl",
+            "x": _places(members["x"]),
+            "y": _places(members["y"]),
+            "mode": "markers",
+            "name": str(name),
+            "uid": f"{column}:{name}",
+            "marker": {"color": _point_colours(members, colour=shade, dimmed=dimmed), "size": 6, "opacity": 0.7},
+            "customdata": _point_details(members),
+            "hoverinfo": "none",
+        }
+        for name, shade, members in _by_colour(tracks, column=column)
+    ]
+
+
+def _by_colour(tracks: pd.DataFrame, *, column: str) -> list[tuple[str, str, pd.DataFrame]]:
+    """Each colour of the map, with the tracks drawn in it."""
+    return [(name, shade, tracks[tracks[column] == name]) for name, shade in _colours(tracks, column=column).items()]
+
+
+def _point_details(members: pd.DataFrame) -> list[list[Any]]:
+    """What each point carries for the panel under the map, a row per point.
+
+    A number is cut to the digits the panel shows it to, because the
+    whole of a stored number crosses to the browser and only those
+    digits are ever drawn.
+    """
+    columns = [_column_values(members, column=detail.column, digits=detail.digits) for detail in DETAILS]
+    return [list(row) for row in zip(members["key"].tolist(), *columns)]
+
+
+def _column_values(members: pd.DataFrame, *, column: str, digits: int | None) -> list[Any]:
+    held = members[column]
+    return held.tolist() if digits is None else held.astype("float64").round(digits).tolist()
+
+
+def _places(places: pd.Series) -> list[float]:
+    """Where the points sit, to the digits the plot can draw."""
+    return places.astype("float64").round(PLACE_DIGITS).tolist()
+
+
+def ring_traces(rings: list[Ring], *, names: pd.DataFrame) -> list[dict[str, Any]]:
+    """The marks over the selected track and the tracks the galleries show,
+    and the name of each named cluster over the middle of its points.
+
+    The marks take no hover or click, so a click on a ringed track
+    selects the track under the mark. They stand at the top of the
+    legend, which is what says what each mark on the map means, and the
+    colours the map is drawn in run to as many entries as there are
+    clusters. The names are drawn by the browser, which puts them over
+    the points the card draws.
+    """
+    traces: list[dict[str, Any]] = [
+        {
+            "type": "scattergl",
+            "x": _places(ring.tracks["x"]),
+            "y": _places(ring.tracks["y"]),
+            "mode": "markers",
+            "name": ring.name,
+            "uid": ring.name,
+            "legendrank": place,
+            "marker": ring.marker,
+            "hoverinfo": "skip",
+        }
+        for place, ring in enumerate(rings)
+        if not ring.tracks.empty
+    ]
     if not names.empty:
         traces.append(
-            go.Scatter(
-                x=names["x"],
-                y=names["y"],
-                mode="text",
-                name=NAMES_TITLE,
-                uid=NAMES_TITLE,
-                legendrank=len(rings),
-                text=names["name"],
-                textfont=NAMES_FONT,
-                hoverinfo="skip",
-            )
+            {
+                "type": "scatter",
+                "x": _places(names["x"]),
+                "y": _places(names["y"]),
+                "mode": "text",
+                "name": NAMES_TITLE,
+                "uid": NAMES_TITLE,
+                "legendrank": len(rings),
+                "text": names["name"].tolist(),
+                "textfont": NAMES_FONT,
+                "hoverinfo": "skip",
+            }
         )
-    figure = go.Figure(traces)
+    return traces
+
+
+@st.cache_data(show_spinner=False, max_entries=len(COLOUR_CHOICES))
+def map_layout(colour: str) -> dict[str, Any]:
+    """The layout the map is drawn in, which only the legend's title changes.
+
+    The fixed UI revision keeps the zoom when the plot is handed the
+    next figure. A point is taken as pointed at within a few pixels of
+    it, so the panel under the map and the arrow over the point both
+    follow the point the pointer is on rather than one lying near it.
+
+    It is written out through a figure, because the theme it names
+    stands for a page of settings that plotly expands.
+    """
+    figure = go.Figure()
     figure.update_layout(
         template="plotly_white",
         height=MAP_HEIGHT,
@@ -1277,7 +1391,7 @@ def _scatter(
         xaxis={"showgrid": True, "gridcolor": GRID_COLOR, "zeroline": False},
         yaxis={"showgrid": True, "gridcolor": GRID_COLOR, "zeroline": False},
     )
-    return figure
+    return dict(json.loads(figure.to_json())["layout"])
 
 
 def _point_colours(members: pd.DataFrame, *, colour: str, dimmed: frozenset[str]) -> str | list[str]:

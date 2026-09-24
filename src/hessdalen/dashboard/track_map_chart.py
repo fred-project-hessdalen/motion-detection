@@ -36,11 +36,9 @@ behind holding the one before it.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
-import plotly.graph_objects as go
 import streamlit as st
 from plotly.offline import get_plotlyjs_version
 
@@ -243,7 +241,7 @@ _component = st.components.v2.component("track_map", html=HTML, js=JS, isolate_s
 
 
 def track_map_chart(
-    figure: go.Figure,
+    figure: Mapping[str, Any],
     *,
     key: str,
     details: Sequence[Mapping[str, Any]],
@@ -254,6 +252,10 @@ def track_map_chart(
     clicked, with the track's key under "clicked" in the component's state, and
     call on_clear when the plot is clicked away from every track or Escape is
     pressed.
+
+    The figure holds the traces under "data" and the layout under
+    "layout", as plotly.js reads them, which is what the page hands over
+    rather than building a figure of plotly's own to write out.
 
     Each detail names a line of the panel under the plot, the digits its
     number is shown to, with no digits where the value is shown as it
@@ -273,7 +275,7 @@ def track_map_chart(
     _component(
         key=key,
         data={
-            "figure": json.loads(figure.to_json()),
+            "figure": dict(figure),
             "config": CONFIG,
             "plotly": PLOTLY_URL,
             "details": list(details),
