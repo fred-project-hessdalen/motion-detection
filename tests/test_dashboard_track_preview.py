@@ -3,12 +3,16 @@
 import base64
 import re
 
+import cv2
+import numpy as np
 import pandas as pd
 import pytest
 
+from hessdalen.analysis.spectra import BRIGHTNESS, PRESENCE, RATE_COUNT, WOBBLE
 from hessdalen.dashboard.track_preview import (
     CACHED_MARK,
     JUMP_MARK,
+    PANEL_PIXELS,
     PLAYING_COLOUR,
     PLAYING_MARK,
     VALIDATED_MARK,
@@ -18,6 +22,9 @@ from hessdalen.dashboard.track_preview import (
     frame_view,
     gallery_html,
     light_curve,
+    rhythm,
+    rhythm_chart,
+    spectra_html,
 )
 
 
@@ -142,6 +149,75 @@ def test_a_picked_panel_is_boxed_and_its_neighbour_is_not() -> None:
     assert "outline" not in figures[1]
 
 
+def test_a_rhythm_gallery_draws_one_panel_per_entry_at_the_panel_size() -> None:
+    entries = [_entry("a", "1. birds"), _entry("b", "2. planes")]
+
+    figures = spectra_html(_beating(), entries=entries, frame="#123456", signal=BRIGHTNESS).split("<figure")[1:]
+
+    assert len(figures) == 2
+    assert 'data-track="a"' in figures[0]
+    assert "1. birds" in figures[0]
+    assert _png(figures[0]).shape == (PANEL_PIXELS, PANEL_PIXELS, 3)
+
+
+def test_a_rhythm_panel_carries_the_same_marks_as_a_path_panel() -> None:
+    """A gallery answers a click the same way whichever drawing it holds, so
+    both drawings need the mark that jumps to the track."""
+    entries = [_entry("a", "1. birds", cached=True, validated=True, playing=True)]
+
+    drawn = spectra_html(_beating(), entries=entries, frame="#123456", signal=BRIGHTNESS).split("<figure")[1]
+
+    assert JUMP_MARK in drawn
+    assert CACHED_MARK in drawn
+    assert VALIDATED_MARK in drawn
+    assert PLAYING_COLOUR in drawn
+
+
+def test_a_track_that_repeats_is_drawn_brighter_than_one_that_does_not() -> None:
+    """The panels of a gallery are there to be told apart at a glance."""
+    entries = [_entry("a", "1. birds")]
+    beating = spectra_html(_beating(), entries=entries, frame="#123", signal=BRIGHTNESS)
+    steady = spectra_html(_steady(), entries=entries, frame="#123", signal=BRIGHTNESS)
+
+    assert _png(beating.split("<figure")[1]).max() > _png(steady.split("<figure")[1]).max()
+
+
+def test_a_rhythm_is_read_over_every_frame_a_track_spans() -> None:
+    found = rhythm(_track("a", xs=[0.0, 1.0, 2.0], ys=[0.0, 0.0, 0.0], frames=[4, 6, 7]), signal=PRESENCE)
+
+    assert found.frame_number.tolist() == [4, 5, 6, 7]
+    assert found.image.power.shape == (RATE_COUNT, 4)
+
+
+def test_a_rhythm_chart_is_built_over_the_frames_the_track_ran() -> None:
+    drawn = rhythm_chart(_beating()[lambda held: held["key"] == "a"], signal=WOBBLE).to_dict()
+
+    assert drawn["encoding"]["x"]["scale"]["domain"] == [0, 120]
+
+
+def _beating() -> pd.DataFrame:
+    """Two tracks whose brightness and path both repeat every five frames."""
+    steps = np.arange(120)
+    beat = np.sin(2.0 * np.pi * steps / 5.0)
+    return pd.concat(
+        [
+            _track(key, xs=list(steps.astype(float)), ys=list(4.0 * beat), brightness=list(900.0 + 400.0 * beat))
+            for key in ("a", "b")
+        ]
+    )
+
+
+def _steady() -> pd.DataFrame:
+    steps = np.arange(120)
+    return _track("a", xs=list(steps.astype(float)), ys=[0.0] * 120, brightness=[900.0] * 120)
+
+
+def _png(figure: str) -> np.ndarray:
+    encoded = re.search(r"data:image/png;base64,([^\"]+)", figure)
+    assert encoded is not None
+    return cv2.imdecode(np.frombuffer(base64.b64decode(encoded.group(1)), dtype=np.uint8), cv2.IMREAD_COLOR)
+
+
 def _entry(
     key: str,
     caption: str,
@@ -164,7 +240,14 @@ def _svg(figure: str) -> str:
     return base64.b64decode(encoded.group(1)).decode()
 
 
-def _track(key: str, *, xs: list[float], ys: list[float], frames: list[int] | None = None) -> pd.DataFrame:
+def _track(
+    key: str,
+    *,
+    xs: list[float],
+    ys: list[float],
+    frames: list[int] | None = None,
+    brightness: list[float] | None = None,
+) -> pd.DataFrame:
     count = len(xs)
     return pd.DataFrame(
         {
@@ -172,7 +255,7 @@ def _track(key: str, *, xs: list[float], ys: list[float], frames: list[int] | No
             "frame_number": frames or list(range(count)),
             "centre_x": xs,
             "centre_y": ys,
-            "brightness": [900.0] * count,
+            "brightness": brightness or [900.0] * count,
             "pixel_count": [20] * count,
             "frame_width": [1920] * count,
             "frame_height": [1080] * count,
