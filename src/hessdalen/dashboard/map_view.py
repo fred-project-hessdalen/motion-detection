@@ -237,6 +237,21 @@ NEIGHBOUR_RADIUS = 0.5
 SHUFFLE_KEY = "gallery_shuffle"
 SAMPLE_ORDER_KEY = "sample_order"
 NEAREST_ORDER_KEY = "nearest_order"
+TRACKS_VIEW = "tracks-view"
+SAMPLE_GALLERY = "sample-gallery"
+CLUSTER_LABEL = "cluster-label"
+NEAREST_GALLERY = "nearest-gallery"
+TOGETHER_GALLERY = "together-gallery"
+SELECTED_TRACK = "selected-track"
+VIDEOS = "videos"
+"""The blocks of the page, each drawn on its own.
+
+A click inside a block draws that block again and leaves the rest of the
+page alone. A click that moves the selected track, or that writes a name
+to disk, draws the whole page, because every block reads both. A click
+that moves what a second block holds names that block as well.
+"""
+
 MAP_KEY = "track_map"
 VIEW_KEY = "track_view"
 TABLE_KEY = "track_table"
@@ -337,16 +352,16 @@ PLACE_DIGITS = 4
 """Digits a point's place on the map is written to.
 
 The map is a few hundred pixels across and every digit of every point
-crosses to the browser, so four hold a point well inside the pixel it
-is drawn in at any zoom the page allows.
+crosses to the browser, so four hold a point well inside the pixel it is
+drawn in at any zoom the page allows.
 """
 
 FIGURE_CACHE_ENTRIES = 8
 """Sets of points the map keeps.
 
 One is kept for each set of tracks lately drawn, under each colour, so
-that going back and forth between two filters or two colours draws
-from what is already built.
+that going back and forth between two filters or two colours draws from
+what is already built.
 """
 
 GIGABYTE = 1024**3
@@ -631,13 +646,21 @@ class Group:
 @dataclass(frozen=True, slots=True)
 class Naming:
     """What a press of Save is to write: the file the name is kept in, the
-    tracks it is given to, the box it was given in, and whether keeping it
-    confirms those tracks as well."""
+    tracks it is given to, the box it was given in, whether keeping it
+    confirms those tracks as well, and which block of the page the box
+    stands in.
+
+    The block is part of what a dialog is held under, because the
+    Cluster label box and the Reassign box are saved the same way and
+    stand in blocks that are drawn apart. A dialog held under one name
+    for both would be opened by whichever block was drawn next.
+    """
 
     path: Path
     keys: tuple[str, ...]
     box: str
     confirms: bool
+    owner: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -690,13 +713,69 @@ class VideoSource:
     link: str
 
 
+@dataclass(frozen=True, slots=True, eq=False)
+class Scope:
+    """What the sidebar leaves the page to draw: every track of the corpus,
+    the tracks its filters keep, and what its other controls hold.
+
+    A block of the page is handed this and nothing more. A block is
+    drawn again on its own whenever something inside it is pressed, and
+    it is handed then what it was handed on the last run of the whole
+    page, so only what no press inside a block can change belongs here.
+    Every control of the sidebar draws the whole page again, which is
+    what keeps that true.
+
+    Frames are compared by what they hold, which is dear over tens of
+    thousands of rows, so two of these stand apart unless they are the
+    one value.
+    """
+
+    tracks: pd.DataFrame
+    shown: pd.DataFrame
+    wanted: str
+    colour: str
+    chosen_cluster: str
+    radius: float
+    dim_uncached: bool
+
+
 def page() -> None:
+    """The map of the corpus and everything read off the track picked out of
+    it.
+
+    Each block below the sidebar is drawn by a fragment of its own, so a
+    control redraws the block it stands in and leaves the rest of the
+    page alone. What the sidebar decides is handed to every fragment,
+    because only a run of the whole page can change it, and the selected
+    track is worked out inside each fragment, because a click can move
+    it between one run of a fragment and the next.
+    """
     st.title("Track map")
     if not (MAP_PATH.is_file() and PATHS_PATH.is_file()):
         st.error(f"No track map at {MAP_PATH}. Write it with `{MAP_COMMAND}`.")
         return
 
-    tracks = _tracks_frame()
+    scope = _sidebar(_tracks_frame())
+    map_column, track_column = st.columns([3, 2])
+    with map_column:
+        _tracks_view(scope)
+        _gallery(scope)
+        _labelling(scope)
+        _neighbours(scope)
+        _together(scope)
+
+    with track_column:
+        _steps()
+        _selected_block(scope)
+        _videos(scope)
+
+
+def _sidebar(tracks: pd.DataFrame) -> Scope:
+    """What the sidebar leaves the page to draw.
+
+    Every control here changes which tracks the page holds, so each of
+    them draws the whole page again.
+    """
     with st.sidebar:
         wanted = str(st.text_input("Search", key=SEARCH_KEY, on_change=_search, help=SEARCH_HELP))
         if wanted.strip():
@@ -730,77 +809,96 @@ def page() -> None:
     if chosen_tags:
         shown = shown[shown["key"].isin(tagged(_track_labels(_track_labels_stamp()), names=chosen_tags))]
     shown = shown[shown["label"].isin(folders)] if folders else shown
-    shown = by_validation(shown, choice=str(validation or ANY_VALIDATION))
-    picked = _picked(shown, tracks=tracks, key=_history().standing)
-    playing = _playing(tracks, picked=picked)
-    cluster = _gallery_cluster(str(chosen_cluster), picked=picked)
-    sample = shown.iloc[0:0] if cluster is None else _sample(shown, cluster=cluster, selected=picked)
-    nearest = shown.iloc[0:0] if picked is None else _nearest(shown, track=picked, radius=float(radius))
-    together = (
-        shown.iloc[0:0]
-        if picked is None
-        else overlapping(shown, ranges=_stretches(PATHS_PATH.stat().st_mtime, clip=str(picked["clip"])), track=picked)
+    return Scope(
+        tracks=tracks,
+        shown=by_validation(shown, choice=str(validation or ANY_VALIDATION)),
+        wanted=wanted,
+        colour=str(colour or "Cluster"),
+        chosen_cluster=str(chosen_cluster),
+        radius=float(radius),
+        dim_uncached=bool(cached),
     )
-    chosen = shown.iloc[0:0] if picked is None else shown[shown["key"] == picked["key"]]
-    rings = [
-        Ring(name=SAMPLE_TITLE, marker=SAMPLE_MARKER, tracks=sample),
-        Ring(name=NEAREST_TITLE, marker=NEAREST_MARKER, tracks=nearest),
-        Ring(name=TOGETHER_TITLE, marker=TOGETHER_MARKER, tracks=together),
-        Ring(name=SELECTED_TITLE, marker=SELECTED_MARKER, tracks=chosen),
+
+
+def _standing(scope: Scope) -> pd.Series | None:
+    """The selected track, and nothing while none is selected.
+
+    A fragment works this out for itself on every run of its own,
+    because a click on the map, a step back or a jump from a gallery
+    moves it while the sidebar stays as it was.
+    """
+    return _picked(scope.shown, tracks=scope.tracks, key=_history().standing)
+
+
+def _rings(scope: Scope, *, picked: pd.Series | None) -> list[Ring]:
+    """The marks the map draws over the selected track and over the tracks each
+    gallery below it shows."""
+    cluster = _gallery_cluster(scope.chosen_cluster, picked=picked)
+    empty = scope.shown.iloc[0:0]
+    return [
+        Ring(name=SAMPLE_TITLE, marker=SAMPLE_MARKER, tracks=empty if cluster is None else _sampled(scope, cluster)),
+        Ring(name=NEAREST_TITLE, marker=NEAREST_MARKER, tracks=_nearby(scope, picked=picked)),
+        Ring(name=TOGETHER_TITLE, marker=TOGETHER_MARKER, tracks=_alongside(scope, picked=picked)),
+        Ring(
+            name=SELECTED_TITLE,
+            marker=SELECTED_MARKER,
+            tracks=empty if picked is None else scope.shown[scope.shown["key"] == picked["key"]],
+        ),
     ]
 
-    map_column, track_column = st.columns([3, 2])
-    with map_column:
-        heading, view = st.columns(TRACKS_ROW, vertical_alignment="bottom")
-        drawn_as = str(
-            view.segmented_control("View", options=VIEW_CHOICES, default=MAP_VIEW, key=VIEW_KEY, help=VIEW_HELP)
-            or MAP_VIEW
-        )
-        listed = drawn_as == TABLE_VIEW
-        heading.subheader("Tracks", help=TABLE_HELP if listed else MAP_HELP)
-        rows = searched(tracks, wanted=wanted) if listed and wanted.strip() else shown
-        st.caption(f"{len(rows)} of {len(tracks)} tracks")
-        if listed:
-            _table(rows)
-        else:
-            dimmed = _uncached(shown) if cached else frozenset()
-            figure = _scatter(
-                shown,
-                colour=str(colour or "Cluster"),
-                rings=rings,
-                dimmed=dimmed,
-                names=cluster_names(shown, labels=_cluster_labels(_labels_stamp())),
-            )
-            track_map_chart(figure, key=MAP_KEY, details=DETAIL_LINES, on_click=_map_clicked, on_clear=_map_cleared)
-        _gallery(shown, cluster=cluster, sample=sample, playing=playing)
-        if cluster is not None:
-            _labelling(
-                tracks,
-                cluster=cluster,
-                nearest=nearest,
-                selected="" if picked is None else str(picked["key"]),
-            )
-        if picked is not None:
-            _neighbours(nearest, radius=float(radius), playing=playing)
-            _together(together, track=picked, playing=playing)
 
-    with track_column:
-        _steps()
-        if picked is None:
-            st.caption("No track selected.")
-        else:
-            _selected(picked, points=_track_points(PATHS_PATH.stat().st_mtime, key=str(picked["key"])))
-        _videos(picked=picked, playing=playing)
+def _played(scope: Scope, *, picked: pd.Series | None) -> pd.Series | None:
+    """The track whose video plays, which a click on a gallery panel moves
+    without moving the selected track."""
+    return _playing(scope.tracks, picked=picked)
 
-    similar = st.session_state.pop(SIMILAR_KEY, None)
-    replacing = st.session_state.pop(REPLACING_KEY, None)
-    similar_tags = st.session_state.pop(SIMILAR_TAGS_KEY, None)
-    if similar is not None:
-        _similar_name(similar)
-    elif replacing is not None:
-        _replacing_name(replacing)
-    elif similar_tags is not None:
-        _similar_tags(similar_tags)
+
+def _sampled(scope: Scope, cluster: str) -> pd.DataFrame:
+    return _sample(scope.shown, cluster=cluster, selected=_standing(scope))
+
+
+def _nearby(scope: Scope, *, picked: pd.Series | None) -> pd.DataFrame:
+    if picked is None:
+        return scope.shown.iloc[0:0]
+    return _nearest(scope.shown, track=picked, radius=scope.radius)
+
+
+def _alongside(scope: Scope, *, picked: pd.Series | None) -> pd.DataFrame:
+    if picked is None:
+        return scope.shown.iloc[0:0]
+    ranges = _stretches(PATHS_PATH.stat().st_mtime, clip=str(picked["clip"]))
+    return overlapping(scope.shown, ranges=ranges, track=picked)
+
+
+@st.fragment(key=TRACKS_VIEW)
+def _tracks_view(scope: Scope) -> None:
+    """The tracks as points on the map or as a row each in a table.
+
+    The View control redraws this block alone. A click on a point or a
+    row moves the selected track, which every block reads, so the
+    callbacks that take those clicks draw the whole page again.
+    """
+    picked = _standing(scope)
+    heading, view = st.columns(TRACKS_ROW, vertical_alignment="bottom")
+    drawn_as = str(
+        view.segmented_control("View", options=VIEW_CHOICES, default=MAP_VIEW, key=VIEW_KEY, help=VIEW_HELP) or MAP_VIEW
+    )
+    listed = drawn_as == TABLE_VIEW
+    heading.subheader("Tracks", help=TABLE_HELP if listed else MAP_HELP)
+    rows = searched(scope.tracks, wanted=scope.wanted) if listed and scope.wanted.strip() else scope.shown
+    st.caption(f"{len(rows)} of {len(scope.tracks)} tracks")
+    if listed:
+        _table(rows)
+        return
+
+    figure = _scatter(
+        scope.shown,
+        colour=scope.colour,
+        rings=_rings(scope, picked=picked),
+        dimmed=_uncached(scope.shown) if scope.dim_uncached else frozenset(),
+        names=cluster_names(scope.shown, labels=_cluster_labels(_labels_stamp())),
+    )
+    track_map_chart(figure, key=MAP_KEY, details=DETAIL_LINES, on_click=_map_clicked, on_clear=_map_cleared)
 
 
 def _steps() -> None:
@@ -851,6 +949,7 @@ def _table_clicked() -> None:
     keys = list(st.session_state.get(TABLE_ROWS_KEY, []))
     if picked and picked[0] < len(keys):
         _select(str(keys[picked[0]]))
+        _page_again()
 
 
 def _map_clicked() -> None:
@@ -864,6 +963,7 @@ def _map_clicked() -> None:
     clicked = _reported(MAP_KEY, event="clicked")
     if clicked:
         _select(clicked)
+        _page_again()
 
 
 def _map_cleared() -> None:
@@ -872,6 +972,19 @@ def _map_cleared() -> None:
     if _reported(MAP_KEY, event="cleared"):
         st.session_state[HISTORY_KEY] = cleared(_history())
         st.session_state.pop(PLAYING_KEY, None)
+        st.session_state.pop(PICKED_KEY, None)
+        _page_again()
+
+
+def _page_again() -> None:
+    """Draw the whole page again, from a press inside one of its blocks.
+
+    A press inside a block draws that block alone. A press that moves
+    the selected track, or that writes a name, a tag or a confirmation
+    to disk, changes what every other block holds, so it has to reach
+    further than the block it was made in.
+    """
+    st.rerun()
 
 
 def _sample_clicked() -> None:
@@ -906,6 +1019,11 @@ def _gallery_clicked(component: str) -> None:
     A click on its own picks the one panel. Ctrl and Shift pick more of
     them, and the video stays with the first of the picked tracks, which
     is the one a plain click left.
+
+    The click draws the three galleries again, because one track can
+    stand in two of them, and the box that names the picked tracks with
+    them. It reaches the players only where the track playing has moved,
+    which a plain click does and a Ctrl click does not.
     """
     clicked = _reported(component, event="clicked")
     if not clicked:
@@ -915,9 +1033,15 @@ def _gallery_clicked(component: str) -> None:
     picked = picked_tracks(
         _picked_keys(), key=key, reach=reach, order=list(st.session_state.get(_order_key(component), []))
     )
+    played = str(st.session_state.get(PLAYING_KEY) or "")
     st.session_state[PICKED_KEY] = picked
     if picked:
         st.session_state[PLAYING_KEY] = picked[0]
+
+    blocks = [SAMPLE_GALLERY, NEAREST_GALLERY, TOGETHER_GALLERY, CLUSTER_LABEL]
+    if picked and picked[0] != played:
+        blocks.append(VIDEOS)
+    st.rerun(blocks)
 
 
 def picked_tracks(picked: Sequence[str], *, key: str, reach: str, order: Sequence[str]) -> tuple[str, ...]:
@@ -964,6 +1088,7 @@ def _gallery_jumped(component: str) -> None:
     jumped = _reported(component, event="jumped")
     if jumped:
         _select(jumped)
+        _page_again()
 
 
 def _reported(component: str, *, event: str) -> str:
@@ -1321,8 +1446,8 @@ def _places(places: pd.Series) -> list[float]:
 
 
 def ring_traces(rings: list[Ring], *, names: pd.DataFrame) -> list[dict[str, Any]]:
-    """The marks over the selected track and the tracks the galleries show,
-    and the name of each named cluster over the middle of its points.
+    """The marks over the selected track and the tracks the galleries show, and
+    the name of each named cluster over the middle of its points.
 
     The marks take no hover or click, so a click on a ringed track
     selects the track under the mark. They stand at the top of the
@@ -1406,8 +1531,8 @@ def _point_colours(members: pd.DataFrame, *, colour: str, dimmed: frozenset[str]
 
 
 def _colours(tracks: pd.DataFrame, *, column: str) -> dict[str, str]:
-    """The colour of each value of the column, with the clusters in their
-    fixed colours and tracks outside every cluster in grey."""
+    """The colour of each value of the column, with the clusters in their fixed
+    colours and tracks outside every cluster in grey."""
     if column != "cluster":
         names = sorted(tracks[column].unique())
         return {name: OTHER_COLORS[index % len(OTHER_COLORS)] for index, name in enumerate(names)}
@@ -1417,6 +1542,27 @@ def _colours(tracks: pd.DataFrame, *, column: str) -> dict[str, str]:
     if (tracks["cluster"] == UNASSIGNED_NAME).any():
         colours[UNASSIGNED_NAME] = UNASSIGNED_COLOR
     return colours
+
+
+@st.fragment(key=SELECTED_TRACK)
+def _selected_block(scope: Scope) -> None:
+    """The selected track, everything read off it, and the dialog a tag saved
+    here opens.
+
+    The track's row is looked up afresh rather than held, because the
+    tags and the name it stands under are read off it and a save writes
+    both. Every save here draws the whole page, so the row this block
+    draws is never older than the files it was built from.
+    """
+    picked = _standing(scope)
+    if picked is None:
+        st.caption("No track selected.")
+        return
+
+    _selected(picked, points=_track_points(PATHS_PATH.stat().st_mtime, key=str(picked["key"])))
+    similar_tags = st.session_state.pop(SIMILAR_TAGS_KEY, None)
+    if similar_tags is not None:
+        _similar_tags(similar_tags)
 
 
 def _selected(track: pd.Series, *, points: pd.DataFrame) -> None:
@@ -1521,8 +1667,8 @@ def _tuning(track: pd.Series, *, held: Reference) -> None:
 
 
 def _tune(video: Path, held: Reference) -> None:
-    """Cut the stretch, name it after what the track stands under, and take
-    the person to it."""
+    """Cut the stretch, name it after what the track stands under, and take the
+    person to it."""
     begin = max(held.begin_s - MARGIN_SECONDS, 0.0)
     end = held.end_s + MARGIN_SECONDS
     cut = cut_for_tuning(video, begin_s=begin, end_s=end, root=TUNING_DIR)
@@ -1617,7 +1763,7 @@ def _reassigning(track: pd.Series) -> None:
     """
     key = str(track["key"])
     given = label_of(_cluster_labels(_labels_stamp()), keys=[key])
-    naming = Naming(path=LABELS_PATH, keys=(key,), box=f"{REASSIGN_KEY}:{key}", confirms=True)
+    naming = Naming(path=LABELS_PATH, keys=(key,), box=f"{REASSIGN_KEY}:{key}", confirms=True, owner=SELECTED_TRACK)
 
     chooser, save, _rest = st.columns(REASSIGN_ROW, vertical_alignment="bottom")
     _name_box(chooser, label="Reassign", given=given, naming=naming, help=REASSIGN_HELP)
@@ -1629,6 +1775,7 @@ def _reassigning(track: pd.Series) -> None:
         help=SAVE_REASSIGN_HELP,
         width="stretch",
     )
+    _name_dialogs(SELECTED_TRACK)
 
 
 def _name_box(column: DeltaGenerator, *, label: str, given: str, naming: Naming, help: str) -> None:
@@ -1669,7 +1816,7 @@ def _save_name(naming: Naming) -> None:
     wanted = canonical_label(str(st.session_state[naming.box] or ""))
     near = near_label(wanted, known=_known_names())
     if near:
-        st.session_state[SIMILAR_KEY] = Similar(naming=naming, name=wanted, near=near)
+        st.session_state[f"{SIMILAR_KEY}:{naming.owner}"] = Similar(naming=naming, name=wanted, near=near)
         return
 
     _settle(naming, name=wanted)
@@ -1684,10 +1831,11 @@ def _settle(naming: Naming, *, name: str) -> None:
     """
     held = label_of(read_labels(naming.path), keys=list(naming.keys))
     if held and held != name:
-        st.session_state[REPLACING_KEY] = Replacing(naming=naming, name=name, held=held)
+        st.session_state[f"{REPLACING_KEY}:{naming.owner}"] = Replacing(naming=naming, name=name, held=held)
         return
 
     _keep_name(naming, name=name)
+    _page_again()
 
 
 def _keep_name(naming: Naming, *, name: str) -> None:
@@ -1722,6 +1870,7 @@ def _save_tags(tagging: Tagging) -> None:
         return
 
     _keep_tags(tagging, names=names)
+    _page_again()
 
 
 def _keep_tags(tagging: Tagging, *, names: tuple[str, ...]) -> None:
@@ -1791,7 +1940,11 @@ def _known_names() -> list[str]:
 
 
 def _validate(key: str) -> None:
+    """Confirm the track or take the confirmation off, and draw the whole page
+    again, because a gallery marks a confirmed track and the sidebar can hold
+    the map to the tracks still to go through."""
     _confirm(key, confirmed=bool(st.session_state[f"{VALIDATED_KEY}:{key}"]))
+    _page_again()
 
 
 def _confirm(key: str, *, confirmed: bool) -> None:
@@ -1806,14 +1959,21 @@ def _confirm(key: str, *, confirmed: bool) -> None:
     st.session_state[f"{VALIDATED_KEY}:{key}"] = confirmed
 
 
-def _videos(*, picked: pd.Series | None, playing: pd.Series | None) -> None:
+@st.fragment(key=VIDEOS)
+def _videos(scope: Scope) -> None:
     """The video of the selected track, and under it the video of a track a
     gallery panel was clicked on to hold against it.
 
     One clip is built at a time, so the second waits while the first is
     being built. With no track selected the clicked one takes the first
     player, because there is nothing to hold it against.
+
+    A click on a gallery panel names this block as well as the
+    galleries, which is what brings the clicked track's video under the
+    selected track's without drawing the rest of the page again.
     """
+    picked = _standing(scope)
+    playing = _played(scope, picked=picked)
     first = picked if picked is not None else playing
     if first is None:
         return
@@ -2026,8 +2186,8 @@ def _clips(video: Path, *, track: StoredTrack, details: VideoProbe) -> TrackClip
 
 
 def _probe_video(video: Path) -> VideoProbe:
-    """What the recording's container says of itself, kept while the file
-    stays as it is.
+    """What the recording's container says of itself, kept while the file stays
+    as it is.
 
     Opening a recording to ask costs a tenth of a second, and the page
     asks again on every run for as long as one track stays selected. A
@@ -2044,13 +2204,22 @@ def _probed(video: str, *, stamp: tuple[int, float]) -> VideoProbe:
     return probe(Path(video))
 
 
-def _gallery(tracks: pd.DataFrame, *, cluster: str | None, sample: pd.DataFrame, playing: pd.Series | None) -> None:
+@st.fragment(key=SAMPLE_GALLERY)
+def _gallery(scope: Scope) -> None:
     """The random sample of the cluster, framed in the colour that rings it on
-    the map."""
+    the map.
+
+    Sort by and Shuffle redraw this gallery alone, and Shuffle redraws
+    the map with it, because the map rings the tracks this gallery
+    draws.
+    """
+    picked = _standing(scope)
+    cluster = _gallery_cluster(scope.chosen_cluster, picked=picked)
     if cluster is None:
         st.caption("Select a track, or choose a cluster for the gallery in the sidebar.")
         return
 
+    tracks, sample, playing = scope.tracks, _sampled(scope, cluster), _played(scope, picked=picked)
     heading, sorting, shuffle = st.columns(GALLERY_ROW, vertical_alignment="bottom")
     heading.subheader(SAMPLE_TITLE, help=GALLERY_HELP)
     order = str(
@@ -2076,15 +2245,21 @@ def _gallery(tracks: pd.DataFrame, *, cluster: str | None, sample: pd.DataFrame,
 
 
 def _shuffle() -> None:
+    """Draw another sample of the cluster, and the map with it, because the map
+    rings the tracks this gallery draws."""
     st.session_state[SHUFFLE_KEY] = st.session_state.get(SHUFFLE_KEY, 0) + 1
+    st.rerun([SAMPLE_GALLERY, TRACKS_VIEW])
 
 
-def _labelling(tracks: pd.DataFrame, *, cluster: str, nearest: pd.DataFrame, selected: str) -> None:
-    """The name a group of tracks is under, and the box that gives it one.
+@st.fragment(key=CLUSTER_LABEL)
+def _labelling(scope: Scope) -> None:
+    """The name a group of tracks is under, the box that gives it one, and the
+    dialogs a press of Save opens.
 
-    The group is the cluster the gallery above draws, or the tracks
-    nearest the selected one, which is how a name is given to a
-    neighbourhood the clustering cut in two.
+    The group is the cluster the gallery above draws, the tracks nearest
+    the selected one, which is how a name is given to a neighbourhood
+    the clustering cut in two, or the tracks picked out of the galleries
+    by hand.
 
     Every track of a cluster takes the name, including the tracks the
     sidebar's filters leave off the map, because the name is about what
@@ -2095,7 +2270,19 @@ def _labelling(tracks: pd.DataFrame, *, cluster: str, nearest: pd.DataFrame, sel
     The box is keyed by the group it names, so that it opens on that
     group's own name. The nearest tracks are the group of the selected
     track, which is why the selected track is part of the key.
+
+    Apply to and the box itself redraw this block alone. A press of Save
+    that writes draws the whole page, because the name it wrote colours
+    the map and marks the panels of every gallery.
     """
+    picked = _standing(scope)
+    cluster = _gallery_cluster(scope.chosen_cluster, picked=picked)
+    if cluster is None:
+        return
+
+    tracks = scope.tracks
+    nearest = _nearby(scope, picked=picked)
+    selected = "" if picked is None else str(picked["key"])
     chooser, save, over, _rest = st.columns(NAME_ROW, vertical_alignment="bottom")
     given_to = str(
         over.segmented_control(
@@ -2108,7 +2295,7 @@ def _labelling(tracks: pd.DataFrame, *, cluster: str, nearest: pd.DataFrame, sel
     members = _naming_members(tracks, cluster=cluster, nearest=nearest, given_to=given_to)
     group = named_group(labels, members=members, selected=selected, given_to=given_to)
     box = f"{given_to}:{cluster}" if given_to == CLUSTER_TRACKS else f"{given_to}:{selected}"
-    naming = Naming(path=LABELS_PATH, keys=group.moving, box=f"{LABEL_KEY}:{box}", confirms=False)
+    naming = Naming(path=LABELS_PATH, keys=group.moving, box=f"{LABEL_KEY}:{box}", confirms=False, owner=CLUSTER_LABEL)
 
     _name_box(chooser, label="Cluster label", given=group.given, naming=naming, help=LABEL_HELP)
     st.caption(_naming_caption(group, given_to=given_to))
@@ -2120,6 +2307,24 @@ def _labelling(tracks: pd.DataFrame, *, cluster: str, nearest: pd.DataFrame, sel
         help=SAVE_LABEL_HELP,
         width="stretch",
     )
+    _name_dialogs(CLUSTER_LABEL)
+
+
+def _name_dialogs(owner: str) -> None:
+    """The dialog a press of Save in this block opened, if it opened one.
+
+    A name close to one already in use is put to the person before
+    either is written, and a name given to tracks that stand under
+    another is put to them before they are moved. Only one of the two
+    stands at a time, because the first settles what the second asks
+    about.
+    """
+    similar = st.session_state.pop(f"{SIMILAR_KEY}:{owner}", None)
+    replacing = st.session_state.pop(f"{REPLACING_KEY}:{owner}", None)
+    if similar is not None:
+        _similar_name(similar)
+    elif replacing is not None:
+        _replacing_name(replacing)
 
 
 def _naming_members(tracks: pd.DataFrame, *, cluster: str, nearest: pd.DataFrame, given_to: str) -> list[str]:
@@ -2170,9 +2375,19 @@ def _naming_caption(group: Group, *, given_to: str) -> str:
     return f"{group.under} of {len(group.keys)} tracks under {group.given}"
 
 
-def _neighbours(nearest: pd.DataFrame, *, radius: float, playing: pd.Series | None) -> None:
+@st.fragment(key=NEAREST_GALLERY)
+def _neighbours(scope: Scope) -> None:
     """The tracks nearest the selected one, each captioned with the cluster it
-    is in and framed in the colour that rings them on the map."""
+    is in and framed in the colour that rings them on the map.
+
+    Sort by redraws this gallery alone, because the map rings the tracks
+    it holds whatever order they stand in.
+    """
+    picked = _standing(scope)
+    if picked is None:
+        return
+
+    nearest, playing = _nearby(scope, picked=picked), _played(scope, picked=picked)
     heading, sorting = st.columns(NEIGHBOUR_ROW, vertical_alignment="bottom")
     heading.subheader(NEAREST_TITLE, help=NEIGHBOURS_HELP)
     order = str(
@@ -2181,7 +2396,7 @@ def _neighbours(nearest: pd.DataFrame, *, radius: float, playing: pd.Series | No
         )
         or BY_DISTANCE
     )
-    st.caption(f"{len(nearest)} tracks within {radius:.2f}")
+    st.caption(f"{len(nearest)} tracks within {scope.radius:.2f}")
     shown = in_order(nearest, order=order)
     captions = [
         f"{place}. {_cluster_caption(cluster)} · {name}"
@@ -2198,9 +2413,15 @@ def _neighbours(nearest: pd.DataFrame, *, radius: float, playing: pd.Series | No
     )
 
 
-def _together(together: pd.DataFrame, *, track: pd.Series, playing: pd.Series | None) -> None:
+@st.fragment(key=TOGETHER_GALLERY)
+def _together(scope: Scope) -> None:
     """The tracks of this recording that were running while the selected one
     was, each captioned with how much of its life ran alongside."""
+    track = _standing(scope)
+    if track is None:
+        return
+
+    together, playing = _alongside(scope, picked=track), _played(scope, picked=track)
     st.subheader(TOGETHER_TITLE, help=TOGETHER_HELP)
     st.caption(f"{len(together)} tracks in {track['clip']} overlap track {int(track['track_id'])} in time")
     captions = [
