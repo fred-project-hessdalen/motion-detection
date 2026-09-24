@@ -85,6 +85,17 @@ chart comes out as a pair of axes around an empty strip, and only
 opening it full screen gives it the room to appear.
 """
 
+RHYTHM_KEY = (
+    "A band across it is a rhythm, and where the band runs is when it held.",
+    "0.2 repeats every 5 frames, 5 Hz at 25 a second. Grey is too little track to read that rate.",
+)
+"""How to read a rhythm chart, under its heading.
+
+A drawing of a rate against time is not a thing most people have read
+before, and the chart carries no legend, so the two lines it takes to
+say what a band means go under the heading.
+"""
+
 RHYTHM_COLUMNS = 200
 """Frames a rhythm chart draws at most, one cell each.
 
@@ -200,7 +211,7 @@ def rhythm_chart(points: pd.DataFrame, *, signal: str) -> alt.Chart:
         .properties(
             width=FRAME_WIDTH_PIXELS,
             height=RHYTHM_HEIGHT_PIXELS,
-            title=f"{signal.capitalize()} rhythm",
+            title=alt.TitleParams(f"{signal.capitalize()} rhythm", subtitle=RHYTHM_KEY, subtitleColor="#9a9a9a"),
             autosize=alt.AutoSizeParams(type="pad", contains="padding"),
         )
         .configure_view(stroke="#cfcfcf", fill=UNMEASURED_COLOUR)
