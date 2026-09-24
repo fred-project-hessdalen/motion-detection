@@ -111,6 +111,14 @@ VALIDATION_CHOICES = ("All", "Validated", "Unvalidated")
 ANY_VALIDATION, VALIDATED, UNVALIDATED = VALIDATION_CHOICES
 NAMING_CHOICES = ("Cluster", "Neighbours")
 CLUSTER_TRACKS, NEIGHBOUR_TRACKS = NAMING_CHOICES
+GALLERY_ORDERS = ("Distance", "Video cached", "Cluster label")
+BY_DISTANCE, BY_CACHED, BY_CLUSTER_NAME = GALLERY_ORDERS
+SAMPLE_ORDERS = (BY_DISTANCE, BY_CACHED)
+"""The orders a gallery's panels can stand in.
+
+The tracks of one cluster stand under one name, so the sample of a
+cluster is not offered that order.
+"""
 SELECTED_CLUSTER = "Selected track's cluster"
 ROUGH_SIDE = "rough"
 OTHER_COLORS = qualitative.Dark24
@@ -158,6 +166,8 @@ reports, and the values the panel under the map shows."""
 GALLERY_SIZE = 30
 NEIGHBOUR_RADIUS = 0.5
 SHUFFLE_KEY = "gallery_shuffle"
+SAMPLE_ORDER_KEY = "sample_order"
+NEAREST_ORDER_KEY = "nearest_order"
 MAP_KEY = "track_map"
 HISTORY_KEY = "track_history"
 PLAYING_KEY = "playing_track"
@@ -187,6 +197,11 @@ SELECTED_TITLE = "Selected track"
 SIMILAR_TITLE = "Similar name"
 REPLACING_TITLE = "Change of name"
 NAME_PLACEHOLDER = "Choose or add a name"
+GALLERY_ROW = (2, 3, 1)
+NEIGHBOUR_ROW = (2, 3)
+"""How the row over each gallery is divided: its heading, the order its panels
+stand in, and for the cluster's sample the button that draws another one."""
+
 NAME_ROW = (2, 1, 2, 3)
 TRACK_NAME_ROW = (3, 1, 1, 2)
 REASSIGN_ROW = (3, 1, 3)
@@ -333,6 +348,18 @@ GALLERY_HELP = (
     "these tracks in the colour their panels are framed in."
 )
 SHUFFLE_HELP = "Draw another random sample of the cluster."
+SAMPLE_ORDER_HELP = (
+    "What the panels stand in order of. Distance puts the tracks nearest the selected track first, and "
+    "the tracks nearest the middle of the cluster while none is selected, which are the ones most of the "
+    "cluster is like. Video cached puts the tracks whose recording is on disk first, the ones that play "
+    "without waiting for a fetch, and leaves them nearest first within each kind."
+)
+NEIGHBOUR_ORDER_HELP = (
+    "What the panels stand in order of. Distance puts the track nearest the selected one first. Video "
+    "cached puts the tracks whose recording is on disk first, the ones that play without waiting for a "
+    "fetch. Cluster label gathers the tracks of each name together and leaves the unnamed ones last. "
+    "Either of the last two leaves the tracks nearest first within each group."
+)
 LABEL_HELP = (
     "What this cluster holds, in a word of your own, such as insect or plane. The names given so far are "
     "offered in the list, which narrows to what is typed into it, and anything else typed there is a new "
@@ -509,7 +536,7 @@ def page() -> None:
     picked = _picked(shown, tracks=tracks, key=_history().standing)
     playing = _playing(tracks, picked=picked)
     cluster = _gallery_cluster(str(chosen_cluster), picked=picked)
-    sample = shown.iloc[0:0] if cluster is None else _sample(shown, cluster=cluster)
+    sample = shown.iloc[0:0] if cluster is None else _sample(shown, cluster=cluster, selected=picked)
     nearest = shown.iloc[0:0] if picked is None else _nearest(shown, track=picked, radius=float(radius))
     chosen = shown.iloc[0:0] if picked is None else shown[shown["key"] == picked["key"]]
     rings = [
@@ -721,18 +748,48 @@ def by_validation(tracks: pd.DataFrame, *, choice: str) -> pd.DataFrame:
     return tracks
 
 
-def _sample(tracks: pd.DataFrame, *, cluster: str) -> pd.DataFrame:
-    """A random sample of the cluster's tracks, drawn anew on Shuffle."""
+def _sample(tracks: pd.DataFrame, *, cluster: str, selected: pd.Series | None) -> pd.DataFrame:
+    """A random sample of the cluster's tracks, drawn anew on Shuffle and
+    nearest first.
+
+    The sample is measured from the selected track, and from the middle
+    of the cluster while no track is selected, where the tracks nearest
+    the middle are the ones most of the cluster is like.
+    """
     members = tracks[tracks["cluster"] == cluster]
-    return members.sample(n=min(GALLERY_SIZE, len(members)), random_state=st.session_state.get(SHUFFLE_KEY, 0))
+    drawn = members.sample(n=min(GALLERY_SIZE, len(members)), random_state=st.session_state.get(SHUFFLE_KEY, 0))
+    middle = members[["x", "y"]].median()
+    return _by_distance(drawn, from_track=middle if selected is None else selected)
 
 
 def _nearest(tracks: pd.DataFrame, *, track: pd.Series, radius: float) -> pd.DataFrame:
     """The tracks nearest the selected one on the map, in any cluster and
-    within the radius."""
+    within the radius, nearest first."""
     others = tracks[tracks["key"] != track["key"]]
     distance = np.hypot(others["x"] - track["x"], others["y"] - track["y"])
     return others.loc[distance[distance <= radius].nsmallest(GALLERY_SIZE).index]
+
+
+def _by_distance(tracks: pd.DataFrame, *, from_track: pd.Series) -> pd.DataFrame:
+    distance = np.hypot(tracks["x"] - from_track["x"], tracks["y"] - from_track["y"])
+    return tracks.loc[distance.sort_values(kind="stable").index]
+
+
+def in_order(tracks: pd.DataFrame, *, order: str) -> pd.DataFrame:
+    """A gallery's tracks in the order picked for it, out of the tracks as they
+    come in, which is nearest first.
+
+    Either of the other two orders gathers the tracks of one kind
+    together and leaves them nearest first within that kind. The tracks
+    whose recording is on disk come first, because those are the ones
+    that play without waiting for a fetch, and the names come in the
+    order they are spelled, which leaves the unnamed tracks last.
+    """
+    if order == BY_CACHED:
+        return tracks.sort_values(CACHED_COLUMN, ascending=False, kind="stable")
+    if order == BY_CLUSTER_NAME:
+        return tracks.sort_values(NAME_COLUMN, kind="stable")
+    return tracks
 
 
 def _uncached(tracks: pd.DataFrame) -> frozenset[str]:
@@ -1330,14 +1387,21 @@ def _gallery(tracks: pd.DataFrame, *, cluster: str | None, sample: pd.DataFrame,
         st.caption("Select a track, or choose a cluster for the gallery in the sidebar.")
         return
 
-    heading, shuffle = st.columns([4, 1], vertical_alignment="bottom")
+    heading, sorting, shuffle = st.columns(GALLERY_ROW, vertical_alignment="bottom")
     heading.subheader(SAMPLE_TITLE, help=GALLERY_HELP)
+    order = str(
+        sorting.segmented_control(
+            "Sort by", options=SAMPLE_ORDERS, default=BY_DISTANCE, key=SAMPLE_ORDER_KEY, help=SAMPLE_ORDER_HELP
+        )
+        or BY_DISTANCE
+    )
     shuffle.button("Shuffle", on_click=_shuffle, help=SHUFFLE_HELP)
     members = int((tracks["cluster"] == cluster).sum())
     st.caption(f"{_cluster_title(cluster)} · {len(sample)} of {members} tracks")
-    captions = [f"{place}. folder {folder}" for place, folder in enumerate(sample["label"], start=1)]
+    shown = in_order(sample, order=order)
+    captions = [f"{place}. folder {folder}" for place, folder in enumerate(shown["label"], start=1)]
     _panels(
-        sample,
+        shown,
         captions=captions,
         frame=SAMPLE_COLOR,
         playing=playing,
@@ -1432,14 +1496,22 @@ def _naming_caption(group: Group) -> str:
 def _neighbours(nearest: pd.DataFrame, *, radius: float, playing: pd.Series | None) -> None:
     """The tracks nearest the selected one, each captioned with the cluster it
     is in and framed in the colour that rings them on the map."""
-    st.subheader(NEAREST_TITLE, help=NEIGHBOURS_HELP)
+    heading, sorting = st.columns(NEIGHBOUR_ROW, vertical_alignment="bottom")
+    heading.subheader(NEAREST_TITLE, help=NEIGHBOURS_HELP)
+    order = str(
+        sorting.segmented_control(
+            "Sort by", options=GALLERY_ORDERS, default=BY_DISTANCE, key=NEAREST_ORDER_KEY, help=NEIGHBOUR_ORDER_HELP
+        )
+        or BY_DISTANCE
+    )
     st.caption(f"{len(nearest)} tracks within {radius:.2f}")
+    shown = in_order(nearest, order=order)
     captions = [
         f"{place}. {_cluster_caption(cluster)} · {name}"
-        for place, (cluster, name) in enumerate(zip(nearest["cluster"], nearest[NAME_COLUMN]), start=1)
+        for place, (cluster, name) in enumerate(zip(shown["cluster"], shown[NAME_COLUMN]), start=1)
     ]
     _panels(
-        nearest,
+        shown,
         captions=captions,
         frame=NEAREST_COLOR,
         playing=playing,

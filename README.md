@@ -225,7 +225,13 @@ carries a play mark and is framed in the colour of that mark. Pressing
 the arrow on a panel jumps to its track, which selects it the way a
 click on its point on the map does. A panel carries a camera while its
 recording is on disk and a green tick once someone has confirmed the
-track. Under that gallery, Cluster label gives a group of tracks a name
+track. Sort by, beside either gallery's heading, puts its panels in the
+order picked there: nearest the selected track first, which is where
+both galleries start, the tracks whose recording is on disk first, or,
+for the nearest tracks, the tracks of each cluster label together. The
+sample of a cluster is measured from the middle of the cluster while no
+track is selected. Under that gallery, Cluster label gives a group of
+tracks a name
 of your own and Save keeps it against every one of them in
 `data/out/analysis/cluster-labels.json`, which holds each name with the
 tracks under it and is what a training set is built from. Apply to

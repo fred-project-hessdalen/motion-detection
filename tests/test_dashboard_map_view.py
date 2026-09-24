@@ -5,6 +5,10 @@ import pandas as pd
 
 from hessdalen.dashboard.map_view import (
     ANY_VALIDATION,
+    BY_CACHED,
+    BY_CLUSTER_NAME,
+    BY_DISTANCE,
+    CACHED_COLUMN,
     NAME_COLUMN,
     TRACK_NAME_COLUMN,
     UNNAMED,
@@ -13,6 +17,7 @@ from hessdalen.dashboard.map_view import (
     VALIDATED_COLUMN,
     by_validation,
     cluster_names,
+    in_order,
     labelled,
     named_group,
     searched,
@@ -110,6 +115,29 @@ def test_the_map_holds_to_the_tracks_someone_confirmed() -> None:
 
 def test_the_map_holds_to_the_tracks_still_to_go_through() -> None:
     assert by_validation(_gone_through(), choice=UNVALIDATED)["key"].tolist() == ["a/1", "a/3"]
+
+
+def test_a_gallery_stands_nearest_first_until_another_order_is_picked() -> None:
+    assert in_order(_gathered(), order=BY_DISTANCE)["key"].tolist() == ["a/1", "a/2", "a/3", "a/4"]
+
+
+def test_the_tracks_whose_recording_is_on_disk_come_first() -> None:
+    assert in_order(_gathered(), order=BY_CACHED)["key"].tolist() == ["a/2", "a/4", "a/1", "a/3"]
+
+
+def test_the_tracks_of_one_name_stand_together_with_the_unnamed_last() -> None:
+    assert in_order(_gathered(), order=BY_CLUSTER_NAME)["key"].tolist() == ["a/2", "a/3", "a/1", "a/4"]
+
+
+def _gathered() -> pd.DataFrame:
+    """Four tracks as a gallery hands them over, nearest first."""
+    return pd.DataFrame(
+        {
+            "key": ["a/1", "a/2", "a/3", "a/4"],
+            NAME_COLUMN: ["meteor", "bird", "bird", UNNAMED],
+            CACHED_COLUMN: [False, True, False, True],
+        }
+    )
 
 
 def test_naming_a_cluster_names_every_track_of_it_that_has_no_name() -> None:
