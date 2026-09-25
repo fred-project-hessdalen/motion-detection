@@ -59,7 +59,7 @@ from hessdalen.dashboard.track_clip import (
 )
 from hessdalen.dashboard.track_gallery import ADD, RANGE, track_gallery
 from hessdalen.dashboard.track_history import History, cleared, stepped, visited
-from hessdalen.dashboard.track_map_chart import MAP_HEIGHT, track_map_chart
+from hessdalen.dashboard.track_map_chart import MAP_HEIGHT, trace_uid, track_map_chart
 from hessdalen.dashboard.track_preview import (
     GalleryEntry,
     close_up,
@@ -1421,7 +1421,7 @@ def point_traces(tracks: pd.DataFrame, *, colour: str, dimmed: frozenset[str]) -
             "y": _places(members["y"]),
             "mode": "markers",
             "name": str(name),
-            "uid": f"{column}:{name}",
+            "uid": trace_uid(column, str(name)),
             "marker": {"color": _point_colours(members, colour=shade, dimmed=dimmed), "size": 6, "opacity": 0.7},
             "customdata": _point_details(members),
             "hoverinfo": "none",
@@ -1474,7 +1474,7 @@ def ring_traces(rings: list[Ring], *, names: pd.DataFrame) -> list[dict[str, Any
             "y": _places(ring.tracks["y"]),
             "mode": "markers",
             "name": ring.name,
-            "uid": ring.name,
+            "uid": trace_uid(ring.name),
             "legendrank": place,
             "marker": ring.marker,
             "hoverinfo": "skip",
@@ -1490,7 +1490,7 @@ def ring_traces(rings: list[Ring], *, names: pd.DataFrame) -> list[dict[str, Any
                 "y": _places(names["y"]),
                 "mode": "text",
                 "name": NAMES_TITLE,
-                "uid": NAMES_TITLE,
+                "uid": trace_uid(NAMES_TITLE),
                 "legendrank": len(rings),
                 "text": names["name"].tolist(),
                 "textfont": NAMES_FONT,

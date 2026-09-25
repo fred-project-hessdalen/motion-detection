@@ -2,6 +2,7 @@
 goes on the map."""
 
 import json
+import re
 
 import numpy as np
 import pandas as pd
@@ -44,6 +45,7 @@ from hessdalen.dashboard.map_view import (
     table_rows,
 )
 from hessdalen.dashboard.track_gallery import ADD, ONE, RANGE
+from hessdalen.dashboard.track_map_chart import trace_uid
 
 INSECT = "Cam1_2025-06-03__12-40-00_noInsect"
 ROD = "Cam2_2025-01-09__23-20-00_rod"
@@ -116,9 +118,19 @@ def test_the_marks_over_the_tracks_stand_at_the_top_of_the_legend() -> None:
 
     traces = ring_traces(rings, names=pd.DataFrame({"x": [1.0], "y": [2.0], "name": ["bird"]}))
 
-    assert [trace["uid"] for trace in traces] == ["Cluster sample", NAMES_TITLE]
+    assert [trace["uid"] for trace in traces] == [trace_uid("Cluster sample"), trace_uid(NAMES_TITLE)]
     assert [trace["legendrank"] for trace in traces] == [0, 1]
     assert traces[0]["hoverinfo"] == "skip"
+
+
+def test_a_trace_uid_holds_only_what_a_css_class_name_may() -> None:
+    """Plotly looks a trace up by a class name built from its uid when the
+    trace leaves the figure, so a uid with a colon in it aborts the redraw."""
+    uids = [trace["uid"] for trace in point_traces(_drawn(), colour="Cluster", dimmed=frozenset())]
+
+    assert uids
+    assert all(re.fullmatch(r"[A-Za-z0-9_-]+", uid) for uid in uids)
+    assert trace_uid("cluster", "bird or insect") == "cluster-bird_or_insect"
 
 
 def test_a_map_of_no_marks_holds_the_points_alone() -> None:

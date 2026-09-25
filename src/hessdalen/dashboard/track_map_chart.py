@@ -36,6 +36,7 @@ behind holding the one before it.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -43,6 +44,14 @@ import streamlit as st
 from plotly.offline import get_plotlyjs_version
 
 MAP_HEIGHT = 620
+UID_PART = re.compile(r"[^A-Za-z0-9_-]")
+"""What a trace's uid may not hold.
+
+Plotly writes a trace's uid into CSS class names and looks the classes
+up with querySelector when the trace leaves the figure, so a colon, a
+space or a dot in a uid throws inside the redraw and leaves the old
+points on the canvas.
+"""
 PLOTLY_URL = f"https://cdn.jsdelivr.net/npm/plotly.js-dist-min@{get_plotlyjs_version()}/plotly.min.js"
 """The plotly.js release the installed plotly package writes its figures
 for, so the figures it writes are the ones the plot reads."""
@@ -238,6 +247,12 @@ function pointing(plot, over) {
 """
 
 _component = st.components.v2.component("track_map", html=HTML, js=JS, isolate_styles=False)
+
+
+def trace_uid(*parts: str) -> str:
+    """The uid of a trace, built from the parts that name it, in the
+    characters a CSS class name may hold."""
+    return "-".join(UID_PART.sub("_", part) for part in parts)
 
 
 def track_map_chart(
