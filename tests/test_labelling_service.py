@@ -7,15 +7,11 @@ installed.
 import json
 from pathlib import Path
 
-import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 
 pytest.importorskip("sklearn")
 
-from hessdalen.analysis.track_map import FEATURES  # noqa: E402
 from hessdalen.dashboard.cluster_labels import read_labels, write_labels  # noqa: E402
-from hessdalen.dashboard.places import Places  # noqa: E402
 from hessdalen.dashboard.track_validation import write_validated  # noqa: E402
 from hessdalen.labelling.ledger import PROPAGATED, SEEN  # noqa: E402
 from hessdalen.labelling.service import (  # noqa: E402
@@ -27,66 +23,14 @@ from hessdalen.labelling.service import (  # noqa: E402
 )
 from hessdalen.labelling.sheets import SHEET, Sheet  # noqa: E402
 from hessdalen.labelling.votes import DISAGREE, FAR, Rule  # noqa: E402
+from labelling_corpus import BIRDS, INSECTS, LONERS, corpus  # noqa: E402
 
 SETTINGS = Settings(signature="map", flip_limit=2)
 RULE = Rule(votes=3, agreement=2, cap=1.5)
 
-BIRDS = [f"e/rec{index % 3}/{index}" for index in range(10)]
-"""Ten tracks near the origin of the map, over three recordings."""
-
-INSECTS = [f"e/rec{3 + index % 2}/{20 + index}" for index in range(6)]
-"""Six tracks ten units away, over two recordings."""
-
-LONERS = ["e/rec9/90", "e/rec9/91"]
-"""Two tracks far from everything, on a recording not on disk."""
-
-VOCABULARY = ("bird", "insect", "meteor")
-
 
 def _labelling(tmp_path: Path) -> Labelling:
-    return Labelling(_corpus(tmp_path), settings=SETTINGS)
-
-
-def _corpus(tmp_path: Path) -> Places:
-    """A small map on disk, with the recordings of the birds and insects
-    present and the loners' absent."""
-    places = Places(root=tmp_path)
-    rows = []
-    for place, key in enumerate(BIRDS):
-        rows.append(_row(key, x=0.1 * place, y=0.0, cluster=0))
-    for place, key in enumerate(INSECTS):
-        rows.append(_row(key, x=10.0 + 0.1 * place, y=0.0, cluster=1))
-    for place, key in enumerate(LONERS):
-        rows.append(_row(key, x=50.0 + place, y=50.0, cluster=-1))
-    places.map.parent.mkdir(parents=True)
-    pq.write_table(pa.Table.from_pylist(rows), places.map)
-
-    places.videos.mkdir(parents=True)
-    for recording in {row["recording"] for row in rows if not row["clip"].startswith("rec9")}:
-        (places.videos / recording).touch()
-
-    places.labelling.mkdir(parents=True)
-    vocabulary = {name: {"definition": "", "examples": []} for name in VOCABULARY}
-    (places.labelling / "vocabulary.json").write_text(json.dumps(vocabulary))
-    return places
-
-
-def _row(key: str, *, x: float, y: float, cluster: int) -> dict[str, object]:
-    event, clip, track_id = key.split("/")
-    return {
-        "label": "unlabelled",
-        "event": event,
-        "clip": clip,
-        "recording": f"{clip}.mkv",
-        "track_id": int(track_id),
-        "frames": 30,
-        "camera": "Cam1",
-        "side": "smooth",
-        "x": x,
-        "y": y,
-        "cluster": cluster,
-        **{feature: 0.0 for feature in FEATURES},
-    }
+    return Labelling(corpus(tmp_path), settings=SETTINGS)
 
 
 def _sheet_of(keys: list[str]) -> Sheet:
@@ -345,7 +289,7 @@ def test_the_neighbours_of_a_track_come_nearest_first_with_what_is_known_of_them
 
 
 def test_the_ledger_is_read_back_when_the_labelling_opens_again(tmp_path: Path) -> None:
-    places = _corpus(tmp_path)
+    places = corpus(tmp_path)
     first = Labelling(places, settings=SETTINGS)
     _seen(first, BIRDS[:2], name="bird")
 

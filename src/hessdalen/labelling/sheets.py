@@ -110,6 +110,12 @@ class Sheet:
     keys: tuple[str, ...]
 
 
+def read_sheet(path: Path) -> Sheet:
+    """A sheet built earlier, from the rows written beside it."""
+    beside = json.loads(path.with_suffix(".json").read_text())
+    return Sheet(path=path, keys=tuple(str(key) for key in beside["keys"]))
+
+
 def sheet_path(directory: Path, *, keys: Sequence[str], layout: Layout, kind: str) -> Path:
     """Where the sheet of these rows under this layout is kept."""
     described = json.dumps({"kind": kind, "keys": list(keys), "layout": asdict(layout)}, sort_keys=True)

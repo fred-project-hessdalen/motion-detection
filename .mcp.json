@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "track-labelling": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--group", "agent",
+        "--group", "core",
+        "--group", "dashboard",
+        "--group", "analysis",
+        "python", "-m", "hessdalen.labelling.server"
+      ]
+    }
+  }
+}
