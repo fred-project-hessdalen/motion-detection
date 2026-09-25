@@ -396,8 +396,8 @@ DRAWING_HELP = (
     "track that repeats at one rate carries a bright band across it. Brightness and size are the "
     "blob's own. Wobble is how far it strayed from its straight line. Presence is whether it was "
     "found at all, which repeats at the rate the detector loses a track and picks it up again. Path "
-    "returns the galleries to the tracks' paths and leaves the chart on brightness. Grey is where "
-    "the track was too short to read that rate, which near either end is every slow rate."
+    "returns the galleries to the tracks' paths and leaves the chart on brightness. A drawing is bare "
+    "where the track was too short to read that rate, which near either end is every slow rate."
 )
 SEARCH_HELP = (
     "Select a track by its number, by its recording, or by both, as the heading over a selected track "

@@ -71,10 +71,6 @@ An outline is drawn outside the panel and moves nothing beside it.
 JUMP_MARK = "↗"
 JUMP_TITLE = "Jump to this track"
 
-UNMEASURED_COLOUR = "#8a8a8a"
-"""What a rhythm drawing shows where the track was too short to read a
-rate, which is most of the slow rates on most tracks."""
-
 RHYTHM_HEIGHT_PIXELS = 130
 """How tall the drawn part of a rhythm chart stands.
 
@@ -87,7 +83,7 @@ opening it full screen gives it the room to appear.
 
 RHYTHM_KEY = (
     "A band across it is a rhythm, and where the band runs is when it held.",
-    "0.2 repeats every 5 frames, 5 Hz at 25 a second. Grey is too little track to read that rate.",
+    "0.2 repeats every 5 frames, 5 Hz at 25 a second. Bare is too little track to read that rate.",
 )
 """How to read a rhythm chart, under its heading.
 
@@ -214,7 +210,7 @@ def rhythm_chart(points: pd.DataFrame, *, signal: str) -> alt.Chart:
             title=alt.TitleParams(f"{signal.capitalize()} rhythm", subtitle=RHYTHM_KEY, subtitleColor="#9a9a9a"),
             autosize=alt.AutoSizeParams(type="pad", contains="padding"),
         )
-        .configure_view(stroke="#cfcfcf", fill=UNMEASURED_COLOUR)
+        .configure_view(stroke="#cfcfcf")
     )
 
 
@@ -294,18 +290,18 @@ def _rhythm_png(image: Spectrogram) -> str:
 
     Enlarged to the panel by repeating whole cells, so that a track of
     forty frames plainly shows forty of them.
+
+    A rate the track was too short to read is left clear, so the page
+    shows through it in whichever theme the page is in.
     """
     shades = np.clip(image.power / DYNAMIC_RANGE_DB, 0.0, 1.0) * 255.0
     drawn = cv2.applyColorMap(shades.astype(np.uint8), cv2.COLORMAP_VIRIDIS)
-    drawn[~image.measurable] = _bgr(UNMEASURED_COLOUR)
-    panel = cv2.resize(np.flipud(drawn), (PANEL_PIXELS, PANEL_PIXELS), interpolation=cv2.INTER_NEAREST)
+    read = np.where(image.measurable, 255, 0).astype(np.uint8)
+    panel = cv2.resize(
+        np.flipud(np.dstack([drawn, read])), (PANEL_PIXELS, PANEL_PIXELS), interpolation=cv2.INTER_NEAREST
+    )
     _, encoded = cv2.imencode(".png", panel)
     return "data:image/png;base64," + base64.b64encode(encoded.tobytes()).decode()
-
-
-def _bgr(colour: str) -> tuple[int, int, int]:
-    red, green, blue = (int(colour[at : at + 2], 16) for at in (1, 3, 5))
-    return blue, green, red
 
 
 def _block(figures: Iterable[str]) -> str:

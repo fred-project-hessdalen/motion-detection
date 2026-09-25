@@ -177,10 +177,10 @@ track is lost and picked up again. Path returns the galleries to the
 tracks' paths and leaves the chart on brightness.
 
 The rates are cycles a frame, 25 times the same number in hertz on
-these recordings. Grey is where the track was too short to read that
-rate: a slow rate is read over a long stretch of track, so it cannot be
-read near either end, and the slowest rates cannot be read at all
-unless the track runs for about 150 frames. On a track of average
+these recordings. A drawing is bare where the track was too short to
+read that rate: a slow rate is read over a long stretch of track, so it
+cannot be read near either end, and the slowest rates cannot be read at
+all unless the track runs for about 150 frames. On a track of average
 length, 45 frames, that leaves the faster two thirds of the rates and
 only the middle of the track.
 
