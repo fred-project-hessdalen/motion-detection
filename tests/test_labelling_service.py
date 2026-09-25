@@ -268,14 +268,16 @@ def test_a_tag_is_written_and_counted(tmp_path: Path) -> None:
 
 def test_calibration_reads_validated_tracks_on_disk_that_a_person_could_read(tmp_path: Path) -> None:
     labelling = _labelling(tmp_path)
-    write_labels(labelling.places.labels, name="bird", keys=[*BIRDS[:3], LONERS[0]])
-    for key in [*BIRDS[:3], LONERS[0]]:
+    write_labels(labelling.places.labels, name="bird", keys=[*BIRDS[:4], LONERS[0]])
+    for key in [*BIRDS[:4], LONERS[0]]:
         write_validated(labelling.places.validated, key=key, confirmed=True)
     labelling.tag(BIRDS[2], tags=["cannot tell"], round=0)
+    labelling.tag(BIRDS[3], tags=["from video"], round=0)
     labelling.tag(BIRDS[1], tags=["far away"], round=0)
 
     assert labelling.calibration_keys() == BIRDS[:2]
     assert labelling.truth(BIRDS[1]) == ["bird", "far away"]
+    assert labelling.truth(BIRDS[3]) == ["bird"]
     assert [held.recording for held in labelling.calibration_recordings()] == ["rec9.mkv"]
 
 

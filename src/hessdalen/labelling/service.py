@@ -56,6 +56,14 @@ UNREADABLE_TAG = "cannot tell"
 what it is. Such a track is no ground truth for a reader of sheets,
 whatever the person saw in the video."""
 
+FROM_VIDEO_TAG = "from video"
+"""The tag a person puts on a validated track they could name only from
+its video. The name is ground truth, and the sheet does not show it,
+so a reader of sheets is not scored on it."""
+
+SHEET_BLIND_TAGS = (UNREADABLE_TAG, FROM_VIDEO_TAG)
+"""The tags that keep a validated track out of sheet calibration."""
+
 NONE_OF_THESE = "none of these"
 """What a model answers when no name of the vocabulary fits a row. The
 row is recorded as seen without a name and does not vote."""
@@ -310,17 +318,18 @@ class Labelling:
         The validated tracks are the only ground truth. A name the
         earlier pass gave a whole cluster says nothing about the track
         it sits on, so no other track is read for calibration. A
-        validated track tagged as unreadable on its sheet is left out.
+        validated track tagged as unreadable on its sheet, or as named
+        from its video alone, is left out.
         """
         cached = self.tracks[self.tracks["cached"]]
-        unreadable = self.tagged(UNREADABLE_TAG)
-        return [key for key in cached["key"] if key in self.validated() and key not in unreadable and self.truth(key)]
+        blind = set().union(*(self.tagged(tag) for tag in SHEET_BLIND_TAGS))
+        return [key for key in cached["key"] if key in self.validated() and key not in blind and self.truth(key)]
 
     def truth(self, key: str) -> list[str]:
         """What a validated track is: the name it holds and the tags on it,
         any of which a reading may agree with."""
         held = [self.names_by_key().get(key, UNNAMED), *tags_of(read_labels(self.places.track_labels), key=key)]
-        return [name for name in dict.fromkeys(held) if name and name != UNREADABLE_TAG]
+        return [name for name in dict.fromkeys(held) if name and name not in SHEET_BLIND_TAGS]
 
     def calibration_recordings(self) -> list[FetchCandidate]:
         """Recordings not on disk that hold validated tracks, the one holding
