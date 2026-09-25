@@ -102,7 +102,11 @@ has to plug in behind the same setting.
 ## MCP server
 
 One Python server over stdio in the package `hessdalen.labelling`,
-started with `uv run --group agent python -m hessdalen.labelling.server`
+started with
+
+    uv run --group agent --group core --group dashboard \
+        --group analysis python -m hessdalen.labelling.server
+
 and registered in `.mcp.json`. It imports the dashboard's own modules
 for reading the map, cutting crops, writing labels and fetching
 recordings, so a verdict recorded through the server lands in the
@@ -124,29 +128,41 @@ Read tools:
 
 | Tool | Input | Output |
 |---|---|---|
-| `status` | none | counts of tracks per name, seen, cached, uncertain, contested, review-tagged, and the fetch list length |
-| `clusters` | order | per cluster the size, cached count, unnamed cached count, names held with counts, seen count and recording count |
-| `track` | keys | descriptor row, cluster, name, tags, validated flag, seen verdict, cached flag, recording and frame span |
-| `neighbours` | key, k, seen_only | the nearest tracks in signature space with distance, name and seen flag |
-| `sample` | cluster, n, spread | keys spread over core, rim and distinct recordings, cached and unseen |
-| `uncertain` | n | cached unseen tracks whose neighbour vote disagrees or that have no seen track within the cap, weakest first |
-| `sheet` | keys, frames, radii | the sheet as image content, the row order and the sheet's path, at most eight rows |
-| `track_sheet` | key | the isolation view as image content |
-| `propagation_preview` | k, agreement, cap | what a propagation would name, counts per name and the tracks it would leave uncertain, with nothing written |
+| `status` | vote rule | counts of tracks per name, seen, cached, contested, review-tagged, and how many cached tracks the vote leaves uncertain |
+| `clusters` | count | per cluster the size, cached count, unnamed cached count, names held with counts, seen count and recording count, the most unnamed cached tracks first |
+| `track` | keys | descriptor row, cluster, name, tags, validated flag, seen verdict, cached flag and flip count |
+| `neighbours` | key, count, seen_only | the nearest tracks in signature space with distance, name and seen flag |
+| `sample` | cluster, count | keys spread over core, rim and distinct recordings, cached, unseen and unvalidated |
+| `uncertain` | count, vote rule | cached unseen tracks whose neighbour vote disagrees or that have no seen track within the cap, weakest first |
+| `verify_candidates` | round, count | cached unseen tracks a propagation of the round named, the furthest from their voters and the weakest votes |
+| `calibration` | count | cached tracks whose name is settled, validated ones first |
+| `sheet` | keys | the sheet as image content, with a line naming its path and rows, at most eight rows |
+| `track_sheet` | key | the isolation view as image content, with a line naming its path |
+| `propagation_preview` | vote rule | what a propagation would name, counts per name and how many tracks it would leave uncertain, with nothing written |
 | `ledger` | key or last n | ledger lines |
-| `fetch_list` | n | recordings ordered by how many uncertain uncached tracks each covers, with sizes |
+| `fetch_list` | count, vote rule | recordings not on disk ordered by how many uncertain tracks each covers, with sizes |
+| `vocabulary` | none | every name a verdict may use, with its definition and examples |
+
+The vote rule is three numbers, the votes taken, the agreement needed
+and the cap, with defaults of 5, 4 and 1.0.
 
 Write tools:
 
 | Tool | Input | Effect |
 |---|---|---|
-| `predict` | rows of key and name, sheet path | ledger lines with basis "predicted", written before the sheet is read |
-| `verdict` | rows of key, name, confidence, note, sheet path | a label written per key and a ledger line with basis "seen", the sheet path and the row as evidence. A validated key or a name outside the vocabulary is refused |
-| `propagate` | k, agreement, cap | the vote rule applied to every unseen unvalidated track, a ledger line per changed track with basis "propagated" and the voting keys, flip counts raised, and the newly contested keys returned |
-| `tag` | key, tags | the track's tags written, used for "review" |
-| `define_name` | name, definition, example keys | the name added to the vocabulary after the near-name check, recorded in the ledger |
-| `fetch` | recording | the recording fetched into the page's own folder within its disk floor, with progress read through `fetch_status` |
+| `predict` | rows of key and name, sheet path, round | ledger lines with basis "predicted", written before the sheet is read |
+| `verdict` | rows of key, name, confidence, note, sheet path, round | a label written per key and a ledger line with basis "seen", the sheet path and the row as evidence. A validated key or a name outside the vocabulary is refused. An unsure confidence or "none of these" records the track as seen without a name |
+| `judge` | one row, view path, round | the same as a verdict, from an isolation view, with basis "judged" |
+| `propagate` | round, vote rule | the vote applied to every unseen, unvalidated, uncontested track, a ledger line per changed track with basis "propagated" and the voting keys, and the newly contested keys returned |
+| `tag` | key, tags, round | the track's tags written, used for "review" |
+| `define_name` | name, definition, example keys, round | the name added to the vocabulary after the near-name check, recorded in the ledger |
+| `fetch` | recording | the recording fetched into the page's own folder within its disk floor, about a minute per recording, and the call returns when it has landed |
 | `snapshot`, `restore` | name | copies of the label files under `labelling/snapshots` |
+
+Every write takes the round it belongs to, and `status` says the
+highest round written so far. The vocabulary is fixed at the first
+call to the names then in the label file and grows only through
+`define_name`.
 
 A sheet is built once per set of keys and settings and stored under
 `labelling/sheets/<digest>.png`, so the evidence path in the ledger
@@ -157,9 +173,9 @@ The page and the server both write a label file by reading it,
 changing it and writing it whole, so a write by one between the
 other's read and write is lost. The write functions in
 `cluster_labels.py` therefore take a lock file beside the label file,
-reread the file under the lock, apply the change and write. The
-`labels` argument they take today goes away, and the page's
-modification-time cache picks the server's writes up on its next run.
+reread the file under the lock, apply the change and write, and the
+page's modification-time cache picks the server's writes up on its
+next run.
 
 
 ## Harness loop
@@ -176,47 +192,62 @@ Model calls:
 
 | Call | Input | Output |
 |---|---|---|
-| Reader | one sheet image, the vocabulary card, and per row the cluster, camera, frame count and the names of its nearest seen tracks | per row a name from the vocabulary or "none of these", a confidence of sure, likely or unsure, and a note |
-| Judge | the isolation view of one contested track, its ledger history and its neighbours' names | a final name or "review" |
-| Proposer | the sheets of a region where the reader answered "none of these" repeatedly | a proposed name with a definition and example keys, sent to the review queue |
+| Reader | one sheet image, the vocabulary card, and per row the names of its five nearest seen tracks, with the caption carrying the track, its clip, its frame count and its camera | per row a name from the vocabulary or "none of these", a confidence of sure, likely or unsure, and a note |
+| Judge | the isolation view of one contested track and its ledger history | a final name or "review" |
+| Proposer | the last sheets holding rows the reader answered "none of these" | a proposed name with a definition and example keys, written to `labelling/proposals.jsonl`, with the example rows tagged "review" |
 
 Each call is a fresh Messages API request with a structured output
-schema. No call sees a previous call's context. The ledger is the
-memory.
+schema, made through `hessdalen.labelling.readers`. No call sees a
+previous call's context. The ledger is the memory. The calls stand
+behind one interface, so the loop runs under a reader of the tests'
+own.
+
+The loop runs with
+
+    uv run --group agent --group core --group dashboard \
+        --group analysis python -m hessdalen.labelling.harness \
+        --sheets 400 --fetches 0
+
+with the API key in the environment. The sheet budget, the fetch
+budget, the vote rule, the thresholds, the model and the signature
+space are command line arguments.
 
 Rounds:
 
-0. Calibration. The reader reads the sheets of the validated tracks
-   and of a sample of tracks named in the earlier pass, blind. The
-   agreement rate goes to the log. Under a threshold the harness stops
-   and shows the disagreements, because propagating from a reader that
-   misreads the ground truth spreads the misreading.
+0. Calibration. The reader reads two sheets of tracks whose name is
+   settled, the validated ones first, blind. A reading that agrees is
+   written as seen, so the settled tracks vote. The agreement rate and
+   every disagreement go to the log. Under a threshold the harness
+   stops, because propagating from a reader that misreads the ground
+   truth spreads the misreading.
 1. Seed, as protocol step 2. Rows answered "unsure" or "none of these"
    are recorded as seen without a name and do not vote.
 2. Propagate, as protocol step 3. The vote is the prediction, so no
    model call predicts.
-3. Verify, as protocol step 4. The agreement rate per round and per
-   distance band goes to the log, and the cap moves to the distance
-   where agreement falls under the threshold.
-4. Aim, as protocol step 5. Rounds 2 to 4 repeat until the uncertain
-   cached list is empty or the sheet budget is spent.
+3. Verify, as protocol step 4. The agreement rate per round goes to
+   the log. Once a sheet's worth of verified readings exist, the cap
+   moves to the largest distance up to which the readings so far
+   agree with the vote at the threshold.
+4. Aim, as protocol step 5. Rounds 2 to 4 repeat until no cached
+   track is uncertain or the sheet budget is spent.
 5. Fetch, as protocol step 6, within a fetch budget.
 6. Isolate, as protocol step 7, through the judge.
-7. Report. Names per count, seen count, propagated count, agreement
-   rates by round, the review queue and the recordings fetched.
+7. Report. The calibration rate, the agreement rate per verification,
+   sheets read, recordings fetched, tracks judged, names proposed, and
+   the status of the corpus.
 
-Settings: rows per sheet 6, votes 5, agreement 4 of 5, the cap set by
-calibration and moved by verification, flip limit 2, and a sheet
-budget and a fetch budget given on the command line.
+Settings: rows per sheet 6, votes 5, agreement 4 of 5, the cap 1.0
+until verification moves it, flip limit 2, and a sheet budget and a
+fetch budget given on the command line.
 
 Safety:
 
 - The harness resumes from the ledger, so a stopped run continues
   where it was.
-- A snapshot of the label files is taken before round 1 and after
-  every ten rounds.
+- A snapshot of the label files is taken at the start of every run,
+  under the round the run starts in.
 - New names never enter the vocabulary from the loop. The proposer's
-  output waits in the review queue, and `define_name` is the person's
+  output waits in the proposals file, and `define_name` is the person's
   to call.
 - The label file lock is held only for the moment of a write, so the
   page stays usable while the harness runs.
