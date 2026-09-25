@@ -26,7 +26,17 @@ def descriptors(tracks: pa.Table) -> np.ndarray:
     return standing_within_camera(tracks, names=FEATURES)
 
 
-SIGNATURES: dict[str, Signature] = {"descriptors": descriptors}
+def layout(tracks: pa.Table) -> np.ndarray:
+    """Where the tracks lie on the map, which is the space the page's Nearest
+    tracks gallery reads.
+
+    The map is laid out from the descriptors under one seed, so what
+    is near here moves a little from one map to the next.
+    """
+    return np.column_stack([np.asarray(tracks.column(axis).to_numpy(), dtype=np.float64) for axis in ("x", "y")])
+
+
+SIGNATURES: dict[str, Signature] = {"descriptors": descriptors, "map": layout}
 """Every space by the name the labelling is told."""
 
 DEFAULT_SIGNATURE = "descriptors"
