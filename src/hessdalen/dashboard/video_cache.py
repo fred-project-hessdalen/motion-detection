@@ -8,6 +8,7 @@ kept videos the sift tracks as its data stay as they are.
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
@@ -57,6 +58,26 @@ class FetchProgress:
     @property
     def fraction(self) -> float:
         return min(1.0, self.bytes_done / max(1, self.bytes_total))
+
+
+def ledger_entries(ledgers: Sequence[Path]) -> dict[str, dict[str, Any]]:
+    """What the sift ledgers record about every video they name, by the video's
+    file name.
+
+    A ledger another run is still appending to can end on a line that is
+    only half written, and such a line is passed over.
+    """
+    entries: dict[str, dict[str, Any]] = {}
+    for path in ledgers:
+        if not path.is_file():
+            continue
+        for line in path.read_text().splitlines():
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            entries[str(entry.get("name"))] = entry
+    return entries
 
 
 def archive_video(entry: Mapping[str, Any]) -> ArchiveVideo:

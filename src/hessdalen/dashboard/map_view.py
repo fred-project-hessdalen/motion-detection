@@ -48,6 +48,7 @@ from hessdalen.dashboard.cluster_labels import (
     write_tags,
 )
 from hessdalen.dashboard.panels import DEVIATION, RECORDING
+from hessdalen.dashboard.places import PLACES
 from hessdalen.dashboard.runs import VideoProbe, probe
 from hessdalen.dashboard.track_clip import (
     ClipProgress,
@@ -89,26 +90,23 @@ from hessdalen.dashboard.video_cache import (
     fetch_seconds,
     fetch_video,
     free_bytes,
+    ledger_entries,
     make_room,
     room_to_fetch,
     used_now,
 )
 from hessdalen.io.drive import ArchiveVideo
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-MAP_PATH = REPO_ROOT / "data" / "out" / "analysis" / "track-map.parquet"
-PATHS_PATH = MAP_PATH.with_name("track-paths.parquet")
-LABELS_PATH = MAP_PATH.with_name("cluster-labels.json")
-TRACK_LABELS_PATH = MAP_PATH.with_name("track-labels.json")
-VALIDATED_PATH = MAP_PATH.with_name("validated-tracks.json")
-VIDEOS_DIR = REPO_ROOT / "data" / "corpus" / "videos"
-FETCHED_DIR = REPO_ROOT / "data" / "out" / "dashboard" / "videos"
-TUNING_DIR = REPO_ROOT / "data" / "out" / "dashboard" / "tuning"
-CLIPS_DIR = REPO_ROOT / "data" / "out" / "dashboard" / "tracks"
-LEDGERS = (
-    REPO_ROOT / "data" / "out" / "sift" / "ledger.jsonl",
-    REPO_ROOT / "data" / "out" / "sift" / "bulk-ledger.jsonl",
-)
+MAP_PATH = PLACES.map
+PATHS_PATH = PLACES.paths
+LABELS_PATH = PLACES.labels
+TRACK_LABELS_PATH = PLACES.track_labels
+VALIDATED_PATH = PLACES.validated
+VIDEOS_DIR = PLACES.videos
+FETCHED_DIR = PLACES.fetched
+TUNING_DIR = PLACES.tuning
+CLIPS_DIR = PLACES.clips
+LEDGERS = PLACES.ledgers
 
 MAP_COMMAND = "uv run --group analysis python scripts/dev/map_tracks.py"
 UNASSIGNED_NAME = "none"
@@ -2728,18 +2726,7 @@ def _ledger_entries(stamp: tuple[float, ...]) -> dict[str, dict[str, Any]]:
     """What the sift ledgers record about every video they name, by the video's
     file name.
 
-    A ledger another run is still appending to can end on a line that is
-    only half written, and such a line is passed over. The stamp holds
-    the ledgers' modification times, and is what the cache is keyed on.
+    The stamp holds the ledgers' modification times, and is what the
+    cache is keyed on.
     """
-    entries: dict[str, dict[str, Any]] = {}
-    for path in LEDGERS:
-        if not path.is_file():
-            continue
-        for line in path.read_text().splitlines():
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            entries[str(entry.get("name"))] = entry
-    return entries
+    return ledger_entries(LEDGERS)
