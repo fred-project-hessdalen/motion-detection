@@ -18,14 +18,24 @@ which the page puts to the person before either is written.
 
 The file is what a training set is built from, so it holds the tracks
 and nothing about the map they were picked on.
+
+A write reads the file, changes it and writes it whole, and more than
+one program writes it: the page, and the labelling server an agent
+names tracks through. A write therefore holds a lock beside the file
+from its read to its write, so that a name one program saves while the
+other is between the two is kept.
 """
 
 from __future__ import annotations
 
+import fcntl
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
+
+LOCK_SUFFIX = ".lock"
 
 WORD_BREAK = re.compile(r"[^0-9A-Za-z]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 """Where one word of a name ends and the next begins.
@@ -191,7 +201,7 @@ def tagged(labels: dict[str, list[str]], *, names: Sequence[str]) -> set[str]:
     return set.intersection(*(set(labels.get(name, [])) for name in wanted))
 
 
-def write_tags(path: Path, labels: dict[str, list[str]], *, key: str, names: Sequence[str]) -> dict[str, list[str]]:
+def write_tags(path: Path, *, key: str, names: Sequence[str]) -> dict[str, list[str]]:
     """Put this track under exactly these names and write every name out
     again.
 
@@ -202,14 +212,15 @@ def write_tags(path: Path, labels: dict[str, list[str]], *, key: str, names: Seq
     name.
     """
     given = {canonical_label(name) for name in names} - {""}
-    written = {held: [under for under in keys if under != key] for held, keys in labels.items()}
-    for name in given:
-        written[name] = sorted(set(written.get(name, [])) | {key})
+    with locked(path):
+        labels = read_labels(path)
+        written = {held: [under for under in keys if under != key] for held, keys in labels.items()}
+        for name in given:
+            written[name] = sorted(set(written.get(name, [])) | {key})
+        return _kept(path, written)
 
-    return _kept(path, written)
 
-
-def write_labels(path: Path, labels: dict[str, list[str]], *, name: str, keys: list[str]) -> dict[str, list[str]]:
+def write_labels(path: Path, *, name: str, keys: list[str]) -> dict[str, list[str]]:
     """Put these tracks under this name and write every name out again.
 
     The name is brought to the form names are kept in first. The tracks
@@ -219,17 +230,34 @@ def write_labels(path: Path, labels: dict[str, list[str]], *, name: str, keys: l
     """
     given = canonical_label(name)
     wanted = set(keys)
-    written = {held: [key for key in under if key not in wanted] for held, under in labels.items()}
-    if given:
-        written[given] = sorted(set(written.get(given, [])) | wanted)
+    with locked(path):
+        labels = read_labels(path)
+        written = {held: [key for key in under if key not in wanted] for held, under in labels.items()}
+        if given:
+            written[given] = sorted(set(written.get(given, [])) | wanted)
+        return _kept(path, written)
 
-    return _kept(path, written)
+
+@contextmanager
+def locked(path: Path) -> Generator[None]:
+    """Hold the lock of this file from a read to the write that follows it.
+
+    The lock is a file beside the one written, taken with flock, so that
+    every program on the machine that writes the file waits for the one
+    writing it.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.with_name(path.name + LOCK_SUFFIX).open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 def _kept(path: Path, written: dict[str, list[str]]) -> dict[str, list[str]]:
     """Write out every name that still holds a track, and hand back what the
     file now says."""
     written = {held: under for held, under in written.items() if under}
-    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(written, indent=2, sort_keys=True) + "\n")
     return written

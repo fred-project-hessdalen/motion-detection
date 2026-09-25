@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from hessdalen.dashboard.cluster_labels import locked
+
 
 def read_validated(path: Path) -> frozenset[str]:
     """Every track confirmed so far."""
@@ -23,10 +25,11 @@ def read_validated(path: Path) -> frozenset[str]:
     return frozenset(str(key) for key in json.loads(path.read_text()))
 
 
-def write_validated(path: Path, validated: frozenset[str], *, key: str, confirmed: bool) -> frozenset[str]:
+def write_validated(path: Path, *, key: str, confirmed: bool) -> frozenset[str]:
     """Put this track among the confirmed or take it out, and write them all
-    out again."""
-    written = validated | {key} if confirmed else validated - {key}
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(sorted(written), indent=2) + "\n")
-    return written
+    out again, under the file's lock."""
+    with locked(path):
+        validated = read_validated(path)
+        written = validated | {key} if confirmed else validated - {key}
+        path.write_text(json.dumps(sorted(written), indent=2) + "\n")
+        return written

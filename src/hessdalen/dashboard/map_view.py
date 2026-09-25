@@ -1864,7 +1864,7 @@ def _keep_name(naming: Naming, *, name: str) -> None:
     confirmation together. Withdrawing a name says nothing, and leaves
     the track as it was.
     """
-    write_labels(naming.path, read_labels(naming.path), name=name, keys=list(naming.keys))
+    write_labels(naming.path, name=name, keys=list(naming.keys))
     st.session_state[naming.box] = name or None
     if naming.confirms and name:
         _confirm(naming.keys[0], confirmed=True)
@@ -1893,7 +1893,7 @@ def _keep_tags(tagging: Tagging, *, names: tuple[str, ...]) -> None:
     which is what confirming it says. Taking every tag off says nothing,
     and leaves the track as it was.
     """
-    write_tags(TRACK_LABELS_PATH, read_labels(TRACK_LABELS_PATH), key=tagging.key, names=names)
+    write_tags(TRACK_LABELS_PATH, key=tagging.key, names=names)
     if names:
         _confirm(tagging.key, confirmed=True)
 
@@ -1968,7 +1968,7 @@ def _confirm(key: str, *, confirmed: bool) -> None:
     the box where the file now stands or the next press would take the
     track back out.
     """
-    write_validated(VALIDATED_PATH, read_validated(VALIDATED_PATH), key=key, confirmed=confirmed)
+    write_validated(VALIDATED_PATH, key=key, confirmed=confirmed)
     st.session_state[f"{VALIDATED_KEY}:{key}"] = confirmed
 
 
