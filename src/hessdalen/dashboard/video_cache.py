@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -37,6 +37,10 @@ through the remote with four streams."""
 
 WATCH_SECONDS = 0.5
 """How often a fetch's file is looked at to see how much has arrived."""
+
+PART_SUFFIX = ".part"
+"""What a fetch under way writes into, until it is whole and takes the
+recording's own name."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +90,89 @@ def free_bytes(directory: Path) -> int:
     return shutil.disk_usage(directory).free
 
 
+@dataclass(frozen=True, slots=True)
+class Fetched:
+    """A recording the page has fetched: where it sits, how much of the disk
+    it holds, and when the page last drew from it."""
+
+    path: Path
+    size_bytes: int
+    used: float
+
+
+def make_room(directory: Path, *, video: ArchiveVideo) -> int:
+    """Let go of fetched recordings until this one has room, and say what is
+    free once they are gone.
+
+    A fetched recording is a copy of one in the archive and can be
+    fetched again, so the page keeps the ones it has lately drawn from
+    and lets the rest go rather than filling the disk. The recording
+    about to be fetched is left alone, and so is a fetch under way.
+    """
+    free = free_bytes(directory)
+    wanted = MIN_FREE_BYTES + video.size_bytes - free
+    if wanted <= 0:
+        return free
+
+    for path in dropped_for(fetched_videos(directory, keeping=video.name), wanted=wanted):
+        path.unlink(missing_ok=True)
+    return free_bytes(directory)
+
+
+def evictable_bytes(directory: Path, *, video: ArchiveVideo) -> int:
+    """How much of the disk the page can give back by letting go of what it
+    has fetched, with this recording kept.
+
+    A fetch is offered on what the disk would hold once the page has let
+    go of what it can, so that browsing a track never costs another
+    recording its place. The room itself is made when the fetch runs.
+    """
+    return sum(held.size_bytes for held in fetched_videos(directory, keeping=video.name))
+
+
+def dropped_for(fetched: Sequence[Fetched], *, wanted: int) -> tuple[Path, ...]:
+    """The fetched recordings to let go so that this many bytes come free, the
+    one drawn from longest ago first.
+
+    Nothing is let go once the room is there, and what is kept is what
+    the page has drawn from most recently, which is where the next track
+    of a recording finds its own recording still on disk.
+    """
+    freed = 0
+    dropping = []
+    for held in sorted(fetched, key=lambda held: held.used):
+        if freed >= wanted:
+            break
+        dropping.append(held.path)
+        freed += held.size_bytes
+    return tuple(dropping)
+
+
+def fetched_videos(directory: Path, *, keeping: str) -> list[Fetched]:
+    """Every whole recording the page has fetched, apart from the one named.
+
+    A part file belongs to a fetch under way and is left where it is.
+    """
+    held = []
+    for path in sorted(directory.iterdir()) if directory.is_dir() else []:
+        if path.is_file() and path.name != keeping and path.suffix != PART_SUFFIX:
+            found = path.stat()
+            held.append(Fetched(path=path, size_bytes=found.st_size, used=found.st_mtime))
+    return held
+
+
+def used_now(directory: Path, *, recording: str) -> None:
+    """Mark that the page has just drawn from this fetched recording, so that
+    the ones let go are the ones nothing has wanted for longest.
+
+    A recording the sift kept is not in this folder and is left alone,
+    because the page never lets go of the sift's own data.
+    """
+    video = directory / recording
+    if video.is_file():
+        video.touch()
+
+
 def fetch_video(directory: Path, *, video: ArchiveVideo, on_progress: Callable[[FetchProgress], None]) -> Path:
     """Fetch the video into the directory and return where it landed.
 
@@ -93,9 +180,13 @@ def fetch_video(directory: Path, *, video: ArchiveVideo, on_progress: Callable[[
     it is whole. A fetch that fails or is cut short leaves its part file
     behind, which is removed before the failure is passed on, so nothing
     half written is ever found and played.
+
+    rclone gives the copy the modification time the recording has in the
+    archive, which is months old, so the fetch marks it as used to keep
+    what has just arrived from looking like the least wanted file there.
     """
     target = directory / video.name
-    part = target.with_name(f"{target.name}.part")
+    part = target.with_name(f"{target.name}{PART_SUFFIX}")
     on_progress(FetchProgress(bytes_done=0, bytes_total=video.size_bytes))
     try:
         _copy_watched(video, part=part, on_progress=on_progress)
@@ -103,6 +194,7 @@ def fetch_video(directory: Path, *, video: ArchiveVideo, on_progress: Callable[[
         part.unlink(missing_ok=True)
         raise
     part.replace(target)
+    target.touch()
     on_progress(FetchProgress(bytes_done=video.size_bytes, bytes_total=video.size_bytes))
     return target
 

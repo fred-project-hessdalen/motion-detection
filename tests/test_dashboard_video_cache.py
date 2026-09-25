@@ -1,9 +1,11 @@
 """When the dashboard fetches a video the sift did not keep, and what it keeps
 of the fetch."""
 
+import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -14,8 +16,13 @@ from hessdalen.dashboard.video_cache import (
     archive_video,
     cached_video,
     copy_command,
+    dropped_for,
+    evictable_bytes,
     fetch_video,
+    fetched_videos,
+    make_room,
     room_to_fetch,
+    used_now,
 )
 
 ENTRY = {
@@ -54,6 +61,90 @@ def test_a_fetch_must_leave_the_space_the_page_keeps_free() -> None:
 
     assert room_to_fetch(video, free_bytes=MIN_FREE_BYTES + 1000)
     assert not room_to_fetch(video, free_bytes=MIN_FREE_BYTES + 999)
+
+
+def test_the_recording_looked_at_longest_ago_is_let_go_first(tmp_path) -> None:
+    _fetched(tmp_path, name="old.mkv", size=500, used=1.0)
+    _fetched(tmp_path, name="middling.mkv", size=500, used=2.0)
+    _fetched(tmp_path, name="newest.mkv", size=500, used=3.0)
+
+    dropping = dropped_for(fetched_videos(tmp_path, keeping="wanted.mkv"), wanted=600)
+
+    assert dropping == (tmp_path / "old.mkv", tmp_path / "middling.mkv")
+
+
+def test_the_recording_about_to_be_fetched_and_a_fetch_under_way_are_left_alone(tmp_path) -> None:
+    """The one being fetched is what the room is being made for, and a part
+    file belongs to a fetch that is still writing it."""
+    _fetched(tmp_path, name="wanted.mkv", size=500, used=1.0)
+    _fetched(tmp_path, name="arriving.mkv.part", size=500, used=1.0)
+    _fetched(tmp_path, name="old.mkv", size=500, used=2.0)
+
+    held = fetched_videos(tmp_path, keeping="wanted.mkv")
+
+    assert [found.path.name for found in held] == ["old.mkv"]
+
+
+def test_drawing_from_a_recording_puts_it_behind_the_others(tmp_path) -> None:
+    _fetched(tmp_path, name="old.mkv", size=500, used=1.0)
+    _fetched(tmp_path, name="newest.mkv", size=500, used=2.0)
+
+    used_now(tmp_path, recording="old.mkv")
+
+    dropping = dropped_for(fetched_videos(tmp_path, keeping="wanted.mkv"), wanted=100)
+    assert dropping == (tmp_path / "newest.mkv",)
+
+
+def test_what_can_be_given_back_leaves_out_the_recording_being_fetched(tmp_path) -> None:
+    """The fetch is offered on this figure, so that looking at a track of a
+    recording that is not on disk never costs another recording its place."""
+    _fetched(tmp_path, name="old.mkv", size=500, used=1.0)
+    _fetched(tmp_path, name=str(ENTRY["name"]), size=700, used=2.0)
+
+    assert evictable_bytes(tmp_path, video=archive_video(ENTRY)) == 500
+
+
+def test_room_is_made_for_the_fetch_and_no_more(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(video_cache, "free_bytes", _disk_holding(tmp_path, spare=1500))
+    _fetched(tmp_path, name="old.mkv", size=500, used=1.0)
+    _fetched(tmp_path, name="middling.mkv", size=500, used=2.0)
+    _fetched(tmp_path, name="newest.mkv", size=500, used=3.0)
+
+    free = make_room(tmp_path, video=archive_video(ENTRY))
+
+    assert free == MIN_FREE_BYTES + 1000
+    assert [path.name for path in sorted(tmp_path.iterdir())] == ["newest.mkv"]
+
+
+def test_nothing_is_let_go_while_the_disk_has_the_room(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(video_cache, "free_bytes", _disk_holding(tmp_path, spare=3000))
+    _fetched(tmp_path, name="old.mkv", size=500, used=1.0)
+    _fetched(tmp_path, name="newest.mkv", size=500, used=2.0)
+
+    free = make_room(tmp_path, video=archive_video(ENTRY))
+
+    assert free == MIN_FREE_BYTES + 2000
+    assert [path.name for path in sorted(tmp_path.iterdir())] == ["newest.mkv", "old.mkv"]
+
+
+def test_what_has_just_been_fetched_is_not_the_first_thing_let_go(tmp_path, monkeypatch) -> None:
+    """rclone gives the copy the modification time the recording has in the
+    archive, which is older than anything the page has drawn from."""
+    monkeypatch.setattr(video_cache, "copy_command", _writes_dated(chunk=1000, dated=1.0))
+    _fetched(tmp_path, name="drawn-from-earlier.mkv", size=500, used=2.0)
+
+    fetch_video(tmp_path, video=archive_video(ENTRY), on_progress=_ignored)
+
+    dropping = dropped_for(fetched_videos(tmp_path, keeping="wanted.mkv"), wanted=100)
+    assert dropping == (tmp_path / "drawn-from-earlier.mkv",)
+
+
+def test_a_recording_the_sift_kept_is_not_marked(tmp_path) -> None:
+    """Those videos are the sift's own data and live outside the page's
+    folder, where the page has nothing to say about them."""
+    used_now(tmp_path, recording="kept-by-the-sift.mkv")
+
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_the_fetch_asks_rclone_for_the_video_below_the_archive_root(tmp_path) -> None:
@@ -135,6 +226,37 @@ class _Stopped(Exception):
 
 def _ignored(progress: FetchProgress) -> None:
     return None
+
+
+def _fetched(directory: Path, *, name: str, size: int, used: float) -> Path:
+    """A recording the page fetched, of that size, last drawn from then."""
+    path = directory / name
+    path.write_bytes(b"x" * size)
+    os.utime(path, (used, used))
+    return path
+
+
+def _writes_dated(*, chunk: int, dated: float):
+    """A copy command that gives what it wrote the modification time the
+    archive holds, the way rclone does."""
+    script = (
+        f"import os, sys\nopen(sys.argv[1], 'wb').write(b'x' * {chunk})\nos.utime(sys.argv[1], ({dated}, {dated}))\n"
+    )
+
+    def copy_command(video, target):
+        return [sys.executable, "-c", script, str(target)]
+
+    return copy_command
+
+
+def _disk_holding(directory: Path, *, spare: int):
+    """A disk with that many bytes over the page's floor, once the fetched
+    recordings have taken their share of it."""
+
+    def free_bytes(_: Path) -> int:
+        return MIN_FREE_BYTES + spare - sum(path.stat().st_size for path in directory.iterdir())
+
+    return free_bytes
 
 
 def _writes(*, chunks: int, chunk: int, pause: float, status: int):

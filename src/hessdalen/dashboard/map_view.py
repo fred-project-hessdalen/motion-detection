@@ -85,10 +85,13 @@ from hessdalen.dashboard.video_cache import (
     FetchProgress,
     archive_video,
     cached_video,
+    evictable_bytes,
     fetch_seconds,
     fetch_video,
     free_bytes,
+    make_room,
     room_to_fetch,
+    used_now,
 )
 from hessdalen.io.drive import ArchiveVideo
 
@@ -2031,6 +2034,7 @@ def _clip(key: str, *, recording: str, stored: StoredTrack, player: str, may_bui
         return False
 
     if source.path is not None:
+        used_now(FETCHED_DIR, recording=recording)
         clips = _clips(source.path, track=stored, details=_probe_video(source.path))
         if clips.built:
             _play(clips, player=player)
@@ -2091,12 +2095,13 @@ def _may_fetch(source: VideoSource, *, player: str) -> bool:
         return False
 
     megabytes = archived.size_bytes / 1e6
-    free = free_bytes(FETCHED_DIR)
+    free = free_bytes(FETCHED_DIR) + evictable_bytes(FETCHED_DIR, video=archived)
     if not room_to_fetch(archived, free_bytes=free):
         st.warning(
             f"Fetching this {megabytes:.0f} MB video would leave "
             f"{(free - archived.size_bytes) / GIGABYTE:.1f} GB free on the disk, under the "
-            f"{MIN_FREE_BYTES / GIGABYTE:.0f} GB this page keeps free. Make room and try again."
+            f"{MIN_FREE_BYTES / GIGABYTE:.0f} GB this page keeps free, even after letting go "
+            "of every recording fetched earlier. Make room and try again."
         )
         if source.link:
             st.link_button("Open on Drive", source.link)
@@ -2106,7 +2111,9 @@ def _may_fetch(source: VideoSource, *, player: str) -> bool:
         "Fetch video",
         key=f"{FETCH_KEY}:{player}",
         help=f"This {megabytes:.0f} MB recording is not on disk. Fetching it takes about "
-        f"{fetch_seconds(archived) / 60.0:.0f} minutes, and no other clip is built meanwhile.",
+        f"{fetch_seconds(archived) / 60.0:.0f} minutes, and no other clip is built meanwhile. "
+        "It is kept for the other tracks of the recording, and let go once the disk needs "
+        "the room for a newer fetch.",
     )
 
 
@@ -2155,7 +2162,11 @@ def _clip_job(source: VideoSource, *, track: StoredTrack) -> Job:
     page."""
 
     def job(report: Report) -> Path:
-        video = source.path or fetch_video(FETCHED_DIR, video=_archived(source), on_progress=report)
+        video = source.path
+        if video is None:
+            archived = _archived(source)
+            make_room(FETCHED_DIR, video=archived)
+            video = fetch_video(FETCHED_DIR, video=archived, on_progress=report)
         details = probe(video)
         clips = _clips(video, track=track, details=details)
         if not clips.built:
