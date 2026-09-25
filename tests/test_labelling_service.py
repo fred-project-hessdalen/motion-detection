@@ -266,6 +266,19 @@ def test_a_tag_is_written_and_counted(tmp_path: Path) -> None:
     assert labelling.track(BIRDS[0])["tags"] == [REVIEW_TAG]
 
 
+def test_calibration_reads_validated_tracks_on_disk_that_a_person_could_read(tmp_path: Path) -> None:
+    labelling = _labelling(tmp_path)
+    write_labels(labelling.places.labels, name="bird", keys=[*BIRDS[:3], LONERS[0]])
+    for key in [*BIRDS[:3], LONERS[0]]:
+        write_validated(labelling.places.validated, key=key, confirmed=True)
+    labelling.tag(BIRDS[2], tags=["cannot tell"], round=0)
+    labelling.tag(BIRDS[1], tags=["far away"], round=0)
+
+    assert labelling.calibration_keys() == BIRDS[:2]
+    assert labelling.truth(BIRDS[1]) == ["bird", "far away"]
+    assert [held.recording for held in labelling.calibration_recordings()] == ["rec9.mkv"]
+
+
 def test_the_fetch_list_names_the_recording_covering_most_uncertain_tracks(tmp_path: Path) -> None:
     labelling = _labelling(tmp_path)
     _seen(labelling, BIRDS[:3], name="bird")

@@ -51,6 +51,11 @@ UNNAMED = ""
 REVIEW_TAG = "review"
 """The tag that puts a track in front of the person."""
 
+UNREADABLE_TAG = "cannot tell"
+"""The tag a person puts on a validated track whose sheet does not show
+what it is. Such a track is no ground truth for a reader of sheets,
+whatever the person saw in the video."""
+
 NONE_OF_THESE = "none of these"
 """What a model answers when no name of the vocabulary fits a row. The
 row is recorded as seen without a name and does not vote."""
@@ -304,16 +309,18 @@ class Labelling:
 
         The validated tracks are the only ground truth. A name the
         earlier pass gave a whole cluster says nothing about the track
-        it sits on, so no other track is read for calibration.
+        it sits on, so no other track is read for calibration. A
+        validated track tagged as unreadable on its sheet is left out.
         """
         cached = self.tracks[self.tracks["cached"]]
-        return [key for key in cached["key"] if key in self.validated() and self.truth(key)]
+        unreadable = self.tagged(UNREADABLE_TAG)
+        return [key for key in cached["key"] if key in self.validated() and key not in unreadable and self.truth(key)]
 
     def truth(self, key: str) -> list[str]:
         """What a validated track is: the name it holds and the tags on it,
         any of which a reading may agree with."""
         held = [self.names_by_key().get(key, UNNAMED), *tags_of(read_labels(self.places.track_labels), key=key)]
-        return [name for name in dict.fromkeys(held) if name]
+        return [name for name in dict.fromkeys(held) if name and name != UNREADABLE_TAG]
 
     def calibration_recordings(self) -> list[FetchCandidate]:
         """Recordings not on disk that hold validated tracks, the one holding
