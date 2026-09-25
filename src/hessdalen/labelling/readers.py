@@ -1,20 +1,23 @@
 """The model calls of the labelling: reading a sheet, judging a contested
 track, and proposing a name.
 
-Each call is one request to the Messages API with an image and a
-structured output, and no call sees another's context. The ledger is
-the memory. What the model is told is the vocabulary with its
-definitions, what a row of a sheet shows, and per row the little the
-corpus knows that is not in the picture.
+Each call is one request with an image and a structured output, and
+no call sees another's context. The ledger is the memory. What the
+model is told is the vocabulary with its definitions, what a row of a
+sheet shows, and per row the little the corpus knows that is not in
+the picture.
 
-The calls stand behind one interface so the harness can be run with
-a reader of the tests' own.
+The request goes to one of two backends, the Messages API or a model
+ollama serves on this machine. The calls stand behind one interface
+so the harness can be run with a reader of the tests' own.
 """
 
 from __future__ import annotations
 
 import base64
-from collections.abc import Sequence
+import json
+import urllib.request
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -105,12 +108,21 @@ class Readers(Protocol):
     def propose(self, sheets: Sequence[Path], *, vocabulary: dict[str, Any]) -> Proposal: ...
 
 
-class ModelReaders:
-    """The three calls made to a model."""
+class Backend(Protocol):
+    """One request to a model: a system text, images, a user text, and the
+    shape the answer has to come back in."""
 
-    def __init__(self, client: Anthropic, *, model: str) -> None:
-        self.client = client
-        self.model = model
+    def ask[Answer: BaseModel](
+        self, shape: type[Answer], *, system: str, images: Sequence[Path], text: str
+    ) -> Answer: ...
+
+
+class ModelReaders:
+    """The three calls made to a model, through whichever backend serves
+    it."""
+
+    def __init__(self, backend: Backend) -> None:
+        self.backend = backend
 
     def read(self, sheet: Path, *, rows: Sequence[RowContext], vocabulary: dict[str, Any]) -> list[Reading]:
         context = "\n".join(
@@ -145,18 +157,76 @@ class ModelReaders:
     def _ask[Answer: BaseModel](
         self, shape: type[Answer], *, images: Sequence[Path], text: str, vocabulary: dict[str, Any]
     ) -> Answer:
+        return self.backend.ask(shape, system=_vocabulary_card(vocabulary), images=images, text=text)
+
+
+class AnthropicBackend:
+    """A request to the Messages API, the answer parsed into the shape."""
+
+    def __init__(self, client: Anthropic, *, model: str) -> None:
+        self.client = client
+        self.model = model
+
+    def ask[Answer: BaseModel](self, shape: type[Answer], *, system: str, images: Sequence[Path], text: str) -> Answer:
         content: list[ImageBlockParam | TextBlockParam] = [_image_block(image) for image in images]
         content.append({"type": "text", "text": text})
         answered = self.client.messages.parse(
             model=self.model,
             max_tokens=MAX_TOKENS,
-            system=_vocabulary_card(vocabulary),
+            system=system,
             messages=[{"role": "user", "content": content}],
             output_format=shape,
         )
         if answered.parsed_output is None:
             raise ValueError("The model answered in no readable shape.")
         return answered.parsed_output
+
+
+OLLAMA_URL = "http://localhost:11434"
+OLLAMA_TIMEOUT_SECONDS = 1800.0
+"""How long one answer may take. A model that spills out of the card
+into main memory takes minutes for a sheet."""
+
+
+class OllamaBackend:
+    """A request to a model ollama serves, with the answer held to the
+    shape's JSON schema by ollama's own format argument.
+
+    The request is posted through the callable given, which is what a
+    test replaces.
+    """
+
+    def __init__(self, *, model: str, post: Callable[[dict[str, Any]], dict[str, Any]]) -> None:
+        self.model = model
+        self.post = post
+
+    def ask[Answer: BaseModel](self, shape: type[Answer], *, system: str, images: Sequence[Path], text: str) -> Answer:
+        body = {
+            "model": self.model,
+            "stream": False,
+            "format": shape.model_json_schema(),
+            "options": {"temperature": 0},
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": text, "images": [_encoded(image) for image in images]},
+            ],
+        }
+        answered = self.post(body)
+        return shape.model_validate_json(str(answered["message"]["content"]))
+
+
+def ollama_post(url: str) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """What posts a chat request to the ollama at this address and hands
+    back its answer."""
+
+    def post(body: dict[str, Any]) -> dict[str, Any]:
+        request = urllib.request.Request(
+            f"{url.rstrip('/')}/api/chat", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(request, timeout=OLLAMA_TIMEOUT_SECONDS) as response:
+            return dict(json.loads(response.read()))
+
+    return post
 
 
 def _vocabulary_card(vocabulary: dict[str, Any]) -> str:
@@ -172,8 +242,11 @@ def _vocabulary_card(vocabulary: dict[str, Any]) -> str:
 
 
 def _image_block(path: Path) -> ImageBlockParam:
-    data = base64.standard_b64encode(path.read_bytes()).decode()
-    return {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": data}}
+    return {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _encoded(path)}}
+
+
+def _encoded(path: Path) -> str:
+    return base64.standard_b64encode(path.read_bytes()).decode()
 
 
 def _name(name: str) -> str:

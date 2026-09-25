@@ -318,12 +318,21 @@ def _counted(readings: Sequence[Reading]) -> dict[str, int]:
 def main() -> None:
     from anthropic import Anthropic
 
-    from hessdalen.labelling.readers import MODEL, ModelReaders
+    from hessdalen.labelling.readers import (
+        MODEL,
+        OLLAMA_URL,
+        AnthropicBackend,
+        ModelReaders,
+        OllamaBackend,
+        ollama_post,
+    )
 
     parser = argparse.ArgumentParser(description="Name the corpus with a model reading sheets.")
     parser.add_argument("--root", type=Path, default=PLACES.root, help="the repository the corpus sits under")
     parser.add_argument("--signature", choices=sorted(SIGNATURES), default=DEFAULT_SIGNATURE)
-    parser.add_argument("--model", default=MODEL)
+    parser.add_argument("--provider", choices=("anthropic", "ollama"), default="anthropic")
+    parser.add_argument("--model", default=MODEL, help="the model the provider serves")
+    parser.add_argument("--ollama-url", default=OLLAMA_URL)
     parser.add_argument("--sheets", type=int, default=400, help="sheets to build and read at most")
     parser.add_argument("--fetches", type=int, default=0, help="recordings to fetch from the archive at most")
     parser.add_argument("--votes", type=int, default=5)
@@ -339,7 +348,11 @@ def main() -> None:
     )
     harness = Harness(
         labelling,
-        ModelReaders(Anthropic(), model=parsed.model),
+        ModelReaders(
+            OllamaBackend(model=parsed.model, post=ollama_post(parsed.ollama_url))
+            if parsed.provider == "ollama"
+            else AnthropicBackend(Anthropic(), model=parsed.model)
+        ),
         rule=Rule(votes=parsed.votes, agreement=parsed.agreement, cap=parsed.cap),
         budget=Budget(sheets=parsed.sheets, fetches=parsed.fetches),
         thresholds=Thresholds(calibration=parsed.calibration, verification=parsed.verification),
