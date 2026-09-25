@@ -28,9 +28,11 @@ from hessdalen.analysis.spectra import (
     HIGHEST_RATE,
     LOWEST_RATE,
     Spectrogram,
+    TrackSignals,
     spectrogram,
     track_signals,
 )
+from hessdalen.analysis.track_images import SIDE, path_transform
 
 FRAME_WIDTH_PIXELS = 420
 CLOSE_UP_PIXELS = 240
@@ -97,6 +99,22 @@ RHYTHM_COLUMNS = 200
 
 A chart draws a rectangle per cell, and the longest track of the corpus
 runs 2680 frames.
+"""
+
+TRANSFORM_KEY = (
+    "The path as a line, laid across the picture,",
+    "read at every direction and fineness.",
+    "The middle is the coarsest. A straight track",
+    "is a streak. A bend adds marks beside it.",
+)
+"""How to read a path transform, under its heading, in lines short enough
+to fit its width."""
+
+TRANSFORM_PIXELS = SIDE * 4
+"""How wide and tall a path transform chart is drawn.
+
+A whole number of pixels per cell, so that the cells meet without a
+seam between them.
 """
 
 TIME = alt.Color("phase:Q", scale=alt.Scale(scheme="viridis"), legend=None)
@@ -216,9 +234,64 @@ def rhythm_chart(points: pd.DataFrame, *, signal: str) -> alt.Chart:
 
 def rhythm(points: pd.DataFrame, *, signal: str) -> Rhythm:
     """One track's chosen signal read for rhythm, over the frames it spans."""
+    signals = _signals(points)
+    return Rhythm(frame_number=signals.frame_number, image=spectrogram(signals.values[signal]))
+
+
+def transform_chart(points: pd.DataFrame) -> alt.Chart:
+    """The track's path drawn as a line and carried into what it holds at
+    every direction and fineness, drawn large enough to read.
+
+    The axes are cycles across the picture, the coarsest in the middle.
+    The axes draw no grid, since a line across the cells would read as
+    part of the transform.
+    """
+    image = path_transform(_signals(points))
+    cycle_y, cycle_x = np.meshgrid(np.arange(SIDE) - SIDE // 2, np.arange(SIDE) - SIDE // 2, indexing="ij")
+    drawn = pd.DataFrame(
+        {
+            "across": cycle_x.ravel(),
+            "across_end": cycle_x.ravel() + 1,
+            "down": cycle_y.ravel(),
+            "down_end": cycle_y.ravel() + 1,
+            "held": image.ravel(),
+        }
+    )
+    return (
+        alt.Chart(drawn)
+        .mark_rect()
+        .encode(
+            x=alt.X(
+                "across:Q",
+                title="Cycles across",
+                scale=alt.Scale(domain=[-SIDE // 2, SIDE // 2], nice=False),
+                axis=alt.Axis(grid=False),
+            ),
+            x2="across_end:Q",
+            y=alt.Y(
+                "down:Q",
+                title="Cycles down",
+                scale=alt.Scale(domain=[SIDE // 2, -SIDE // 2], nice=False),
+                axis=alt.Axis(grid=False),
+            ),
+            y2="down_end:Q",
+            color=alt.Color("held:Q", scale=alt.Scale(scheme="viridis", domain=[0.0, 1.0]), legend=None),
+        )
+        .properties(
+            width=TRANSFORM_PIXELS,
+            height=TRANSFORM_PIXELS,
+            title=alt.TitleParams("Path transform", subtitle=TRANSFORM_KEY, subtitleColor="#9a9a9a"),
+            autosize=alt.AutoSizeParams(type="pad", contains="padding"),
+        )
+        .configure_view(stroke="#cfcfcf")
+    )
+
+
+def _signals(points: pd.DataFrame) -> TrackSignals:
+    """One track's signals on an even frame grid, from its stored rows."""
     ordered = points.sort_values("frame_number")
     reach = float(max(int(ordered["frame_width"].iloc[0]), int(ordered["frame_height"].iloc[0])))
-    signals = track_signals(
+    return track_signals(
         frame_number=ordered["frame_number"].to_numpy(),
         centre_x=ordered["centre_x"].to_numpy(),
         centre_y=ordered["centre_y"].to_numpy(),
@@ -226,7 +299,6 @@ def rhythm(points: pd.DataFrame, *, signal: str) -> Rhythm:
         pixel_count=ordered["pixel_count"].to_numpy(),
         reach=reach,
     )
-    return Rhythm(frame_number=signals.frame_number, image=spectrogram(signals.values[signal]))
 
 
 def gallery_html(paths: pd.DataFrame, *, entries: Sequence[GalleryEntry], frame: str) -> str:
@@ -266,6 +338,19 @@ def spectra_html(paths: pd.DataFrame, *, entries: Sequence[GalleryEntry], frame:
     )
 
 
+def transform_html(paths: pd.DataFrame, *, entries: Sequence[GalleryEntry], frame: str) -> str:
+    """Each track of these entries drawn as its path transform, under its
+    caption and framed in the given colour, standing where the same track's
+    path stands in the other gallery."""
+    keys = [entry.key for entry in entries]
+    held = paths[paths["key"].isin(keys)]
+    by_key = {key: group for key, group in held.groupby("key", sort=False)}
+    return _block(
+        _panel(_transform_png(path_transform(_signals(by_key[entry.key]))), entry=entry, frame=frame)
+        for entry in entries
+    )
+
+
 def _path_svg(points: pd.DataFrame) -> str:
     """One fitted track, its path in grey and a dot on each frame coloured by
     how far along the track it is."""
@@ -300,6 +385,18 @@ def _rhythm_png(image: Spectrogram) -> str:
     panel = cv2.resize(
         np.flipud(np.dstack([drawn, read])), (PANEL_PIXELS, PANEL_PIXELS), interpolation=cv2.INTER_NEAREST
     )
+    _, encoded = cv2.imencode(".png", panel)
+    return "data:image/png;base64," + base64.b64encode(encoded.tobytes()).decode()
+
+
+def _transform_png(image: np.ndarray) -> str:
+    """One track's path transform as a picture, the coarsest in the middle.
+
+    Enlarged smoothly, since the transform is a field and not a run of
+    cells worth counting.
+    """
+    drawn = cv2.applyColorMap((np.clip(image, 0.0, 1.0) * 255.0).astype(np.uint8), cv2.COLORMAP_VIRIDIS)
+    panel = cv2.resize(drawn, (PANEL_PIXELS, PANEL_PIXELS), interpolation=cv2.INTER_LINEAR)
     _, encoded = cv2.imencode(".png", panel)
     return "data:image/png;base64," + base64.b64encode(encoded.tobytes()).decode()
 

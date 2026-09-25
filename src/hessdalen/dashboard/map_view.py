@@ -68,6 +68,8 @@ from hessdalen.dashboard.track_preview import (
     light_curve,
     rhythm_chart,
     spectra_html,
+    transform_chart,
+    transform_html,
 )
 from hessdalen.dashboard.track_reference import (
     NOMINAL_RATE,
@@ -135,7 +137,8 @@ COLOUR_COLUMNS = {
     "Camera": "camera",
 }
 PATH_DRAWING = "Path"
-DRAWING_CHOICES = (PATH_DRAWING, "Brightness", "Size", "Wobble", "Presence")
+TRANSFORM_DRAWING = "FFT"
+DRAWING_CHOICES = (PATH_DRAWING, TRANSFORM_DRAWING, "Brightness", "Size", "Wobble", "Presence")
 """What a track is drawn as, in the galleries and beside its light curve.
 
 Every choice but the path names one of the signals a track's rhythm can
@@ -397,7 +400,12 @@ DRAWING_HELP = (
     "blob's own. Wobble is how far it strayed from its straight line. Presence is whether it was "
     "found at all, which repeats at the rate the detector loses a track and picks it up again. Path "
     "returns the galleries to the tracks' paths and leaves the chart on brightness. A drawing is bare "
-    "where the track was too short to read that rate, which near either end is every slow rate."
+    "where the track was too short to read that rate, which near either end is every slow rate. FFT "
+    "draws each track's path as a line, turned to lie across the picture so that the direction it "
+    "travelled does not set the drawing, and gives what that line holds at every direction and "
+    "fineness, the coarsest in the middle. A straight track is one streak through the middle, and "
+    "every bend or wave adds marks either side of it. The selected track's transform stands under its "
+    "close-up, and the rhythm chart stays on brightness."
 )
 SEARCH_HELP = (
     "Select a track by its number, by its recording, or by both, as the heading over a selected track "
@@ -1573,6 +1581,8 @@ def _selected(track: pd.Series, *, points: pd.DataFrame) -> None:
     _reference(track, points=points)
     st.altair_chart(frame_view(points))
     st.altair_chart(close_up(points))
+    if _drawing() == TRANSFORM_DRAWING:
+        st.altair_chart(transform_chart(points), width="content")
     st.altair_chart(light_curve(points))
     st.altair_chart(rhythm_chart(points, signal=charted_signal(_drawing())))
 
@@ -2491,6 +2501,8 @@ def _gallery_markup(stamp: float, entries: tuple[GalleryEntry, ...], *, frame: s
     that comes out the same on the next click is not drawn again."""
     if drawing == PATH_DRAWING:
         return gallery_html(_path_frame(stamp), entries=entries, frame=frame)
+    if drawing == TRANSFORM_DRAWING:
+        return transform_html(_path_frame(stamp), entries=entries, frame=frame)
     return spectra_html(_path_frame(stamp), entries=entries, frame=frame, signal=drawing.lower())
 
 
@@ -2505,9 +2517,10 @@ def charted_signal(drawing: str) -> str:
     The chart stands under the light curve whatever the galleries are
     drawing, so a track's rhythm can be read against what its blob was
     doing at the time without giving up the gallery of paths. It follows
-    the chosen signal wherever one is chosen.
+    the chosen signal wherever one is chosen, and stays on brightness
+    under the drawings that are of the path.
     """
-    return SIGNALS[0] if drawing == PATH_DRAWING else drawing.lower()
+    return SIGNALS[0] if drawing in (PATH_DRAWING, TRANSFORM_DRAWING) else drawing.lower()
 
 
 def _gallery_cluster(chosen: str, *, picked: pd.Series | None) -> str | None:

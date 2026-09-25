@@ -174,7 +174,14 @@ same drawing to every gallery panel. Brightness and size are the blob's
 own, wobble is how far it strayed from its straight line, and presence
 is whether the detector found it at all, which repeats at the rate a
 track is lost and picked up again. Path returns the galleries to the
-tracks' paths and leaves the chart on brightness.
+tracks' paths and leaves the chart on brightness. FFT draws each
+track's path as a line, turned to lie across the picture so that the
+direction it travelled does not set the drawing, and gives what that
+line holds at every direction and fineness, the coarsest in the
+middle. A straight track is one streak through the middle, and every
+bend or wave adds marks either side of it. The selected track's
+transform stands under its close-up, and the rhythm chart stays on
+brightness.
 
 The rates are cycles a frame, 25 times the same number in hertz on
 these recordings. A drawing is bare where the track was too short to

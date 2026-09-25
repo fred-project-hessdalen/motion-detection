@@ -22,6 +22,7 @@ from hessdalen.dashboard.map_view import (
     POINT_COLUMNS,
     TABLE_COLUMNS,
     TAGS_COLUMN,
+    TRANSFORM_DRAWING,
     UNNAMED,
     UNVALIDATED,
     VALIDATED,
@@ -405,6 +406,7 @@ def test_the_rhythm_chart_is_drawn_while_the_galleries_draw_paths() -> None:
     """The chart stands under the light curve whatever the galleries hold, so
     a rhythm can be read against the blob without giving up the paths."""
     assert charted_signal(PATH_DRAWING) == "brightness"
+    assert charted_signal(TRANSFORM_DRAWING) == "brightness"
 
 
 def _of_one_recording() -> pd.DataFrame:

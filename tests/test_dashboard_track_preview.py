@@ -9,12 +9,14 @@ import pandas as pd
 import pytest
 
 from hessdalen.analysis.spectra import BRIGHTNESS, PRESENCE, RATE_COUNT, WOBBLE
+from hessdalen.analysis.track_images import SIDE
 from hessdalen.dashboard.track_preview import (
     CACHED_MARK,
     JUMP_MARK,
     PANEL_PIXELS,
     PLAYING_COLOUR,
     PLAYING_MARK,
+    TRANSFORM_PIXELS,
     VALIDATED_MARK,
     GalleryEntry,
     close_up,
@@ -25,6 +27,8 @@ from hessdalen.dashboard.track_preview import (
     rhythm,
     rhythm_chart,
     spectra_html,
+    transform_chart,
+    transform_html,
 )
 
 
@@ -203,6 +207,55 @@ def test_a_rhythm_chart_is_padded_out_to_its_height_and_not_fitted_into_it() -> 
     drawn = rhythm_chart(_beating()[lambda held: held["key"] == "a"], signal=WOBBLE).to_dict()
 
     assert drawn["autosize"] == {"type": "pad", "contains": "padding"}
+
+
+def test_a_transform_gallery_draws_one_panel_per_entry_at_the_panel_size() -> None:
+    entries = [_entry("a", "1. birds"), _entry("b", "2. planes")]
+
+    figures = transform_html(_beating(), entries=entries, frame="#123456").split("<figure")[1:]
+
+    assert len(figures) == 2
+    assert 'data-track="b"' in figures[1]
+    assert "2. planes" in figures[1]
+    assert _png(figures[1]).shape == (PANEL_PIXELS, PANEL_PIXELS, 3)
+
+
+def test_a_transform_panel_carries_the_same_marks_as_a_path_panel() -> None:
+    entries = [_entry("a", "1. birds", cached=True, validated=True, playing=True)]
+
+    drawn = transform_html(_beating(), entries=entries, frame="#123456").split("<figure")[1]
+
+    assert JUMP_MARK in drawn
+    assert CACHED_MARK in drawn
+    assert VALIDATED_MARK in drawn
+    assert PLAYING_COLOUR in drawn
+
+
+def test_a_circling_track_and_a_straight_one_have_different_transforms() -> None:
+    entries = [_entry("a", "1. birds")]
+    circling = transform_html(_circling(), entries=entries, frame="#123")
+    straight = transform_html(_steady(), entries=entries, frame="#123")
+
+    apart = np.abs(_png(circling.split("<figure")[1]).astype(int) - _png(straight.split("<figure")[1]).astype(int))
+
+    assert apart.mean() > 10
+
+
+def test_a_transform_chart_is_square_at_whole_pixels_a_cell_and_padded_out() -> None:
+    """A cell drawn over a fraction of a pixel leaves a seam against the next,
+    and a chart fitted into its size loses its drawing to the axes."""
+    drawn = transform_chart(_circling()).to_dict()
+
+    assert drawn["width"] == TRANSFORM_PIXELS
+    assert drawn["height"] == TRANSFORM_PIXELS
+    assert TRANSFORM_PIXELS % SIDE == 0
+    assert drawn["autosize"] == {"type": "pad", "contains": "padding"}
+
+
+def _circling() -> pd.DataFrame:
+    """One track going twice round a circle."""
+    turn = np.linspace(0.0, 4.0 * np.pi, 120)
+    return _track("a", xs=list(50.0 * np.cos(turn)), ys=list(50.0 * np.sin(turn)))
 
 
 def _beating() -> pd.DataFrame:
