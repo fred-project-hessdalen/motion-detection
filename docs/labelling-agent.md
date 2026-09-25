@@ -135,7 +135,8 @@ Read tools:
 | `sample` | cluster, count | keys spread over core, rim and distinct recordings, cached, unseen and unvalidated |
 | `uncertain` | count, vote rule | cached unseen tracks whose neighbour vote disagrees or that have no seen track within the cap, weakest first |
 | `verify_candidates` | round, count | cached unseen tracks a propagation of the round named, the furthest from their voters and the weakest votes |
-| `calibration` | count | cached tracks whose name is settled, validated ones first |
+| `calibration` | none | every validated track on disk, the only ground truth |
+| `calibration_recordings` | none | recordings not on disk that hold validated tracks, the one holding most first |
 | `sheet` | keys | the sheet as image content, with a line naming its path and rows, at most eight rows |
 | `track_sheet` | key | the isolation view as image content, with a line naming its path |
 | `propagation_preview` | vote rule | what a propagation would name, counts per name and how many tracks it would leave uncertain, with nothing written |
@@ -196,11 +197,15 @@ Model calls:
 | Judge | the isolation view of one contested track and its ledger history | a final name or "review" |
 | Proposer | the last sheets holding rows the reader answered "none of these" | a proposed name with a definition and example keys, written to `labelling/proposals.jsonl`, with the example rows tagged "review" |
 
-Each call is a fresh Messages API request with a structured output
-schema, made through `hessdalen.labelling.readers`. No call sees a
-previous call's context. The ledger is the memory. The calls stand
-behind one interface, so the loop runs under a reader of the tests'
-own.
+Each call is a fresh request with a structured output schema, made
+through `hessdalen.labelling.readers` to the Messages API or to a
+model ollama serves on this machine, chosen with `--provider`. No
+call sees a previous call's context. The ledger is the memory. The
+calls stand behind one interface, so the loop runs under a reader of
+the tests' own. Nothing a reader sees names a track: rows are
+captioned and answered by number, because a track's key and its
+recording's name carry the archive folder the recording was filed
+under, which is a label.
 
 The loop runs with
 
@@ -214,12 +219,16 @@ space are command line arguments.
 
 Rounds:
 
-0. Calibration. The reader reads two sheets of tracks whose name is
-   settled, the validated ones first, blind. A reading that agrees is
-   written as seen, so the settled tracks vote. The agreement rate and
-   every disagreement go to the log. Under a threshold the harness
-   stops, because propagating from a reader that misreads the ground
-   truth spreads the misreading.
+0. Calibration. The reader reads every validated track on disk,
+   blind. The validated tracks are the only ground truth, since a
+   name the earlier pass gave a whole cluster says nothing about the
+   track it sits on. Recordings holding validated tracks are fetched
+   first, within the fetch budget. A reading agrees when it matches
+   the track's name or one of its tags. Nothing is written. The
+   agreement rate and every disagreement go to the log. Under a
+   threshold, or with fewer than a sheet's worth of validated tracks
+   on disk, the harness stops, because propagating from a reader that
+   misreads the ground truth spreads the misreading.
 1. Seed, as protocol step 2. Rows answered "unsure" or "none of these"
    are recorded as seen without a name and do not vote.
 2. Propagate, as protocol step 3. The vote is the prediction, so no
