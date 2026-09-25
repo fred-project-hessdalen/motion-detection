@@ -16,6 +16,7 @@ pytest.importorskip("sklearn")
 pytest.importorskip("anthropic")
 
 from hessdalen.dashboard.cluster_labels import read_labels, write_labels  # noqa: E402
+from hessdalen.dashboard.track_validation import write_validated  # noqa: E402
 from hessdalen.labelling.harness import Budget, Harness, Thresholds  # noqa: E402
 from hessdalen.labelling.readers import Proposal, RowContext  # noqa: E402
 from hessdalen.labelling.service import NONE_OF_THESE, Labelling, Reading, Settings  # noqa: E402
@@ -73,9 +74,18 @@ def _sheet_of_rows(self: Labelling, keys: Sequence[str], *, layout: Layout | Non
     return Sheet(path=path, keys=tuple(keys))
 
 
+def _validated(harness: Harness, keys: list[str], *, name: str) -> None:
+    """Tracks a person named and confirmed, the ground truth calibration
+    reads against."""
+    write_labels(harness.labelling.places.labels, name=name, keys=keys)
+    for key in keys:
+        write_validated(harness.labelling.places.validated, key=key, confirmed=True)
+
+
 def test_the_loop_names_every_track_on_disk_and_leaves_the_far_ones(tmp_path: Path, monkeypatch) -> None:
     reader = TruthfulReader(TRUTH)
     harness = _harness(tmp_path, monkeypatch, reader=reader, sheets=20)
+    _validated(harness, BIRDS[:6], name="bird")
 
     report = harness.run()
 
@@ -88,21 +98,44 @@ def test_the_loop_names_every_track_on_disk_and_leaves_the_far_ones(tmp_path: Pa
     assert report.status.review == 0
 
 
-def test_the_loop_stops_when_the_reader_disagrees_with_the_settled_names(tmp_path: Path, monkeypatch) -> None:
+def test_the_loop_stops_when_the_reader_disagrees_with_the_validated_tracks(tmp_path: Path, monkeypatch) -> None:
     reader = TruthfulReader(TRUTH)
     harness = _harness(tmp_path, monkeypatch, reader=reader, sheets=20)
-    write_labels(harness.labelling.places.labels, name="insect", keys=BIRDS[:3])
+    _validated(harness, BIRDS[:6], name="insect")
 
     report = harness.run()
 
     assert report.calibration == 0.0
     assert report.stopped == "calibration under the threshold"
     assert reader.sheets_read == 1
+    assert read_labels(harness.labelling.places.labels) == {"insect": sorted(BIRDS[:6])}
+
+
+def test_a_reading_agrees_with_a_validated_track_through_its_tags_too(tmp_path: Path, monkeypatch) -> None:
+    reader = TruthfulReader(TRUTH)
+    harness = _harness(tmp_path, monkeypatch, reader=reader, sheets=1)
+    _validated(harness, BIRDS[:6], name="clutter")
+    for key in BIRDS[:6]:
+        harness.labelling.tag(key, tags=["bird", "far away"], round=0)
+
+    assert harness.calibrate() == 1.0
+
+
+def test_fewer_validated_tracks_than_a_sheet_is_no_calibration(tmp_path: Path, monkeypatch) -> None:
+    reader = TruthfulReader(TRUTH)
+    harness = _harness(tmp_path, monkeypatch, reader=reader, sheets=20)
+    _validated(harness, BIRDS[:2], name="bird")
+
+    report = harness.run()
+
+    assert report.stopped == "calibration under the threshold"
+    assert reader.sheets_read == 0
 
 
 def test_the_sheet_budget_ends_the_loop(tmp_path: Path, monkeypatch) -> None:
     reader = TruthfulReader(TRUTH)
     harness = _harness(tmp_path, monkeypatch, reader=reader, sheets=2)
+    _validated(harness, BIRDS[:6], name="bird")
 
     report = harness.run()
 

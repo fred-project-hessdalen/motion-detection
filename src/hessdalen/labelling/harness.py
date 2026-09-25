@@ -132,24 +132,35 @@ class Harness:
         return self.finish()
 
     def calibrate(self) -> float:
-        """How often the reader agrees with the names already settled, read
-        blind. A reading that agrees is written as seen, so the settled
-        tracks vote."""
-        keys = self.labelling.calibration_keys(count=2 * ROWS)
-        names = self.labelling.names_by_key()
-        agreed, read = 0, 0
+        """How often the reader agrees with the validated tracks, read blind.
+
+        The validated tracks are the only ground truth, so recordings
+        holding validated tracks are fetched first, within the fetch
+        budget, and nothing is written. Fewer than a sheet's worth of
+        validated tracks on disk is no calibration, and reads as no
+        agreement.
+        """
+        for candidate in self.labelling.calibration_recordings()[: self.budget.fetches]:
+            self.log(f"calibration: fetching {candidate.recording} for {candidate.uncertain} validated tracks")
+            self.labelling.fetch(candidate.recording)
+            self.report.fetched.append(candidate.recording)
+
+        keys = self.labelling.calibration_keys()
+        if len(keys) < ROWS:
+            self.log(f"calibration: {len(keys)} validated tracks on disk, fewer than one sheet's worth")
+            return 0.0
+
+        agreed = 0
         for batch in _batches(keys, ROWS):
-            sheet, readings = self.read(batch)
-            agreeing = [reading for reading in readings if reading.name == names.get(reading.key)]
-            agreed += len(agreeing)
-            read += len(readings)
-            self.labelling.verdict(agreeing, sheet=sheet, round=self.round)
+            _, readings = self.read(batch)
             for reading in readings:
-                if reading.name != names.get(reading.key):
-                    self.log(f"calibration: {reading.key} holds {names.get(reading.key)}, read as {reading.name}")
-        rate = agreed / read if read else 1.0
-        self.log(f"calibration: {agreed} of {read} readings agree")
-        return rate
+                truth = self.labelling.truth(reading.key)
+                if reading.name in truth:
+                    agreed += 1
+                else:
+                    self.log(f"calibration: {reading.key} holds {' or '.join(truth)}, read as {reading.name}")
+        self.log(f"calibration: {agreed} of {len(keys)} readings agree")
+        return agreed / len(keys)
 
     def seed(self) -> None:
         """One sheet per cluster, the one with most unnamed tracks on disk

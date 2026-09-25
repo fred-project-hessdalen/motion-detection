@@ -298,15 +298,37 @@ class Labelling:
                     chosen.append(line.key)
         return chosen
 
-    def calibration_keys(self, *, count: int) -> list[str]:
-        """Tracks on disk whose name is already settled, the validated ones
-        first and then named ones, to read blind and compare."""
-        names = self.names_by_key()
+    def calibration_keys(self) -> list[str]:
+        """Every validated track on disk that holds a name, to read blind
+        and compare.
+
+        The validated tracks are the only ground truth. A name the
+        earlier pass gave a whole cluster says nothing about the track
+        it sits on, so no other track is read for calibration.
+        """
         cached = self.tracks[self.tracks["cached"]]
-        validated = [key for key in cached["key"] if key in self.validated() and names.get(key)]
-        named = [key for key in cached["key"] if key not in self.validated() and names.get(key)]
-        chosen = np.random.default_rng(0).permutation(named).tolist()
-        return [*validated, *chosen][:count]
+        return [key for key in cached["key"] if key in self.validated() and self.truth(key)]
+
+    def truth(self, key: str) -> list[str]:
+        """What a validated track is: the name it holds and the tags on it,
+        any of which a reading may agree with."""
+        held = [self.names_by_key().get(key, UNNAMED), *tags_of(read_labels(self.places.track_labels), key=key)]
+        return [name for name in dict.fromkeys(held) if name]
+
+    def calibration_recordings(self) -> list[FetchCandidate]:
+        """Recordings not on disk that hold validated tracks, the one holding
+        most first."""
+        validated = self.validated()
+        held = self.tracks[~self.tracks["cached"] & self.tracks["key"].isin(list(validated))]
+        entries = ledger_entries(self.places.ledgers)
+        return [
+            FetchCandidate(
+                recording=str(recording),
+                uncertain=int(count),
+                size_bytes=int(entries.get(str(recording), {}).get("size_bytes", 0)),
+            )
+            for recording, count in held.groupby("recording").size().sort_values(ascending=False).items()
+        ]
 
     def sheet(self, keys: Sequence[str], *, layout: Layout) -> Sheet:
         """The sheet of these tracks, one row each in the order given.

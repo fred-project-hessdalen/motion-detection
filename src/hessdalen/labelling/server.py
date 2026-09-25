@@ -132,10 +132,17 @@ def verify_candidates(round: int, count: int = 6) -> list[str]:
 
 
 @server.tool()
-def calibration(count: int = 12) -> list[str]:
-    """Tracks on disk whose name is settled, validated ones first, to read
-    blind and compare with what they hold."""
-    return labelling().calibration_keys(count=count)
+def calibration() -> list[str]:
+    """Every validated track on disk, the ground truth to read blind and
+    compare with what it holds. Nothing else counts as ground truth."""
+    return labelling().calibration_keys()
+
+
+@server.tool()
+def calibration_recordings() -> list[dict[str, Any]]:
+    """Recordings not on disk that hold validated tracks, the one holding
+    most first, to fetch before a calibration."""
+    return [asdict(held) for held in labelling().calibration_recordings()]
 
 
 @server.tool()
