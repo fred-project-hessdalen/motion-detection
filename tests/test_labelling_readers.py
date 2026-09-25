@@ -18,6 +18,7 @@ from pydantic import BaseModel  # noqa: E402
 from hessdalen.labelling.readers import (  # noqa: E402
     ModelReaders,
     OllamaBackend,
+    OpenAIBackend,
     RowContext,
     SheetReadings,
 )
@@ -73,6 +74,30 @@ def test_a_row_the_model_left_out_is_read_as_none_of_these_and_unsure(tmp_path: 
 
     assert reading.name == NONE_OF_THESE
     assert reading.confidence == "unsure"
+
+
+def test_the_openai_backend_sends_the_images_inline_and_takes_the_parsed_answer(tmp_path: Path) -> None:
+    picture = tmp_path / "sheet.png"
+    picture.write_bytes(b"png")
+    asked: list[dict[str, Any]] = []
+    answer = SheetReadings(rows=[])
+
+    class Responses:
+        def parse(self, **request: Any) -> Any:
+            asked.append(request)
+            return type("Parsed", (), {"output_parsed": answer})()
+
+    client = type("Client", (), {"responses": Responses()})()
+
+    answered = OpenAIBackend(client, model="gpt").ask(SheetReadings, system="the card", images=[picture], text="read")
+
+    assert answered is answer
+    assert asked[0]["model"] == "gpt"
+    assert asked[0]["instructions"] == "the card"
+    assert asked[0]["text_format"] is SheetReadings
+    content = asked[0]["input"][0]["content"]
+    assert content[0] == {"type": "input_image", "image_url": "data:image/png;base64,cG5n", "detail": "high"}
+    assert content[1] == {"type": "input_text", "text": "read"}
 
 
 def test_the_ollama_backend_posts_the_schema_and_the_images_and_parses_the_answer(tmp_path: Path) -> None:

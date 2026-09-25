@@ -332,20 +332,23 @@ def _counted(readings: Sequence[Reading]) -> dict[str, int]:
 
 def main() -> None:
     from anthropic import Anthropic
+    from openai import OpenAI
 
     from hessdalen.labelling.readers import (
         MODEL,
         OLLAMA_URL,
         AnthropicBackend,
+        Backend,
         ModelReaders,
         OllamaBackend,
+        OpenAIBackend,
         ollama_post,
     )
 
     parser = argparse.ArgumentParser(description="Name the corpus with a model reading sheets.")
     parser.add_argument("--root", type=Path, default=PLACES.root, help="the repository the corpus sits under")
     parser.add_argument("--signature", choices=sorted(SIGNATURES), default=DEFAULT_SIGNATURE)
-    parser.add_argument("--provider", choices=("anthropic", "ollama"), default="anthropic")
+    parser.add_argument("--provider", choices=("anthropic", "openai", "ollama"), default="anthropic")
     parser.add_argument("--model", default=MODEL, help="the model the provider serves")
     parser.add_argument("--ollama-url", default=OLLAMA_URL)
     parser.add_argument("--sheets", type=int, default=400, help="sheets to build and read at most")
@@ -361,13 +364,16 @@ def main() -> None:
     labelling = Labelling(
         Places(root=parsed.root), settings=Settings(signature=parsed.signature, flip_limit=parsed.flip_limit)
     )
+    backend: Backend
+    if parsed.provider == "ollama":
+        backend = OllamaBackend(model=parsed.model, post=ollama_post(parsed.ollama_url))
+    elif parsed.provider == "openai":
+        backend = OpenAIBackend(OpenAI(), model=parsed.model)
+    else:
+        backend = AnthropicBackend(Anthropic(), model=parsed.model)
     harness = Harness(
         labelling,
-        ModelReaders(
-            OllamaBackend(model=parsed.model, post=ollama_post(parsed.ollama_url))
-            if parsed.provider == "ollama"
-            else AnthropicBackend(Anthropic(), model=parsed.model)
-        ),
+        ModelReaders(backend),
         rule=Rule(votes=parsed.votes, agreement=parsed.agreement, cap=parsed.cap),
         budget=Budget(sheets=parsed.sheets, fetches=parsed.fetches),
         thresholds=Thresholds(calibration=parsed.calibration, verification=parsed.verification),

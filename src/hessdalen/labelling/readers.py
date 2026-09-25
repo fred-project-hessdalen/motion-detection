@@ -7,9 +7,10 @@ model is told is the vocabulary with its definitions, what a row of a
 sheet shows, and per row the little the corpus knows that is not in
 the picture.
 
-The request goes to one of two backends, the Messages API or a model
-ollama serves on this machine. The calls stand behind one interface
-so the harness can be run with a reader of the tests' own.
+The request goes to one of three backends, the Messages API, the
+Responses API of OpenAI, or a model ollama serves on this machine.
+The calls stand behind one interface so the harness can be run with a
+reader of the tests' own.
 """
 
 from __future__ import annotations
@@ -24,6 +25,8 @@ from typing import Any, Protocol
 
 from anthropic import Anthropic
 from anthropic.types import ImageBlockParam, TextBlockParam
+from openai import OpenAI
+from openai.types.responses import EasyInputMessageParam, ResponseInputMessageContentListParam
 from pydantic import BaseModel
 
 from hessdalen.labelling.service import CONFIDENCES, NONE_OF_THESE, Reading
@@ -191,6 +194,31 @@ class AnthropicBackend:
         if answered.parsed_output is None:
             raise ValueError("The model answered in no readable shape.")
         return answered.parsed_output
+
+
+class OpenAIBackend:
+    """A request to the Responses API, the answer parsed into the shape."""
+
+    def __init__(self, client: OpenAI, *, model: str) -> None:
+        self.client = client
+        self.model = model
+
+    def ask[Answer: BaseModel](self, shape: type[Answer], *, system: str, images: Sequence[Path], text: str) -> Answer:
+        content: ResponseInputMessageContentListParam = [
+            {"type": "input_image", "image_url": f"data:image/png;base64,{_encoded(image)}", "detail": "high"}
+            for image in images
+        ]
+        content.append({"type": "input_text", "text": text})
+        message: EasyInputMessageParam = {"role": "user", "content": content}
+        answered = self.client.responses.parse(
+            model=self.model,
+            instructions=system,
+            input=[message],
+            text_format=shape,
+        )
+        if answered.output_parsed is None:
+            raise ValueError("The model answered in no readable shape.")
+        return answered.output_parsed
 
 
 OLLAMA_URL = "http://localhost:11434"
