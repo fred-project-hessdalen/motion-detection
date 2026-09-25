@@ -146,13 +146,14 @@ def calibration_recordings() -> list[dict[str, Any]]:
 
 
 @server.tool()
-def sheet(keys: list[str]) -> list[str | Image]:
+def sheet(keys: list[str], first: int = 1) -> list[str | Image]:
     """The sheet of these tracks, one row each in the order given, at most
-    eight. Each row is the track's caption, its drawn path from dark blue
-    to yellow, and six stretched close-up crops across it. The first
-    text names the sheet's path, which a verdict refers to."""
+    eight, the rows captioned with track numbers counting from first.
+    Each row is the caption, the drawn path from dark blue to yellow, and
+    six stretched close-up crops across the track. The first text names
+    the sheet's path, which a verdict refers to."""
     try:
-        built = labelling().sheet(keys, layout=SHEET)
+        built = labelling().sheet(keys, layout=SHEET, first=first)
     except FileNotFoundError as absent:
         raise ToolError(str(absent)) from absent
     return [f"sheet {built.path} rows {list(built.keys)}", Image(path=built.path)]

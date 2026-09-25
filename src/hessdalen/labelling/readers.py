@@ -29,7 +29,7 @@ from pydantic import BaseModel
 from hessdalen.labelling.service import CONFIDENCES, NONE_OF_THESE, Reading
 
 MODEL = "claude-fable-5-1"
-MAX_TOKENS = 2048
+MAX_TOKENS = 4096
 
 SHEET_TEXT = """\
 The picture is a contact sheet of tracks the movement detector found in
@@ -43,8 +43,9 @@ comes out with a shape and the sky behind it comes out grainy.
 
 Name what moved in each row, from the vocabulary, or answer
 "none of these" when nothing in the vocabulary fits. Say how sure you
-are: sure, likely or unsure. Read the rows in order and answer every
-row once, by its number, which its caption starts with."""
+are: sure, likely or unsure, with a note of one short sentence. Read
+the rows in order and answer every row once, by the track number its
+caption starts with."""
 
 VIEW_TEXT = """\
 The picture is an isolation view of one track the movement detector
@@ -69,7 +70,7 @@ REVIEW = "review"
 
 
 class RowReading(BaseModel):
-    row: int
+    track: int
     name: str
     confidence: str
     note: str
@@ -107,7 +108,9 @@ class RowContext:
 
 
 class Readers(Protocol):
-    def read(self, sheet: Path, *, rows: Sequence[RowContext], vocabulary: dict[str, Any]) -> list[Reading]: ...
+    def read(
+        self, sheet: Path, *, rows: Sequence[RowContext], first: int, vocabulary: dict[str, Any]
+    ) -> list[Reading]: ...
 
     def judge(self, view: Path, *, key: str, history: Sequence[str], vocabulary: dict[str, Any]) -> Reading: ...
 
@@ -130,16 +133,18 @@ class ModelReaders:
     def __init__(self, backend: Backend) -> None:
         self.backend = backend
 
-    def read(self, sheet: Path, *, rows: Sequence[RowContext], vocabulary: dict[str, Any]) -> list[Reading]:
+    def read(self, sheet: Path, *, rows: Sequence[RowContext], first: int, vocabulary: dict[str, Any]) -> list[Reading]:
+        """One reading per row, the rows numbered from first as their
+        captions are."""
         context = "\n".join(
-            f"- row {number}: nearest seen tracks are named {', '.join(row.neighbour_names) or 'nothing yet'}"
-            for number, row in enumerate(rows, start=1)
+            f"- track {number}: nearest seen tracks are named {', '.join(row.neighbour_names) or 'nothing yet'}"
+            for number, row in enumerate(rows, start=first)
         )
         text = f"{SHEET_TEXT}\n\nRows, in order:\n{context}"
         answered = self._ask(SheetReadings, images=[sheet], text=text, vocabulary=vocabulary)
-        by_number = {row.row: row for row in answered.rows}
+        by_number = {row.track: row for row in answered.rows}
         readings = []
-        for number, row in enumerate(rows, start=1):
+        for number, row in enumerate(rows, start=first):
             held = by_number.get(number)
             if held is None:
                 readings.append(Reading(key=row.key, name=NONE_OF_THESE, confidence="unsure", note="no reading given"))

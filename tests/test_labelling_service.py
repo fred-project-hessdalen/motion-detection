@@ -253,7 +253,7 @@ def test_a_sheet_of_a_track_whose_recording_is_absent_is_refused_by_name(tmp_pat
     labelling = _labelling(tmp_path)
 
     with pytest.raises(FileNotFoundError, match="rec9.mkv"):
-        labelling.sheet(LONERS[:1], layout=SHEET)
+        labelling.sheet(LONERS[:1], layout=SHEET, first=1)
 
 
 def test_a_tag_is_written_and_counted(tmp_path: Path) -> None:

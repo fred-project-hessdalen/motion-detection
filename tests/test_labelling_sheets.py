@@ -68,15 +68,13 @@ def test_the_same_rows_under_the_same_layout_are_built_once(tmp_path: Path) -> N
     assert again.path.stat().st_mtime_ns == written
 
 
-def test_another_layout_or_another_kind_is_another_sheet(tmp_path: Path) -> None:
+def test_another_layout_kind_or_caption_is_another_sheet(tmp_path: Path) -> None:
     keys = ["a/1"]
+    held = sheet_path(tmp_path, keys=keys, captions=["track 1"], layout=SHEET, kind="sheet")
 
-    assert sheet_path(tmp_path, keys=keys, layout=SHEET, kind="sheet") != sheet_path(
-        tmp_path, keys=keys, layout=ISOLATION, kind="sheet"
-    )
-    assert sheet_path(tmp_path, keys=keys, layout=SHEET, kind="sheet") != sheet_path(
-        tmp_path, keys=keys, layout=SHEET, kind="isolation"
-    )
+    assert held != sheet_path(tmp_path, keys=keys, captions=["track 1"], layout=ISOLATION, kind="sheet")
+    assert held != sheet_path(tmp_path, keys=keys, captions=["track 1"], layout=SHEET, kind="isolation")
+    assert held != sheet_path(tmp_path, keys=keys, captions=["track 2"], layout=SHEET, kind="sheet")
 
 
 def test_a_sheet_holds_no_more_rows_than_can_be_read(tmp_path: Path) -> None:

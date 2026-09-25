@@ -116,9 +116,12 @@ def read_sheet(path: Path) -> Sheet:
     return Sheet(path=path, keys=tuple(str(key) for key in beside["keys"]))
 
 
-def sheet_path(directory: Path, *, keys: Sequence[str], layout: Layout, kind: str) -> Path:
-    """Where the sheet of these rows under this layout is kept."""
-    described = json.dumps({"kind": kind, "keys": list(keys), "layout": asdict(layout)}, sort_keys=True)
+def sheet_path(directory: Path, *, keys: Sequence[str], captions: Sequence[str], layout: Layout, kind: str) -> Path:
+    """Where the sheet of these rows, captioned so, under this layout is
+    kept."""
+    described = json.dumps(
+        {"kind": kind, "keys": list(keys), "captions": list(captions), "layout": asdict(layout)}, sort_keys=True
+    )
     return directory / f"{hashlib.sha1(described.encode()).hexdigest()[:12]}.png"
 
 
@@ -128,7 +131,8 @@ def build_sheet(directory: Path, *, tracks: Sequence[SheetTrack], layout: Layout
         raise ValueError(f"A sheet holds 1 to {MAX_ROWS} rows, and {len(tracks)} were asked for.")
 
     keys = tuple(track.key for track in tracks)
-    path = sheet_path(directory, keys=keys, layout=layout, kind="sheet")
+    captions = [track.caption for track in tracks]
+    path = sheet_path(directory, keys=keys, captions=captions, layout=layout, kind="sheet")
     if path.is_file():
         return Sheet(path=path, keys=keys)
 
@@ -148,7 +152,7 @@ def build_isolation(directory: Path, *, track: SheetTrack, layout: Layout) -> Sh
     size of the blob over the track's frames.
     """
     keys = (track.key,)
-    path = sheet_path(directory, keys=keys, layout=layout, kind="isolation")
+    path = sheet_path(directory, keys=keys, captions=[track.caption], layout=layout, kind="isolation")
     if path.is_file():
         return Sheet(path=path, keys=keys)
 

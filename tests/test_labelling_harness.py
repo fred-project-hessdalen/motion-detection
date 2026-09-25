@@ -37,7 +37,7 @@ class TruthfulReader:
         self.truth = truth
         self.sheets_read = 0
 
-    def read(self, sheet: Path, *, rows: Sequence[RowContext], vocabulary: dict[str, Any]) -> list[Reading]:
+    def read(self, sheet: Path, *, rows: Sequence[RowContext], first: int, vocabulary: dict[str, Any]) -> list[Reading]:
         self.sheets_read += 1
         return [
             Reading(key=row.key, name=self.truth.get(row.key, NONE_OF_THESE), confidence="sure", note="")
@@ -53,7 +53,7 @@ class TruthfulReader:
 
 def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, reader: TruthfulReader, sheets: int) -> Harness:
     monkeypatch.setattr(Labelling, "sheet", _sheet_of_rows)
-    monkeypatch.setattr(Labelling, "isolation", lambda self, key: _sheet_of_rows(self, [key], layout=None))
+    monkeypatch.setattr(Labelling, "isolation", lambda self, key: _sheet_of_rows(self, [key], layout=None, first=1))
     labelling = Labelling(corpus(tmp_path), settings=SETTINGS)
     return Harness(
         labelling,
@@ -65,10 +65,10 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, reader: Truthfu
     )
 
 
-def _sheet_of_rows(self: Labelling, keys: Sequence[str], *, layout: Layout | None) -> Sheet:
+def _sheet_of_rows(self: Labelling, keys: Sequence[str], *, layout: Layout | None, first: int) -> Sheet:
     """A sheet as its rows alone, written beside where the picture would
     be."""
-    path = sheet_path(self.sheets_dir, keys=keys, layout=Layout(frames=0, radii=0, side=0), kind="rows")
+    path = sheet_path(self.sheets_dir, keys=keys, captions=[], layout=Layout(frames=0, radii=0, side=0), kind="rows")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.with_suffix(".json").write_text(json.dumps({"keys": list(keys), "layout": {}}))
     return Sheet(path=path, keys=tuple(keys))

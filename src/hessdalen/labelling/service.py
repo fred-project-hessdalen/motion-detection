@@ -337,13 +337,13 @@ class Labelling:
             for recording, count in held.groupby("recording").size().sort_values(ascending=False).items()
         ]
 
-    def sheet(self, keys: Sequence[str], *, layout: Layout) -> Sheet:
+    def sheet(self, keys: Sequence[str], *, layout: Layout, first: int) -> Sheet:
         """The sheet of these tracks, one row each in the order given.
 
         A track whose recording is not on disk is refused, with the
         recording named.
         """
-        tracks = [self._sheet_track(key, number=number) for number, key in enumerate(keys, start=1)]
+        tracks = [self._sheet_track(key, number=number) for number, key in enumerate(keys, start=first)]
         return build_sheet(self.sheets_dir, tracks=tracks, layout=layout)
 
     def isolation(self, key: str) -> Sheet:
@@ -632,7 +632,7 @@ class Labelling:
         points = self.paths().loc[[key]].sort_values("frame_number")
         return SheetTrack(
             key=key,
-            caption=f"row {number} - {row['frames']} frames - {row['camera']}",
+            caption=f"track {number} - {row['frames']} frames - {row['camera']}",
             stored=StoredTrack(
                 track_id=int(row["track_id"]),
                 frame_numbers=points["frame_number"].to_numpy(),

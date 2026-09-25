@@ -47,7 +47,7 @@ def test_the_status_comes_back_as_a_record(tmp_path: Path) -> None:
 
 def test_a_verdict_names_the_track_through_the_sheet_it_was_read_on(tmp_path: Path) -> None:
     labelling = server.start(corpus(tmp_path), settings=SETTINGS)
-    sheet = sheet_path(labelling.sheets_dir, keys=BIRDS[:2], layout=SHEET, kind="sheet")
+    sheet = sheet_path(labelling.sheets_dir, keys=BIRDS[:2], captions=[], layout=SHEET, kind="sheet")
     sheet.parent.mkdir(parents=True)
     sheet.with_suffix(".json").write_text(json.dumps({"keys": BIRDS[:2], "layout": {}}))
 

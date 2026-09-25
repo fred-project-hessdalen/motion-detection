@@ -203,10 +203,12 @@ class Harness:
         keys = self.labelling.verify_candidates(count=ROWS, round=self.round)
         if keys and self.report.sheets < self.budget.sheets:
             names = self.labelling.names_by_key()
-            sheet = self.labelling.sheet(keys, layout=SHEET)
+            sheet = self.labelling.sheet(keys, layout=SHEET, first=1)
             predictions = [Reading(key=key, name=names.get(key, ""), confidence="", note="") for key in keys]
             self.labelling.predict(predictions, sheet=sheet, round=self.round)
-            readings = self.readers.read(sheet.path, rows=self.contexts(keys), vocabulary=self.labelling.vocabulary())
+            readings = self.readers.read(
+                sheet.path, rows=self.contexts(keys), first=1, vocabulary=self.labelling.vocabulary()
+            )
             self.report.sheets += 1
 
             distances = self.distances(keys)
@@ -279,8 +281,10 @@ class Harness:
 
     def read(self, keys: Sequence[str]) -> tuple[Sheet, list[Reading]]:
         """The sheet of these tracks and what the reader made of it."""
-        sheet = self.labelling.sheet(keys, layout=SHEET)
-        readings = self.readers.read(sheet.path, rows=self.contexts(keys), vocabulary=self.labelling.vocabulary())
+        sheet = self.labelling.sheet(keys, layout=SHEET, first=1)
+        readings = self.readers.read(
+            sheet.path, rows=self.contexts(keys), first=1, vocabulary=self.labelling.vocabulary()
+        )
         self.report.sheets += 1
         if any(reading.name == NONE_OF_THESE for reading in readings):
             unnamed = tuple(reading.key for reading in readings if reading.name == NONE_OF_THESE)

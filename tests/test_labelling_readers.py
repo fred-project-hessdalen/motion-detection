@@ -45,22 +45,22 @@ def test_a_sheet_is_read_into_one_reading_per_row_in_the_rows_order(tmp_path: Pa
         SheetReadings.model_validate(
             {
                 "rows": [
-                    {"row": 2, "name": " Bird ", "confidence": "Sure", "note": "wings"},
-                    {"row": 1, "name": "insect", "confidence": "maybe", "note": ""},
+                    {"track": 8, "name": " Bird ", "confidence": "Sure", "note": "wings"},
+                    {"track": 7, "name": "insect", "confidence": "maybe", "note": ""},
                 ]
             }
         )
     )
     rows = [RowContext(key="a/1", neighbour_names=["bird"]), RowContext(key="a/2", neighbour_names=[])]
 
-    readings = ModelReaders(backend).read(tmp_path / "sheet.png", rows=rows, vocabulary=VOCABULARY)
+    readings = ModelReaders(backend).read(tmp_path / "sheet.png", rows=rows, first=7, vocabulary=VOCABULARY)
 
     assert [(reading.key, reading.name, reading.confidence) for reading in readings] == [
         ("a/1", "insect", "unsure"),
         ("a/2", "bird", "sure"),
     ]
     assert "- bird: a bird in flight" in backend.asked[0]["system"]
-    assert "row 1: nearest seen tracks are named bird" in backend.asked[0]["text"]
+    assert "track 7: nearest seen tracks are named bird" in backend.asked[0]["text"]
     assert "a/1" not in backend.asked[0]["text"]
 
 
@@ -68,7 +68,7 @@ def test_a_row_the_model_left_out_is_read_as_none_of_these_and_unsure(tmp_path: 
     backend = ScriptedBackend(SheetReadings(rows=[]))
 
     (reading,) = ModelReaders(backend).read(
-        tmp_path / "sheet.png", rows=[RowContext(key="a/1", neighbour_names=[])], vocabulary=VOCABULARY
+        tmp_path / "sheet.png", rows=[RowContext(key="a/1", neighbour_names=[])], first=1, vocabulary=VOCABULARY
     )
 
     assert reading.name == NONE_OF_THESE
@@ -83,7 +83,9 @@ def test_the_ollama_backend_posts_the_schema_and_the_images_and_parses_the_answe
     def post(body: dict[str, Any]) -> dict[str, Any]:
         posted.append(body)
         return {
-            "message": {"content": json.dumps({"rows": [{"row": 1, "name": "bird", "confidence": "sure", "note": ""}]})}
+            "message": {
+                "content": json.dumps({"rows": [{"track": 1, "name": "bird", "confidence": "sure", "note": ""}]})
+            }
         }
 
     answered = OllamaBackend(model="qwen", post=post).ask(
