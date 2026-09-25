@@ -45,8 +45,8 @@ def test_a_sheet_is_read_into_one_reading_per_row_in_the_rows_order(tmp_path: Pa
         SheetReadings.model_validate(
             {
                 "rows": [
-                    {"key": "a/2", "name": " Bird ", "confidence": "Sure", "note": "wings"},
-                    {"key": "a/1", "name": "insect", "confidence": "maybe", "note": ""},
+                    {"row": 2, "name": " Bird ", "confidence": "Sure", "note": "wings"},
+                    {"row": 1, "name": "insect", "confidence": "maybe", "note": ""},
                 ]
             }
         )
@@ -60,7 +60,8 @@ def test_a_sheet_is_read_into_one_reading_per_row_in_the_rows_order(tmp_path: Pa
         ("a/2", "bird", "sure"),
     ]
     assert "- bird: a bird in flight" in backend.asked[0]["system"]
-    assert "a/1: nearest seen tracks are named bird" in backend.asked[0]["text"]
+    assert "row 1: nearest seen tracks are named bird" in backend.asked[0]["text"]
+    assert "a/1" not in backend.asked[0]["text"]
 
 
 def test_a_row_the_model_left_out_is_read_as_none_of_these_and_unsure(tmp_path: Path) -> None:
@@ -82,9 +83,7 @@ def test_the_ollama_backend_posts_the_schema_and_the_images_and_parses_the_answe
     def post(body: dict[str, Any]) -> dict[str, Any]:
         posted.append(body)
         return {
-            "message": {
-                "content": json.dumps({"rows": [{"key": "a/1", "name": "bird", "confidence": "sure", "note": ""}]})
-            }
+            "message": {"content": json.dumps({"rows": [{"row": 1, "name": "bird", "confidence": "sure", "note": ""}]})}
         }
 
     answered = OllamaBackend(model="qwen", post=post).ask(

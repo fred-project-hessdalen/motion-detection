@@ -314,10 +314,11 @@ class Labelling:
         A track whose recording is not on disk is refused, with the
         recording named.
         """
-        return build_sheet(self.sheets_dir, tracks=[self._sheet_track(key) for key in keys], layout=layout)
+        tracks = [self._sheet_track(key, number=number) for number, key in enumerate(keys, start=1)]
+        return build_sheet(self.sheets_dir, tracks=tracks, layout=layout)
 
     def isolation(self, key: str) -> Sheet:
-        return build_isolation(self.sheets_dir, track=self._sheet_track(key), layout=ISOLATION)
+        return build_isolation(self.sheets_dir, track=self._sheet_track(key, number=1), layout=ISOLATION)
 
     def preview(self, *, rule: Rule) -> Propagation:
         """What a propagation under this rule would do, with nothing
@@ -578,7 +579,14 @@ class Labelling:
         keys = tracks["key"].tolist()
         return cast(self._voters(), keys=keys, vectors=self.vectors[[self.place_of[key] for key in keys]], rule=rule)
 
-    def _sheet_track(self, key: str) -> SheetTrack:
+    def _sheet_track(self, key: str, *, number: int) -> SheetTrack:
+        """One track as a sheet draws it, captioned by its row number.
+
+        The caption names the row and never the track, because a
+        recording's name carries the folder it was filed under, which
+        says what the recording was kept for, and a reader shown
+        "bird" reads a bird.
+        """
         row = self.tracks.iloc[self.place_of[key]]
         recording = str(row["recording"])
         video = next(
@@ -595,7 +603,7 @@ class Labelling:
         points = self.paths().loc[[key]].sort_values("frame_number")
         return SheetTrack(
             key=key,
-            caption=f"track {row['track_id']} in {row['clip']} - {row['frames']} frames - {row['camera']}",
+            caption=f"row {number} - {row['frames']} frames - {row['camera']}",
             stored=StoredTrack(
                 track_id=int(row["track_id"]),
                 frame_numbers=points["frame_number"].to_numpy(),

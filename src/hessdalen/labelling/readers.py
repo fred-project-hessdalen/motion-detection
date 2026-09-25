@@ -44,7 +44,7 @@ comes out with a shape and the sky behind it comes out grainy.
 Name what moved in each row, from the vocabulary, or answer
 "none of these" when nothing in the vocabulary fits. Say how sure you
 are: sure, likely or unsure. Read the rows in order and answer every
-row once, by its key."""
+row once, by its number, which its caption starts with."""
 
 VIEW_TEXT = """\
 The picture is an isolation view of one track the movement detector
@@ -69,7 +69,7 @@ REVIEW = "review"
 
 
 class RowReading(BaseModel):
-    key: str
+    row: int
     name: str
     confidence: str
     note: str
@@ -94,7 +94,13 @@ class Proposal(BaseModel):
 @dataclass(frozen=True, slots=True)
 class RowContext:
     """What a row's caption does not say: the names of the track's nearest
-    seen tracks."""
+    seen tracks.
+
+    The key is never shown to the model. A key carries the recording's
+    name and the folder it was filed under, which name what the
+    recording was kept for, and a reader told "bird" reads a bird.
+    Rows are named to the model by their number alone.
+    """
 
     key: str
     neighbour_names: Sequence[str]
@@ -126,15 +132,15 @@ class ModelReaders:
 
     def read(self, sheet: Path, *, rows: Sequence[RowContext], vocabulary: dict[str, Any]) -> list[Reading]:
         context = "\n".join(
-            f"- {row.key}: nearest seen tracks are named {', '.join(row.neighbour_names) or 'nothing yet'}"
-            for row in rows
+            f"- row {number}: nearest seen tracks are named {', '.join(row.neighbour_names) or 'nothing yet'}"
+            for number, row in enumerate(rows, start=1)
         )
         text = f"{SHEET_TEXT}\n\nRows, in order:\n{context}"
         answered = self._ask(SheetReadings, images=[sheet], text=text, vocabulary=vocabulary)
-        by_key = {row.key: row for row in answered.rows}
+        by_number = {row.row: row for row in answered.rows}
         readings = []
-        for row in rows:
-            held = by_key.get(row.key)
+        for number, row in enumerate(rows, start=1):
+            held = by_number.get(number)
             if held is None:
                 readings.append(Reading(key=row.key, name=NONE_OF_THESE, confidence="unsure", note="no reading given"))
             else:
@@ -144,7 +150,7 @@ class ModelReaders:
         return readings
 
     def judge(self, view: Path, *, key: str, history: Sequence[str], vocabulary: dict[str, Any]) -> Reading:
-        text = f"{VIEW_TEXT}\n\nTrack {key}. What the ledger says of it so far:\n" + "\n".join(
+        text = f"{VIEW_TEXT}\n\nWhat the ledger says of the track so far:\n" + "\n".join(
             f"- {line}" for line in history
         )
         answered = self._ask(Judgement, images=[view], text=text, vocabulary=vocabulary)
