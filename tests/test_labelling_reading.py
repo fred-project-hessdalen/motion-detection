@@ -46,7 +46,7 @@ def _reading(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, sheets: int) ->
     monkeypatch.setattr(Labelling, "sheet", _sheet_of_rows)
     labelling = Labelling(corpus(tmp_path), settings=SETTINGS)
     monkeypatch.setattr(labelling, "fetch", lambda recording: _fetched(labelling, recording))
-    reading = Reading(labelling, TruthfulReader(), sheets=sheets, workers=1, log=lambda line: None)
+    reading = Reading(labelling, TruthfulReader(), sheets=sheets, per_recording=40, workers=1, log=lambda line: None)
     monkeypatch.setattr(
         reading, "build", lambda batches: [_sheet_of_rows(labelling, keys, layout=None, first=1) for keys in batches]
     )

@@ -59,12 +59,17 @@ class Reading:
         readers: Readers,
         *,
         sheets: int,
+        per_recording: int,
         workers: int,
         log: Callable[[str], None],
     ) -> None:
         self.labelling = labelling
         self.readers = readers
         self.budget = sheets
+        self.per_recording = per_recording
+        """Sheets one recording may take, so that a recording holding
+        thousands of tracks of one scene does not take the budget from
+        every other scene."""
         self.workers = workers
         self.log = log
         self.round = labelling.state.rounds + 1
@@ -94,7 +99,7 @@ class Reading:
         within what is left of the budget."""
         keys = self.labelling.keys_to_read(recording, rough_seen=ROUGH_SEEN)
         batches = [keys[start : start + ROWS] for start in range(0, len(keys), ROWS)]
-        batches = batches[: max(0, self.budget - self.report.sheets)]
+        batches = batches[: max(0, min(self.per_recording, self.budget - self.report.sheets))]
         if not batches:
             return
         sheets = self.build(batches)
@@ -153,6 +158,7 @@ def main() -> None:
     parser.add_argument("--model", default=MODEL, help="the model the provider serves")
     parser.add_argument("--ollama-url", default=OLLAMA_URL)
     parser.add_argument("--sheets", type=int, default=400, help="sheets to build and read at most")
+    parser.add_argument("--per-recording", type=int, default=40, help="sheets one recording may take at most")
     parser.add_argument("--workers", type=int, default=8, help="sheets built at once")
     parsed = parser.parse_args()
 
@@ -168,6 +174,7 @@ def main() -> None:
         labelling,
         ModelReaders(backend),
         sheets=parsed.sheets,
+        per_recording=parsed.per_recording,
         workers=parsed.workers,
         log=lambda line: print(line, file=sys.stderr, flush=True),
     ).run()
