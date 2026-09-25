@@ -64,6 +64,10 @@ so a reader of sheets is not scored on it."""
 SHEET_BLIND_TAGS = (UNREADABLE_TAG, FROM_VIDEO_TAG)
 """The tags that keep a validated track out of sheet calibration."""
 
+SMOOTH = "smooth"
+ROUGH = "rough"
+UNASSIGNED_CLUSTER = -1
+
 NONE_OF_THESE = "none of these"
 """What a model answers when no name of the vocabulary fits a row. The
 row is recorded as seen without a name and does not vote."""
@@ -521,6 +525,91 @@ class Labelling:
         landed = fetch_video(self.places.fetched, video=video, on_progress=_quiet)
         self.tracks.loc[self.tracks["recording"] == recording, "cached"] = True
         return landed
+
+    def release(self, recording: str) -> None:
+        """Let a fetched recording go once its sheets are built, and mark its
+        tracks as off disk. A recording the sift kept is left alone."""
+        fetched = self.places.fetched / recording
+        if fetched.is_file():
+            fetched.unlink()
+            self.tracks.loc[self.tracks["recording"] == recording, "cached"] = False
+
+    def smooth_recordings(self) -> list[FetchCandidate]:
+        """Recordings not on disk, the one holding the most smooth tracks no
+        model has seen first, with sizes."""
+        held = self._open(self.tracks[(self.tracks["side"] == SMOOTH) & ~self.tracks["cached"]])
+        entries = ledger_entries(self.places.ledgers)
+        return [
+            FetchCandidate(
+                recording=str(recording),
+                uncertain=int(count),
+                size_bytes=int(entries.get(str(recording), {}).get("size_bytes", 0)),
+            )
+            for recording, count in held.groupby("recording").size().sort_values(ascending=False).items()
+        ]
+
+    def keys_to_read(self, recording: str, *, rough_seen: int) -> list[str]:
+        """The tracks of one recording to put on sheets: every smooth track no
+        model has seen, and the rough tracks of clusters that have fewer than
+        rough_seen seen tracks, as many as bring each cluster to that count.
+
+        A rough cluster is named from a handful of its tracks, because
+        the rough side is clutter of one kind per cluster, so its tracks
+        beyond that handful are not read.
+        """
+        held = self._open(self.tracks[self.tracks["recording"] == recording])
+        smooth = held[held["side"] == SMOOTH]["key"].tolist()
+        seen_by_cluster = Counter(
+            int(self.tracks.iloc[self.place_of[key]]["cluster"]) for key in self.state.seen if key in self.place_of
+        )
+        rough: list[str] = []
+        for cluster, members in held[(held["side"] == ROUGH) & (held["cluster"] != UNASSIGNED_CLUSTER)].groupby(
+            "cluster"
+        ):
+            short = rough_seen - seen_by_cluster.get(int(cluster), 0)
+            rough.extend(members["key"].tolist()[: max(0, short)])
+        return [*smooth, *rough]
+
+    def name_rough_clusters(self, *, agreement: int, of: int, round: int) -> dict[str, int]:
+        """Give every rough cluster the name most of its seen tracks were
+        given, once at least `of` of them are seen and `agreement` of the
+        last `of` agree, and say how many tracks each name reached.
+
+        The rough side is clutter of one kind per cluster, which is what
+        the clustering was tuned to, so a cluster read alike a handful
+        of times is named as a whole. A track a person validated, a
+        model has seen or that is contested keeps its name.
+        """
+        names = self.names_by_key()
+        reached: dict[str, int] = {}
+        rough = self.tracks[(self.tracks["side"] == ROUGH) & (self.tracks["cluster"] != UNASSIGNED_CLUSTER)]
+        for cluster, members in rough.groupby("cluster"):
+            verdicts = [self.state.seen[key].name for key in members["key"] if key in self.state.seen]
+            verdicts = [name for name in verdicts if name]
+            if len(verdicts) < of:
+                continue
+            name, share = Counter(verdicts).most_common(1)[0]
+            if share < agreement * len(verdicts) / of:
+                continue
+            keys = [key for key in self._open(members)["key"] if names.get(key, UNNAMED) != name]
+            if not keys:
+                continue
+            write_labels(self.places.labels, name=name, keys=keys)
+            for key in keys:
+                self._record(
+                    Line(
+                        round=round,
+                        key=key,
+                        basis=PROPAGATED,
+                        name=name,
+                        previous=names.get(key, UNNAMED),
+                        confidence="",
+                        note="",
+                        evidence={"cluster": int(cluster), "seen": len(verdicts), "share": share},
+                    )
+                )
+            reached[name] = reached.get(name, 0) + len(keys)
+        return reached
 
     def snapshot(self, name: str) -> Path:
         """Copy the label files under the name, and say where."""
