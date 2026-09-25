@@ -64,6 +64,8 @@ PATH_LINE = (70, 70, 70)
 MARK_COLOUR = (0, 220, 255)
 """The box drawn round the detection on a whole-frame thumbnail."""
 
+WHOLE_CAPTION = "the whole frame at the same steps, the detection boxed"
+
 BRIGHTNESS_COLOUR = (80, 200, 255)
 SIZE_COLOUR = (255, 160, 80)
 SIGNAL_MARGIN = 6
@@ -127,7 +129,8 @@ def build_sheet(directory: Path, *, tracks: Sequence[SheetTrack], layout: Layout
     rows = []
     for track in tracks:
         taken = _taken(track, layout=layout)
-        rows.append(_row(track, panels=[_path_panel(track.stored, side=layout.side), *taken.close], side=layout.side))
+        panels = [_path_panel(track.stored, side=layout.side), *taken.close]
+        rows.append(_row(track.caption, panels=panels, side=layout.side))
     return _written(path, rows=rows, keys=keys, layout=layout)
 
 
@@ -145,8 +148,8 @@ def build_isolation(directory: Path, *, track: SheetTrack, layout: Layout) -> Sh
 
     taken = _taken(track, layout=layout)
     rows = [
-        _row(track, panels=[_path_panel(track.stored, side=layout.side), *taken.close], side=layout.side),
-        _row(track, panels=[_blank(layout.side), *taken.whole], side=layout.side),
+        _row(track.caption, panels=[_path_panel(track.stored, side=layout.side), *taken.close], side=layout.side),
+        _row(WHOLE_CAPTION, panels=[_blank(layout.side), *taken.whole], side=layout.side),
         _signals_row(track, width=(layout.frames + 1) * layout.side, side=layout.side),
     ]
     return _written(path, rows=rows, keys=keys, layout=layout)
@@ -267,10 +270,10 @@ def _curve(frames: np.ndarray, values: np.ndarray, *, width: int, height: int) -
     return np.column_stack([xs, ys]).round().astype(np.int32)
 
 
-def _row(track: SheetTrack, *, panels: Sequence[np.ndarray], side: int) -> np.ndarray:
-    """The panels of one track side by side under its caption."""
+def _row(caption: str, *, panels: Sequence[np.ndarray], side: int) -> np.ndarray:
+    """The panels side by side under the caption."""
     row = np.zeros((side + CAPTION_HEIGHT, len(panels) * side, 3), dtype=np.uint8)
-    _caption(row, track.caption)
+    _caption(row, caption)
     for column, panel in enumerate(panels):
         row[CAPTION_HEIGHT:, column * side : (column + 1) * side] = panel
     return row
