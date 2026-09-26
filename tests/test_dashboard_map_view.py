@@ -30,7 +30,6 @@ from hessdalen.dashboard.map_view import (
     UNVALIDATED,
     VALIDATED,
     VALIDATED_COLUMN,
-    ANY_DAYLIGHT,
     ANY_SOURCE,
     BY_MODEL,
     BY_NEITHER,
@@ -46,6 +45,8 @@ from hessdalen.dashboard.map_view import (
     between_days,
     between_hours,
     by_daylight,
+    daylight_within,
+    hour_span,
     by_source,
     by_validation,
     charted_signal,
@@ -445,10 +446,27 @@ def test_the_tracks_of_the_likest_shape_come_nearest_first_from_those_on_the_map
     assert alike(tracks, key="a/4", keys=keys, matrix=matrix, count=5).empty
 
 
-def test_the_map_holds_to_the_tracks_recorded_by_day_or_by_night() -> None:
-    assert by_daylight(_timed(), choice="Day")["key"].tolist() == ["a/1"]
-    assert by_daylight(_timed(), choice="Night")["key"].tolist() == ["a/2"]
-    assert by_daylight(_timed(), choice=ANY_DAYLIGHT)["key"].tolist() == ["a/1", "a/2", "a/3", "a/4"]
+def test_the_map_holds_to_the_tracks_recorded_in_the_chosen_daylight_classes() -> None:
+    assert by_daylight(_timed(), choices=["Day"])["key"].tolist() == ["a/1"]
+    assert by_daylight(_timed(), choices=["Night", "Twilight"])["key"].tolist() == ["a/2", "a/3"]
+    assert by_daylight(_timed(), choices=[])["key"].tolist() == ["a/1", "a/2", "a/3", "a/4"]
+
+
+def test_pressing_daylight_buttons_gives_the_clock_span_their_tracks_cover() -> None:
+    tracks = _timed().assign(**{HOUR_COLUMN: [12.6, 1.75, 4.1, float("nan")]})
+
+    assert hour_span(tracks, choices=["Day"]) == (12.5, 12.75)
+    assert hour_span(tracks, choices=["Night", "Twilight"]) == (1.75, 4.25)
+    assert hour_span(tracks, choices=[]) == WHOLE_DAY
+    assert hour_span(tracks.iloc[0:0], choices=["Day"]) == WHOLE_DAY
+
+
+def test_moving_the_hour_slider_gives_the_classes_recorded_between_its_ends() -> None:
+    tracks = _timed().assign(**{HOUR_COLUMN: [12.5, 1.75, 4.0, float("nan")]})
+
+    assert daylight_within(tracks, span=(1.0, 5.0)) == ["Twilight", "Night"]
+    assert daylight_within(tracks, span=WHOLE_DAY) == ["Day", "Twilight", "Night"]
+    assert daylight_within(tracks, span=(20.0, 23.0)) == []
 
 
 def test_the_map_holds_to_the_tracks_recorded_between_two_days() -> None:
