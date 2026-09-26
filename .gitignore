@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+
+# Keys and credentials
+.env
+
+# The data, kept through DVC where it is kept at all. DVC writes the
+# ignore rules for the directories it tracks into data/.gitignore and
+# tests/data/.gitignore itself.
+data/out/*
+!data/out/analysis/
+data/out/analysis/*
+!data/out/analysis/*.dvc
+
+# DVC's own local state. Its config with the remote stays tracked.
+.dvc/config.local
+.dvc/cache/
+.dvc/tmp/
+
+# Scratch kept beside the repository
+junk/
+notes
+features
+drive-videos.csv
+/*.png
