@@ -59,6 +59,23 @@ def test_a_track_seen_without_a_name_is_still_seen() -> None:
     assert state.seen["a/1"].name == ""
 
 
+def test_the_tracks_named_by_a_model_are_the_ones_its_lines_last_named() -> None:
+    from hessdalen.labelling.ledger import named_by_model
+
+    named = named_by_model(
+        [
+            _line(key="a/1", basis=SEEN, name="bird"),
+            _line(key="a/2", basis=PROPAGATED, name="bird"),
+            _line(key="a/3", basis=SEEN, name=""),
+            _line(key="a/4", basis=PREDICTED, name="bird"),
+            _line(key="a/5", basis=SEEN, name="bird"),
+            _line(key="a/5", basis=JUDGED, name="", previous="bird"),
+        ]
+    )
+
+    assert named == frozenset({"a/1", "a/2"})
+
+
 def test_a_first_naming_is_no_flip_and_a_change_of_name_is() -> None:
     state = derive(
         [

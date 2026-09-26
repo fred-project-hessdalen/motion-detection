@@ -96,6 +96,8 @@ from hessdalen.dashboard.video_cache import (
     used_now,
 )
 from hessdalen.io.drive import ArchiveVideo
+from hessdalen.labelling.ledger import LEDGER_NAME, named_by_model
+from hessdalen.labelling.ledger import read as read_ledger
 
 MAP_PATH = PLACES.map
 PATHS_PATH = PLACES.paths
@@ -107,6 +109,8 @@ FETCHED_DIR = PLACES.fetched
 TUNING_DIR = PLACES.tuning
 CLIPS_DIR = PLACES.clips
 LEDGERS = PLACES.ledgers
+LEDGER_PATH = PLACES.labelling / LEDGER_NAME
+"""The labelling ledger, which says which names a model gave."""
 
 MAP_COMMAND = "uv run --group analysis python scripts/dev/map_tracks.py"
 UNASSIGNED_NAME = "none"
@@ -124,6 +128,10 @@ CACHED_COLUMN = "cached"
 
 VALIDATED_COLUMN = "validated"
 """Column saying whether someone has confirmed the track."""
+
+MODEL_COLUMN = "model"
+"""Column saying whether the track's name came from a model, through the
+labelling ledger."""
 
 UNNAMED = "unlabelled"
 """What a track whose cluster has no name yet is shown under."""
@@ -148,6 +156,12 @@ be read from, and the signals are named here as they are shown.
 
 VALIDATION_CHOICES = ("All", "Validated", "Unvalidated")
 ANY_VALIDATION, VALIDATED, UNVALIDATED = VALIDATION_CHOICES
+SOURCE_CHOICES = ("All", "Model", "Person", "Neither")
+ANY_SOURCE, BY_MODEL, BY_PERSON, BY_NEITHER = SOURCE_CHOICES
+"""Where a track's name came from: a model through the labelling ledger, a
+person who validated the track, or neither, which is a name the earlier
+pass gave a whole cluster or no name at all."""
+
 NAMING_CHOICES = ("Cluster", "Neighbours", "Picked")
 CLUSTER_TRACKS, NEIGHBOUR_TRACKS, PICKED_TRACKS = NAMING_CHOICES
 GALLERY_ORDERS = ("Distance", "Video cached", "Cluster label")
@@ -170,6 +184,7 @@ TABLE_COLUMNS = {
     TAGS_COLUMN: "Tags",
     CACHED_COLUMN: "Video cached",
     VALIDATED_COLUMN: "Validated",
+    MODEL_COLUMN: "Model label",
     NAME_COLUMN: "Cluster label",
     "cluster": "Cluster",
     "label": "Folder",
@@ -611,6 +626,11 @@ VALIDATED_HELP = (
 VALIDATION_HELP = (
     "Show the tracks someone has confirmed, the tracks still to go through, or every track whichever it is."
 )
+SOURCE_HELP = (
+    "Show the tracks a model named, the tracks a person validated, the tracks with neither behind their "
+    "name, or every track. A model's names come from the labelling ledger and are the ones to check."
+)
+MODEL_TABLE_HELP = "Whether the track's name came from a model, which is a name still to be checked."
 BACK_HELP = "Go back to the track selected before this one."
 FORWARD_HELP = "Go forward to the track selected after this one."
 NEIGHBOURS_HELP = (
@@ -801,6 +821,7 @@ def _sidebar(tracks: pd.DataFrame) -> Scope:
         validation = st.segmented_control(
             "Validation", options=VALIDATION_CHOICES, default=ANY_VALIDATION, help=VALIDATION_HELP
         )
+        source = st.segmented_control("Source", options=SOURCE_CHOICES, default=ANY_SOURCE, help=SOURCE_HELP)
         rough = st.toggle("Rough tracks", value=False, help=ROUGH_HELP)
         cached = st.toggle("Video cached", value=True, help=CACHED_HELP)
         chosen_cluster = st.selectbox(
@@ -818,9 +839,10 @@ def _sidebar(tracks: pd.DataFrame) -> Scope:
     if chosen_tags:
         shown = shown[shown["key"].isin(tagged(_track_labels(_track_labels_stamp()), names=chosen_tags))]
     shown = shown[shown["label"].isin(folders)] if folders else shown
+    shown = by_validation(shown, choice=str(validation or ANY_VALIDATION))
     return Scope(
         tracks=tracks,
-        shown=by_validation(shown, choice=str(validation or ANY_VALIDATION)),
+        shown=by_source(shown, choice=str(source or ANY_SOURCE)),
         wanted=wanted,
         colour=str(colour or "Cluster"),
         chosen_cluster=str(chosen_cluster),
@@ -940,6 +962,7 @@ def _table(tracks: pd.DataFrame) -> None:
             "Peak deviation": st.column_config.NumberColumn(format="%.1f", help=PEAK_DEVIATION_HELP),
             "Video cached": st.column_config.CheckboxColumn(help=CACHED_TABLE_HELP),
             "Validated": st.column_config.CheckboxColumn(help=VALIDATED_TABLE_HELP),
+            "Model label": st.column_config.CheckboxColumn(help=MODEL_TABLE_HELP),
         },
         key=TABLE_KEY,
     )
@@ -1154,6 +1177,7 @@ def _tracks_frame() -> pd.DataFrame:
         **{
             CACHED_COLUMN: tracks["recording"].isin(on_disk),
             VALIDATED_COLUMN: tracks["key"].isin(validated),
+            MODEL_COLUMN: tracks["key"].isin(_model_named(_ledger_named_stamp())),
         }
     )
 
@@ -1202,6 +1226,22 @@ def by_validation(tracks: pd.DataFrame, *, choice: str) -> pd.DataFrame:
         return tracks[tracks[VALIDATED_COLUMN]]
     if choice == UNVALIDATED:
         return tracks[~tracks[VALIDATED_COLUMN]]
+    return tracks
+
+
+def by_source(tracks: pd.DataFrame, *, choice: str) -> pd.DataFrame:
+    """The tracks the source choice leaves on the map.
+
+    A track a person validated counts as the person's whatever a model
+    said of it before, so the model's tracks are the ones no person has
+    gone through yet.
+    """
+    if choice == BY_MODEL:
+        return tracks[tracks[MODEL_COLUMN] & ~tracks[VALIDATED_COLUMN]]
+    if choice == BY_PERSON:
+        return tracks[tracks[VALIDATED_COLUMN]]
+    if choice == BY_NEITHER:
+        return tracks[~tracks[MODEL_COLUMN] & ~tracks[VALIDATED_COLUMN]]
     return tracks
 
 
@@ -2700,6 +2740,22 @@ def _track_labels(stamp: float) -> dict[str, list[str]]:
     it.
     """
     return read_labels(TRACK_LABELS_PATH)
+
+
+def _ledger_named_stamp() -> float:
+    return LEDGER_PATH.stat().st_mtime if LEDGER_PATH.is_file() else 0.0
+
+
+@st.cache_data(show_spinner=False)
+def _model_named(stamp: float) -> frozenset[str]:
+    """The tracks whose name a model gave, read again whenever the labelling
+    ledger changes.
+
+    The stamp is the ledger's modification time, and is what the cache
+    is keyed on, which is why it is passed although the body never
+    reads it.
+    """
+    return named_by_model(read_ledger(LEDGER_PATH))
 
 
 def _validated_stamp() -> float:

@@ -28,8 +28,14 @@ from hessdalen.dashboard.map_view import (
     UNVALIDATED,
     VALIDATED,
     VALIDATED_COLUMN,
+    ANY_SOURCE,
+    BY_MODEL,
+    BY_NEITHER,
+    BY_PERSON,
+    MODEL_COLUMN,
     Ring,
     _scatter,
+    by_source,
     by_validation,
     charted_signal,
     cluster_names,
@@ -350,7 +356,26 @@ def test_the_nearest_tracks_of_no_selected_track_are_no_group() -> None:
 
 
 def _gone_through() -> pd.DataFrame:
-    return pd.DataFrame({"key": ["a/1", "a/2", "a/3"], VALIDATED_COLUMN: [False, True, False]})
+    return pd.DataFrame(
+        {
+            "key": ["a/1", "a/2", "a/3"],
+            VALIDATED_COLUMN: [False, True, False],
+            MODEL_COLUMN: [True, True, False],
+        }
+    )
+
+
+def test_the_map_holds_to_the_tracks_a_model_named_and_no_person_went_through() -> None:
+    assert by_source(_gone_through(), choice=BY_MODEL)["key"].tolist() == ["a/1"]
+
+
+def test_the_map_holds_to_the_tracks_a_person_validated() -> None:
+    assert by_source(_gone_through(), choice=BY_PERSON)["key"].tolist() == ["a/2"]
+
+
+def test_the_map_holds_to_the_tracks_with_neither_behind_their_name() -> None:
+    assert by_source(_gone_through(), choice=BY_NEITHER)["key"].tolist() == ["a/3"]
+    assert by_source(_gone_through(), choice=ANY_SOURCE)["key"].tolist() == ["a/1", "a/2", "a/3"]
 
 
 def test_a_row_of_the_table_holds_the_track_under_the_names_the_page_gives_it() -> None:
@@ -378,6 +403,7 @@ def _listed() -> pd.DataFrame:
             "peak_deviation_max": [45.1],
             CACHED_COLUMN: [True],
             VALIDATED_COLUMN: [False],
+            MODEL_COLUMN: [True],
         }
     )
 

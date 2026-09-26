@@ -42,7 +42,7 @@ from hessdalen.dashboard.track_clip import StoredTrack
 from hessdalen.dashboard.track_validation import read_validated
 from hessdalen.dashboard.video_cache import FetchProgress, archive_video, fetch_video, ledger_entries, make_room
 from hessdalen.labelling import ledger
-from hessdalen.labelling.ledger import DEFINED, JUDGED, PREDICTED, PROPAGATED, SEEN, TAGGED, Line
+from hessdalen.labelling.ledger import DEFINED, JUDGED, LEDGER_NAME, PREDICTED, PROPAGATED, SEEN, TAGGED, Line
 from hessdalen.labelling.sheets import ISOLATION, Layout, Sheet, SheetTrack, build_isolation, build_sheet
 from hessdalen.labelling.signatures import SIGNATURES
 from hessdalen.labelling.votes import DISAGREE, FAR, NAMED, Rule, Vote, Voters, cast
@@ -78,7 +78,6 @@ VOTING_CONFIDENCES = frozenset({"sure", "likely"})
 without a name, so it neither names the track nor votes."""
 
 VOCABULARY_NAME = "vocabulary.json"
-LEDGER_NAME = "ledger.jsonl"
 SHEETS_DIR = "sheets"
 SNAPSHOTS_DIR = "snapshots"
 SNAPSHOT_FILES = ("labels", "track_labels", "validated")

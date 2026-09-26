@@ -23,6 +23,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+LEDGER_NAME = "ledger.jsonl"
+"""What the ledger is called, under the labelling's own folder beside the
+label files."""
+
 SEEN = "seen"
 """A model read the track's row on a sheet and said what it is."""
 
@@ -136,6 +140,20 @@ def derive(lines: list[Line]) -> State:
         if line.basis in NAMING and line.previous and line.name and line.name != line.previous:
             flips[line.key] = flips.get(line.key, 0) + 1
     return State(seen=seen, flips=flips, rounds=rounds)
+
+
+def named_by_model(lines: list[Line]) -> frozenset[str]:
+    """Every track whose name, as the ledger last left it, came from a model
+    reading it or from a spread of names a model gave.
+
+    A track a model read and gave no name is left out, since it holds
+    nothing the model said.
+    """
+    named: dict[str, bool] = {}
+    for line in lines:
+        if line.basis in NAMING:
+            named[line.key] = bool(line.name)
+    return frozenset(key for key, held in named.items() if held)
 
 
 def contested(state: State, *, limit: int) -> frozenset[str]:
