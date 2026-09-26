@@ -37,6 +37,7 @@ from streamlit.delta_generator import DeltaGenerator
 
 from hessdalen.analysis.daylight import DAY, NIGHT, TWILIGHT, daylight, recording_time
 from hessdalen.analysis.spectra import SIGNALS
+from hessdalen.analysis.track_shapes import nearest_shapes, shape_matrix
 from hessdalen.config import config
 from hessdalen.dashboard.clip_queue import ClipQueue, Job, Report
 from hessdalen.dashboard.cluster_labels import (
@@ -363,6 +364,13 @@ TOGETHER_COLOR = "#00a878"
 SAMPLE_MARKER = {"color": SAMPLE_COLOR, "symbol": "circle-open", "size": 12, "line": {"width": 2}}
 NEAREST_MARKER = {"color": NEAREST_COLOR, "symbol": "diamond-open", "size": 12, "line": {"width": 2}}
 TOGETHER_MARKER = {"color": TOGETHER_COLOR, "symbol": "square-open", "size": 12, "line": {"width": 2}}
+SHAPE_COLOR = "#c85200"
+SHAPE_MARKER = {"color": SHAPE_COLOR, "symbol": "triangle-up-open", "size": 13, "line": {"width": 2}}
+SHAPE_GALLERY = "shape-gallery"
+SHAPE_GALLERY_KEY = "shape_gallery"
+SHAPE_TITLE = "Similar shape"
+SHAPES_PATH = PLACES.shapes
+SHAPES_COMMAND = "uv run --group analysis python scripts/dev/shape_tracks.py"
 SELECTED_MARKER = {"color": "#ffd400", "symbol": "star", "size": 18, "line": {"width": 1, "color": "#333333"}}
 POINT_REACH = 6
 """How near a point the pointer has to come, in pixels, for the point to be the
@@ -664,6 +672,12 @@ NEIGHBOURS_HELP = (
     f"that cluster is under. {MARKS_HELP} The map rings these tracks in the colour their panels are "
     "framed in."
 )
+SHAPE_HELP = (
+    f"The {GALLERY_SIZE} tracks of those on the map whose path has the shape most like the selected track's, "
+    "wherever they lie on the map and whatever their speed or size. The shape is how far the track stood "
+    "from where it stood at every pair of moments, shrunk to a small picture, and two tracks are alike when "
+    f"those pictures are. {MARKS_HELP} The map rings these tracks in the colour their panels are framed in."
+)
 RADIUS_HELP = (
     "How far from the selected track, in the map's own units, a track may lie to count among its nearest "
     f"tracks. At {NEIGHBOUR_RADIUS} most tracks have {GALLERY_SIZE} such neighbours."
@@ -816,6 +830,7 @@ def page() -> None:
         _gallery(scope)
         _labelling(scope)
         _neighbours(scope)
+        _similar(scope)
         _together(scope)
 
     with track_column:
@@ -902,6 +917,7 @@ def _rings(scope: Scope, *, picked: pd.Series | None) -> list[Ring]:
         Ring(name=SAMPLE_TITLE, marker=SAMPLE_MARKER, tracks=empty if cluster is None else _sampled(scope, cluster)),
         Ring(name=NEAREST_TITLE, marker=NEAREST_MARKER, tracks=_nearby(scope, picked=picked)),
         Ring(name=TOGETHER_TITLE, marker=TOGETHER_MARKER, tracks=_alongside(scope, picked=picked)),
+        Ring(name=SHAPE_TITLE, marker=SHAPE_MARKER, tracks=_alike(scope, picked=picked)),
         Ring(
             name=SELECTED_TITLE,
             marker=SELECTED_MARKER,
@@ -924,6 +940,33 @@ def _nearby(scope: Scope, *, picked: pd.Series | None) -> pd.DataFrame:
     if picked is None:
         return scope.shown.iloc[0:0]
     return _nearest(scope.shown, track=picked, radius=scope.radius)
+
+
+def _alike(scope: Scope, *, picked: pd.Series | None) -> pd.DataFrame:
+    """The tracks on the map whose shape is most like the selected track's,
+    and none while no track is selected or no shapes have been written."""
+    if picked is None or not SHAPES_PATH.is_file():
+        return scope.shown.iloc[0:0]
+    keys, matrix = _shapes(SHAPES_PATH.stat().st_mtime)
+    return alike(scope.shown, key=str(picked["key"]), keys=keys, matrix=matrix, count=GALLERY_SIZE)
+
+
+def alike(tracks: pd.DataFrame, *, key: str, keys: Sequence[str], matrix: np.ndarray, count: int) -> pd.DataFrame:
+    """The tracks of these whose shape lies nearest the shape of the track
+    under the key, nearest first, each with its distance under
+    shape_distance.
+
+    A track without a shape, which a shapes file written before the
+    map was is left with, is passed over.
+    """
+    place_of = {held: place for place, held in enumerate(keys)}
+    if key not in place_of:
+        return tracks.iloc[0:0].assign(shape_distance=[])
+    held = tracks[tracks["key"].isin(list(place_of))]
+    among = np.array([place_of[str(name)] for name in held["key"]], dtype=np.int64)
+    found, distances = nearest_shapes(matrix, place=place_of[key], among=among, count=count)
+    by_place = {place: row for place, row in zip(among, held.index)}
+    return tracks.loc[[by_place[place] for place in found]].assign(shape_distance=distances)
 
 
 def _alongside(scope: Scope, *, picked: pd.Series | None) -> pd.DataFrame:
@@ -1077,6 +1120,14 @@ def _together_jumped() -> None:
     _gallery_jumped(TOGETHER_GALLERY_KEY)
 
 
+def _shape_clicked() -> None:
+    _gallery_clicked(SHAPE_GALLERY_KEY)
+
+
+def _shape_jumped() -> None:
+    _gallery_jumped(SHAPE_GALLERY_KEY)
+
+
 def _gallery_clicked(component: str) -> None:
     """Pick the clicked track out of the gallery and play its video, leaving
     the selected track where it is, so that a cluster can be gone through video
@@ -1104,7 +1155,7 @@ def _gallery_clicked(component: str) -> None:
     if picked:
         st.session_state[PLAYING_KEY] = picked[0]
 
-    blocks = [SAMPLE_GALLERY, NEAREST_GALLERY, TOGETHER_GALLERY, CLUSTER_LABEL]
+    blocks = [SAMPLE_GALLERY, NEAREST_GALLERY, TOGETHER_GALLERY, SHAPE_GALLERY, CLUSTER_LABEL]
     if picked and picked[0] != played:
         blocks.append(VIDEOS)
     st.rerun(blocks)
@@ -2542,6 +2593,36 @@ def _neighbours(scope: Scope) -> None:
     )
 
 
+@st.fragment(key=SHAPE_GALLERY)
+def _similar(scope: Scope) -> None:
+    """The tracks whose path has the shape most like the selected track's,
+    each captioned with the cluster it is in and how far its shape lies."""
+    picked = _standing(scope)
+    if picked is None:
+        return
+
+    st.subheader(SHAPE_TITLE, help=SHAPE_HELP)
+    if not SHAPES_PATH.is_file():
+        st.caption(f"No shapes at {SHAPES_PATH.name}. Write them with `{SHAPES_COMMAND}`.")
+        return
+    similar, playing = _alike(scope, picked=picked), _played(scope, picked=picked)
+    captions = [
+        f"{place}. {_cluster_caption(cluster)} · {name} · {distance:.2f}"
+        for place, (cluster, name, distance) in enumerate(
+            zip(similar["cluster"], similar[NAME_COLUMN], similar["shape_distance"]), start=1
+        )
+    ]
+    _panels(
+        similar,
+        captions=captions,
+        frame=SHAPE_COLOR,
+        playing=playing,
+        key=SHAPE_GALLERY_KEY,
+        on_click=_shape_clicked,
+        on_jump=_shape_jumped,
+    )
+
+
 @st.fragment(key=TOGETHER_GALLERY)
 def _together(scope: Scope) -> None:
     """The tracks of this recording that were running while the selected one
@@ -2814,6 +2895,18 @@ def _track_labels(stamp: float) -> dict[str, list[str]]:
     it.
     """
     return read_labels(TRACK_LABELS_PATH)
+
+
+@st.cache_resource(show_spinner=False, max_entries=1)
+def _shapes(stamp: float) -> tuple[list[str], np.ndarray]:
+    """Every mapped track's shape, read again whenever the shapes file
+    changes.
+
+    The stamp is the file's modification time, and is what the cache is
+    keyed on, which is why it is passed although the body never reads
+    it.
+    """
+    return shape_matrix(pq.read_table(SHAPES_PATH))
 
 
 def _ledger_named_stamp() -> float:

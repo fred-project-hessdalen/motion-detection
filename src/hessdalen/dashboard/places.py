@@ -29,6 +29,12 @@ class Places:
         return self.map.with_name("track-paths.parquet")
 
     @property
+    def shapes(self) -> Path:
+        """Every mapped track's shape as a small picture, which the Similar
+        shape gallery reads."""
+        return self.map.with_name("track-shapes.parquet")
+
+    @property
     def labels(self) -> Path:
         return self.map.with_name("cluster-labels.json")
 

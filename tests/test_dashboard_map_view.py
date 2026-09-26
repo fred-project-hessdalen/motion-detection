@@ -8,6 +8,7 @@ from datetime import date
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import pytest
 
 from hessdalen.dashboard.map_view import (
     ANY_VALIDATION,
@@ -39,6 +40,7 @@ from hessdalen.dashboard.map_view import (
     RECORDED_COLUMN,
     Ring,
     _scatter,
+    alike,
     between_days,
     by_daylight,
     by_source,
@@ -426,6 +428,18 @@ def _timed() -> pd.DataFrame:
             ),
         }
     )
+
+
+def test_the_tracks_of_the_likest_shape_come_nearest_first_from_those_on_the_map() -> None:
+    tracks = pd.DataFrame({"key": ["a/1", "a/2", "a/3", "a/4"], "cluster": ["1", "1", "2", "2"]})
+    keys = ["a/1", "a/2", "a/3", "a/9"]
+    matrix = np.array([[0.0, 0.0], [0.3, 0.0], [0.1, 0.0], [0.05, 0.0]])
+
+    found = alike(tracks, key="a/1", keys=keys, matrix=matrix, count=5)
+
+    assert found["key"].tolist() == ["a/3", "a/2"]
+    assert found["shape_distance"].tolist() == pytest.approx([0.1, 0.3])
+    assert alike(tracks, key="a/4", keys=keys, matrix=matrix, count=5).empty
 
 
 def test_the_map_holds_to_the_tracks_recorded_by_day_or_by_night() -> None:
