@@ -36,12 +36,15 @@ from hessdalen.dashboard.map_view import (
     BY_NEITHER,
     BY_PERSON,
     DAYLIGHT_COLUMN,
+    HOUR_COLUMN,
     MODEL_COLUMN,
     RECORDED_COLUMN,
+    WHOLE_DAY,
     Ring,
     _scatter,
     alike,
     between_days,
+    between_hours,
     by_daylight,
     by_source,
     by_validation,
@@ -452,6 +455,13 @@ def test_the_map_holds_to_the_tracks_recorded_between_two_days() -> None:
     span = (date(2025, 6, 4), date(2025, 6, 5))
 
     assert between_days(_timed(), span=span)["key"].tolist() == ["a/2", "a/3"]
+
+
+def test_the_map_holds_to_the_tracks_recorded_between_two_clock_hours() -> None:
+    tracks = _timed().assign(**{HOUR_COLUMN: [12.5, 1.75, 4.0, float("nan")]})
+
+    assert between_hours(tracks, span=(1.0, 4.0))["key"].tolist() == ["a/2", "a/3"]
+    assert between_hours(tracks, span=WHOLE_DAY)["key"].tolist() == ["a/1", "a/2", "a/3", "a/4"]
 
 
 def test_the_tracks_running_while_this_one_ran_come_back_longest_first() -> None:

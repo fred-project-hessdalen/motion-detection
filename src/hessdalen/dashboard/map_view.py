@@ -35,7 +35,7 @@ import streamlit as st
 from plotly.colors import hex_to_rgb, qualitative
 from streamlit.delta_generator import DeltaGenerator
 
-from hessdalen.analysis.daylight import DAY, NIGHT, TWILIGHT, daylight, recording_time
+from hessdalen.analysis.daylight import DAY, LOCAL_TIME, NIGHT, TWILIGHT, daylight, recording_time
 from hessdalen.analysis.spectra import SIGNALS
 from hessdalen.analysis.track_shapes import nearest_shapes, shape_matrix
 from hessdalen.config import config
@@ -144,6 +144,13 @@ DAYLIGHT_COLUMN = "daylight"
 """Column saying whether the sun was up over Hessdalen when the recording
 started: day, twilight, night, or unknown where the name holds no
 time."""
+
+HOUR_COLUMN = "hour"
+"""Column holding the local clock hour the recording started at, 0 to 24,
+in Norwegian time."""
+
+WHOLE_DAY = (0.0, 24.0)
+HOUR_STEP = 0.25
 
 DAYLIGHT_CHOICES = ("All", "Day", "Twilight", "Night")
 ANY_DAYLIGHT = DAYLIGHT_CHOICES[0]
@@ -662,6 +669,11 @@ DAYLIGHT_HELP = (
     "the recording's start. Twilight is the sun up to six degrees under the horizon."
 )
 RECORDED_HELP = "Show the tracks of recordings started between these two days, both included."
+HOURS_HELP = (
+    "Show the tracks of recordings started between these two clock hours, in Norwegian local time. "
+    "Whether an hour is day or night changes with the date, from 3 to 21 in June to 9 to 15 in December, so "
+    "the Daylight control is answered from the sun and this one from the clock, and both apply together."
+)
 DAYLIGHT_TABLE_HELP = "Whether the sun was up over Hessdalen when the recording started."
 RECORDED_TABLE_HELP = "When the recording started, in UTC."
 BACK_HELP = "Go back to the track selected before this one."
@@ -867,6 +879,9 @@ def _sidebar(tracks: pd.DataFrame) -> Scope:
         recorded = st.date_input(
             "Recorded", value=(first_day, last_day), min_value=first_day, max_value=last_day, help=RECORDED_HELP
         )
+        hours = st.slider(
+            "Hours", min_value=WHOLE_DAY[0], max_value=WHOLE_DAY[1], value=WHOLE_DAY, step=HOUR_STEP, help=HOURS_HELP
+        )
         rough = st.toggle("Rough tracks", value=False, help=ROUGH_HELP)
         cached = st.toggle("Video cached", value=True, help=CACHED_HELP)
         chosen_cluster = st.selectbox(
@@ -887,6 +902,7 @@ def _sidebar(tracks: pd.DataFrame) -> Scope:
     shown = by_validation(shown, choice=str(validation or ANY_VALIDATION))
     shown = by_daylight(shown, choice=str(light or ANY_DAYLIGHT))
     shown = between_days(shown, span=_days(recorded, whole=(first_day, last_day)))
+    shown = between_hours(shown, span=(float(hours[0]), float(hours[1])))
     return Scope(
         tracks=tracks,
         shown=by_source(shown, choice=str(source or ANY_SOURCE)),
@@ -1331,6 +1347,19 @@ def between_days(tracks: pd.DataFrame, *, span: tuple[date, date]) -> pd.DataFra
     """
     days = tracks[RECORDED_COLUMN].dt.date
     return tracks[(days >= span[0]) & (days <= span[1])]
+
+
+def between_hours(tracks: pd.DataFrame, *, span: tuple[float, float]) -> pd.DataFrame:
+    """The tracks whose recording started between the two clock hours of
+    the span, both ends included, in local time.
+
+    The whole day leaves every track, including the ones whose
+    recording holds no time in its name.
+    """
+    if span == WHOLE_DAY:
+        return tracks
+    hours = tracks[HOUR_COLUMN]
+    return tracks[(hours >= span[0]) & (hours <= span[1])]
 
 
 def _recorded_span(tracks: pd.DataFrame) -> tuple[date, date]:
@@ -2793,6 +2822,8 @@ def _map_frame(stamp: float) -> pd.DataFrame:
     recordings = frame["recording"].unique()
     moments = {recording: recording_time(str(recording)) for recording in recordings}
     frame[RECORDED_COLUMN] = pd.to_datetime(frame["recording"].map(moments), utc=True)
+    local = frame[RECORDED_COLUMN].dt.tz_convert(LOCAL_TIME)
+    frame[HOUR_COLUMN] = local.dt.hour + local.dt.minute / 60.0 + local.dt.second / 3600.0
     frame[DAYLIGHT_COLUMN] = frame["recording"].map({recording: daylight(str(recording)) for recording in recordings})
     return frame
 
