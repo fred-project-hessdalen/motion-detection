@@ -3,6 +3,7 @@ goes on the map."""
 
 import json
 import re
+from datetime import date
 
 import numpy as np
 import pandas as pd
@@ -28,13 +29,18 @@ from hessdalen.dashboard.map_view import (
     UNVALIDATED,
     VALIDATED,
     VALIDATED_COLUMN,
+    ANY_DAYLIGHT,
     ANY_SOURCE,
     BY_MODEL,
     BY_NEITHER,
     BY_PERSON,
+    DAYLIGHT_COLUMN,
     MODEL_COLUMN,
+    RECORDED_COLUMN,
     Ring,
     _scatter,
+    between_days,
+    by_daylight,
     by_source,
     by_validation,
     charted_signal,
@@ -404,8 +410,34 @@ def _listed() -> pd.DataFrame:
             CACHED_COLUMN: [True],
             VALIDATED_COLUMN: [False],
             MODEL_COLUMN: [True],
+            DAYLIGHT_COLUMN: ["day"],
+            RECORDED_COLUMN: pd.to_datetime(["2025-06-03 10:40:00"], utc=True),
         }
     )
+
+
+def _timed() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "key": ["a/1", "a/2", "a/3", "a/4"],
+            DAYLIGHT_COLUMN: ["day", "night", "twilight", "unknown"],
+            RECORDED_COLUMN: pd.to_datetime(
+                ["2025-06-03 10:40", "2025-06-04 23:50", "2025-06-05 02:00", None], utc=True
+            ),
+        }
+    )
+
+
+def test_the_map_holds_to_the_tracks_recorded_by_day_or_by_night() -> None:
+    assert by_daylight(_timed(), choice="Day")["key"].tolist() == ["a/1"]
+    assert by_daylight(_timed(), choice="Night")["key"].tolist() == ["a/2"]
+    assert by_daylight(_timed(), choice=ANY_DAYLIGHT)["key"].tolist() == ["a/1", "a/2", "a/3", "a/4"]
+
+
+def test_the_map_holds_to_the_tracks_recorded_between_two_days() -> None:
+    span = (date(2025, 6, 4), date(2025, 6, 5))
+
+    assert between_days(_timed(), span=span)["key"].tolist() == ["a/2", "a/3"]
 
 
 def test_the_tracks_running_while_this_one_ran_come_back_longest_first() -> None:

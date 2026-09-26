@@ -23,6 +23,7 @@ import json
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,7 @@ import streamlit as st
 from plotly.colors import hex_to_rgb, qualitative
 from streamlit.delta_generator import DeltaGenerator
 
+from hessdalen.analysis.daylight import DAY, NIGHT, TWILIGHT, daylight, recording_time
 from hessdalen.analysis.spectra import SIGNALS
 from hessdalen.config import config
 from hessdalen.dashboard.clip_queue import ClipQueue, Job, Report
@@ -133,10 +135,23 @@ MODEL_COLUMN = "model"
 """Column saying whether the track's name came from a model, through the
 labelling ledger."""
 
+RECORDED_COLUMN = "recorded"
+"""Column holding the moment the track's recording started, in UTC, from
+the recording's name."""
+
+DAYLIGHT_COLUMN = "daylight"
+"""Column saying whether the sun was up over Hessdalen when the recording
+started: day, twilight, night, or unknown where the name holds no
+time."""
+
+DAYLIGHT_CHOICES = ("All", "Day", "Twilight", "Night")
+ANY_DAYLIGHT = DAYLIGHT_CHOICES[0]
+DAYLIGHT_VALUES = {"Day": DAY, "Twilight": TWILIGHT, "Night": NIGHT}
+
 UNNAMED = "unlabelled"
 """What a track whose cluster has no name yet is shown under."""
 
-COLOUR_CHOICES = ("Cluster", "Cluster label", "Tags", "Side", "Folder", "Camera")
+COLOUR_CHOICES = ("Cluster", "Cluster label", "Tags", "Side", "Folder", "Camera", "Daylight")
 COLOUR_COLUMNS = {
     "Cluster": "cluster",
     "Cluster label": NAME_COLUMN,
@@ -144,6 +159,7 @@ COLOUR_COLUMNS = {
     "Side": "side",
     "Folder": "label",
     "Camera": "camera",
+    "Daylight": DAYLIGHT_COLUMN,
 }
 PATH_DRAWING = "Path"
 TRANSFORM_DRAWING = "FFT"
@@ -185,6 +201,8 @@ TABLE_COLUMNS = {
     CACHED_COLUMN: "Video cached",
     VALIDATED_COLUMN: "Validated",
     MODEL_COLUMN: "Model label",
+    DAYLIGHT_COLUMN: "Daylight",
+    RECORDED_COLUMN: "Recorded",
     NAME_COLUMN: "Cluster label",
     "cluster": "Cluster",
     "label": "Folder",
@@ -631,6 +649,13 @@ SOURCE_HELP = (
     "name, or every track. A model's names come from the labelling ledger and are the ones to check."
 )
 MODEL_TABLE_HELP = "Whether the track's name came from a model, which is a name still to be checked."
+DAYLIGHT_HELP = (
+    "Show the tracks recorded by day, in twilight or at night, from the sun's altitude over Hessdalen at "
+    "the recording's start. Twilight is the sun up to six degrees under the horizon."
+)
+RECORDED_HELP = "Show the tracks of recordings started between these two days, both included."
+DAYLIGHT_TABLE_HELP = "Whether the sun was up over Hessdalen when the recording started."
+RECORDED_TABLE_HELP = "When the recording started, in UTC."
 BACK_HELP = "Go back to the track selected before this one."
 FORWARD_HELP = "Go forward to the track selected after this one."
 NEIGHBOURS_HELP = (
@@ -822,6 +847,11 @@ def _sidebar(tracks: pd.DataFrame) -> Scope:
             "Validation", options=VALIDATION_CHOICES, default=ANY_VALIDATION, help=VALIDATION_HELP
         )
         source = st.segmented_control("Source", options=SOURCE_CHOICES, default=ANY_SOURCE, help=SOURCE_HELP)
+        light = st.segmented_control("Daylight", options=DAYLIGHT_CHOICES, default=ANY_DAYLIGHT, help=DAYLIGHT_HELP)
+        first_day, last_day = _recorded_span(tracks)
+        recorded = st.date_input(
+            "Recorded", value=(first_day, last_day), min_value=first_day, max_value=last_day, help=RECORDED_HELP
+        )
         rough = st.toggle("Rough tracks", value=False, help=ROUGH_HELP)
         cached = st.toggle("Video cached", value=True, help=CACHED_HELP)
         chosen_cluster = st.selectbox(
@@ -840,6 +870,8 @@ def _sidebar(tracks: pd.DataFrame) -> Scope:
         shown = shown[shown["key"].isin(tagged(_track_labels(_track_labels_stamp()), names=chosen_tags))]
     shown = shown[shown["label"].isin(folders)] if folders else shown
     shown = by_validation(shown, choice=str(validation or ANY_VALIDATION))
+    shown = by_daylight(shown, choice=str(light or ANY_DAYLIGHT))
+    shown = between_days(shown, span=_days(recorded, whole=(first_day, last_day)))
     return Scope(
         tracks=tracks,
         shown=by_source(shown, choice=str(source or ANY_SOURCE)),
@@ -963,6 +995,8 @@ def _table(tracks: pd.DataFrame) -> None:
             "Video cached": st.column_config.CheckboxColumn(help=CACHED_TABLE_HELP),
             "Validated": st.column_config.CheckboxColumn(help=VALIDATED_TABLE_HELP),
             "Model label": st.column_config.CheckboxColumn(help=MODEL_TABLE_HELP),
+            "Daylight": st.column_config.TextColumn(help=DAYLIGHT_TABLE_HELP),
+            "Recorded": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm", help=RECORDED_TABLE_HELP),
         },
         key=TABLE_KEY,
     )
@@ -1227,6 +1261,42 @@ def by_validation(tracks: pd.DataFrame, *, choice: str) -> pd.DataFrame:
     if choice == UNVALIDATED:
         return tracks[~tracks[VALIDATED_COLUMN]]
     return tracks
+
+
+def by_daylight(tracks: pd.DataFrame, *, choice: str) -> pd.DataFrame:
+    """The tracks the daylight choice leaves on the map."""
+    wanted = DAYLIGHT_VALUES.get(choice)
+    if wanted is None:
+        return tracks
+    return tracks[tracks[DAYLIGHT_COLUMN] == wanted]
+
+
+def between_days(tracks: pd.DataFrame, *, span: tuple[date, date]) -> pd.DataFrame:
+    """The tracks whose recording started on one of the days of the span,
+    both ends included, by the UTC day.
+
+    A track whose recording holds no time in its name has no day and
+    is left out as soon as the span is narrower than the whole.
+    """
+    days = tracks[RECORDED_COLUMN].dt.date
+    return tracks[(days >= span[0]) & (days <= span[1])]
+
+
+def _recorded_span(tracks: pd.DataFrame) -> tuple[date, date]:
+    """The first and the last day any recording of the corpus started."""
+    days = tracks[RECORDED_COLUMN].dropna().dt.date
+    if days.empty:
+        today = datetime.now(timezone.utc).date()
+        return today, today
+    return days.min(), days.max()
+
+
+def _days(chosen: Any, *, whole: tuple[date, date]) -> tuple[date, date]:
+    """The span the date control holds, which is the whole span while only
+    one end has been picked."""
+    if isinstance(chosen, tuple) and len(chosen) == 2:
+        return chosen[0], chosen[1]
+    return whole
 
 
 def by_source(tracks: pd.DataFrame, *, choice: str) -> pd.DataFrame:
@@ -2639,6 +2709,10 @@ def _map_frame(stamp: float) -> pd.DataFrame:
     frame = pq.read_table(MAP_PATH).to_pandas()
     frame["cluster"] = [UNASSIGNED_NAME if value < 0 else str(value) for value in frame["cluster"]]
     frame["key"] = _keys(frame)
+    recordings = frame["recording"].unique()
+    moments = {recording: recording_time(str(recording)) for recording in recordings}
+    frame[RECORDED_COLUMN] = pd.to_datetime(frame["recording"].map(moments), utc=True)
+    frame[DAYLIGHT_COLUMN] = frame["recording"].map({recording: daylight(str(recording)) for recording in recordings})
     return frame
 
 
