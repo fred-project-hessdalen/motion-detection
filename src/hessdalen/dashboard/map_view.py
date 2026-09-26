@@ -20,7 +20,6 @@ keep has its video fetched from the archive before it is drawn.
 from __future__ import annotations
 
 import json
-import math
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -157,9 +156,11 @@ DAYLIGHT_VALUES = {"Day": DAY, "Twilight": TWILIGHT, "Night": NIGHT}
 """The daylight buttons, in the order shown, and the class each stands
 for."""
 
-DAYLIGHT_KEY = "daylight_choices"
-HOURS_KEY = "hour_span"
-RECORDED_KEY = "recorded_days"
+TIME_CHOICES = ("Any", "Hours", "Daylight")
+ANY_TIME, BY_HOURS, BY_DAYLIGHT = TIME_CHOICES
+"""How the time of day narrows the map: not at all, by a span of clock
+hours, or by whether the sun was up. One of the two, because a clock
+span says nothing about daylight at this latitude across the year."""
 
 UNNAMED = "unlabelled"
 """What a track whose cluster has no name yet is shown under."""
@@ -669,16 +670,16 @@ SOURCE_HELP = (
     "name, or every track. A model's names come from the labelling ledger and are the ones to check."
 )
 MODEL_TABLE_HELP = "Whether the track's name came from a model, which is a name still to be checked."
+TIME_HELP = (
+    "Narrow the map by the time of day, either by a span of clock hours or by whether the sun was up. At "
+    "this latitude a clock hour is daylight in June and night in December, so the two are offered apart."
+)
 DAYLIGHT_HELP = (
     "Show the tracks recorded by day, in twilight or at night, any of them at once, from the sun's altitude "
-    "over Hessdalen at the recording's start. Twilight is the sun up to six degrees under the horizon. "
-    "Pressing a button moves the Hours slider to the clock span those classes cover within the chosen days."
+    "over Hessdalen at the recording's start. Twilight is the sun up to six degrees under the horizon."
 )
 RECORDED_HELP = "Show the tracks of recordings started between these two days, both included."
-HOURS_HELP = (
-    "Show the tracks of recordings started between these two clock hours, in Norwegian local time. Moving "
-    "an end sets the Daylight buttons to the classes recorded between the two, within the chosen days."
-)
+HOURS_HELP = "Show the tracks of recordings started between these two clock hours, in Norwegian local time."
 DAYLIGHT_TABLE_HELP = "Whether the sun was up over Hessdalen when the recording started."
 RECORDED_TABLE_HELP = "When the recording started, in UTC."
 BACK_HELP = "Go back to the track selected before this one."
@@ -881,32 +882,34 @@ def _sidebar(tracks: pd.DataFrame) -> Scope:
         source = st.segmented_control("Source", options=SOURCE_CHOICES, default=ANY_SOURCE, help=SOURCE_HELP)
         first_day, last_day = _recorded_span(tracks)
         recorded = st.date_input(
-            "Recorded",
-            value=(first_day, last_day),
-            min_value=first_day,
-            max_value=last_day,
-            key=RECORDED_KEY,
-            help=RECORDED_HELP,
+            "Recorded", value=(first_day, last_day), min_value=first_day, max_value=last_day, help=RECORDED_HELP
         )
-        st.session_state.setdefault(HOURS_KEY, WHOLE_DAY)
-        st.session_state.setdefault(DAYLIGHT_KEY, list(DAYLIGHT_VALUES))
-        hours = st.slider(
-            "Hours",
-            min_value=WHOLE_DAY[0],
-            max_value=WHOLE_DAY[1],
-            step=HOUR_STEP,
-            key=HOURS_KEY,
-            on_change=_hours_moved,
-            help=HOURS_HELP,
+        time_of_day = str(
+            st.segmented_control("Time of day", options=TIME_CHOICES, default=ANY_TIME, help=TIME_HELP) or ANY_TIME
         )
-        light = st.segmented_control(
-            "Daylight",
-            options=list(DAYLIGHT_VALUES),
-            selection_mode="multi",
-            key=DAYLIGHT_KEY,
-            on_change=_daylight_pressed,
-            help=DAYLIGHT_HELP,
-        )
+        hours: tuple[float, float] = WHOLE_DAY
+        light: list[str] = []
+        if time_of_day == BY_HOURS:
+            hours = st.slider(
+                "Hours",
+                min_value=WHOLE_DAY[0],
+                max_value=WHOLE_DAY[1],
+                value=WHOLE_DAY,
+                step=HOUR_STEP,
+                help=HOURS_HELP,
+            )
+        elif time_of_day == BY_DAYLIGHT:
+            light = [
+                str(choice)
+                for choice in st.segmented_control(
+                    "Daylight",
+                    options=list(DAYLIGHT_VALUES),
+                    default=list(DAYLIGHT_VALUES)[:1],
+                    selection_mode="multi",
+                    help=DAYLIGHT_HELP,
+                )
+                or []
+            ]
         rough = st.toggle("Rough tracks", value=False, help=ROUGH_HELP)
         cached = st.toggle("Video cached", value=True, help=CACHED_HELP)
         chosen_cluster = st.selectbox(
@@ -925,7 +928,7 @@ def _sidebar(tracks: pd.DataFrame) -> Scope:
         shown = shown[shown["key"].isin(tagged(_track_labels(_track_labels_stamp()), names=chosen_tags))]
     shown = shown[shown["label"].isin(folders)] if folders else shown
     shown = by_validation(shown, choice=str(validation or ANY_VALIDATION))
-    shown = by_daylight(shown, choices=[str(choice) for choice in light or []])
+    shown = by_daylight(shown, choices=light)
     shown = between_days(shown, span=_days(recorded, whole=(first_day, last_day)))
     shown = between_hours(shown, span=(float(hours[0]), float(hours[1])))
     return Scope(
@@ -1362,47 +1365,6 @@ def by_daylight(tracks: pd.DataFrame, *, choices: Sequence[str]) -> pd.DataFrame
     if not wanted:
         return tracks
     return tracks[tracks[DAYLIGHT_COLUMN].isin(wanted)]
-
-
-def hour_span(tracks: pd.DataFrame, *, choices: Sequence[str]) -> tuple[float, float]:
-    """The clock span, to the slider's step, over which the tracks of the
-    chosen daylight classes were recorded, and the whole day while no class
-    is chosen or none of them holds a track."""
-    hours = by_daylight(tracks, choices=choices)[HOUR_COLUMN].dropna() if choices else pd.Series(dtype=float)
-    if hours.empty:
-        return WHOLE_DAY
-    first = math.floor(float(hours.min()) / HOUR_STEP) * HOUR_STEP
-    last = math.ceil(float(hours.max()) / HOUR_STEP) * HOUR_STEP
-    return max(WHOLE_DAY[0], first), min(WHOLE_DAY[1], last)
-
-
-def daylight_within(tracks: pd.DataFrame, *, span: tuple[float, float]) -> list[str]:
-    """The daylight classes some track was recorded in between the two clock
-    hours, in the order the control lists them."""
-    present = set(between_hours(tracks, span=span)[DAYLIGHT_COLUMN].dropna())
-    return [choice for choice, value in DAYLIGHT_VALUES.items() if value in present]
-
-
-def _daylight_pressed() -> None:
-    """Move the hour slider to the span the chosen daylight classes cover,
-    within the chosen days."""
-    choices = [str(choice) for choice in st.session_state.get(DAYLIGHT_KEY) or []]
-    st.session_state[HOURS_KEY] = hour_span(_dated_tracks(), choices=choices)
-
-
-def _hours_moved() -> None:
-    """Set the daylight buttons to the classes recorded between the slider's
-    ends, within the chosen days."""
-    span = st.session_state.get(HOURS_KEY) or WHOLE_DAY
-    st.session_state[DAYLIGHT_KEY] = daylight_within(_dated_tracks(), span=(float(span[0]), float(span[1])))
-
-
-def _dated_tracks() -> pd.DataFrame:
-    """Every track of the days the Recorded control holds, as a callback sees
-    them before the page is drawn again."""
-    tracks = _tracks_frame()
-    whole = _recorded_span(tracks)
-    return between_days(tracks, span=_days(st.session_state.get(RECORDED_KEY), whole=whole))
 
 
 def between_days(tracks: pd.DataFrame, *, span: tuple[date, date]) -> pd.DataFrame:
